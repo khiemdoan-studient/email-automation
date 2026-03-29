@@ -303,7 +303,7 @@ function generateEmailBody(teacher, metricsArray) {
   html += '<p style="margin-left:20px;"><em>What if the whole class is shifting focus?</em> Have everyone \u201CPacman\u201D their devices, stand, stretch, take three deep breaths, and shake it out before diving back in.</p>';
 
   // Doom Loop Reset
-  html += '<p>' + dot('#1565c0') + '<strong>Doom Loop Reset:</strong> If a student keeps attempting the same test without progress, try one of these coaching moves to break the cycle before their next retest.</p>';
+  html += '<p>' + dot('#1565c0') + '<strong>Doom Loop Reset:</strong> If a student keeps attempting the same test without progress, try one of these coaching moves to break the cycle before their next retest. <a href="https://drive.google.com/file/u/1/d/12lITq5G7oPy2d1bUkSjMSlOlP7XiuQQi/view?usp=drive_link">[Coaching Moves]</a></p>';
 
   // Reset Conference
   html += '<p>' + dot('#ef6c00') + '<strong>The Reset Conference:</strong> If a student has been disengaged for two days, schedule a quick 3-minute check-in.</p>';
@@ -316,13 +316,14 @@ function generateEmailBody(teacher, metricsArray) {
   html += '<li><strong>Teacher Data Deep Dive</strong> (Attached)</li>';
   html += '<li><strong>AIM Launches (Next 3 weeks):</strong><br>';
   html += '<a href="https://www.canva.com/design/DAHDyS0iyd8/cMK174HeOxUmagRJvojT6Q/view?utm_content=DAHDyS0iyd8&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h3e9c4fa347">Week 5 - Growth Mindset - Cognitive Reframing</a><br>';
-  html += '<a href="https://www.canva.com/design/DAHDjdCSoBE/ZhB3f6k-dMvNMQ9QtNT0iA/view?utm_content=DAHDjdCSoBE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd9e0f0c72b">Week 6 - Growth Mindset - Productive Struggle</a><br>';
-  html += '<a href="https://www.canva.com/design/DAHDeEQyjI0/UESk6Vp4GScPIiS7Xjdhfw/view?utm_content=DAHDeEQyjI0&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=he8b086611c">Week 7 - Growth Mindset - Celebrating Effort</a></li>';
+  html += '<a href="https://www.canva.com/design/DAHD3NLIJ9k/SK2vLZcgFXR-T3o1i539Rw/view?utm_content=DAHD3NLIJ9k&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hffe456c812">Week 6 - Growth Mindset - Productive Struggle</a><br>';
+  html += '<a href="https://www.canva.com/design/DAHENc2sjwE/UzInFMp3qcfF3zzNUzqPEg/view?utm_content=DAHENc2sjwE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hfe0b04f9e7">Week 7 - Growth Mindset - Celebrating Effort</a></li>';
+  html += '<li><strong>Pomodoro Timer:</strong> <a href="https://studient.com/customer-portal">studient.com/customer-portal</a></li>';
   html += '<li><strong>Goal Tracker Sheet:</strong> <a href="https://drive.google.com/file/d/1aA963Hk-r4WJ3OEEa2GLTEPwerRZOAQ8/view?usp=drive_link">ELA Weekly Tracker</a>; <a href="https://drive.google.com/file/d/1alli2qWNmgNfWV5rXAGQXAtE7InQE2LR/view?usp=drive_link">Math Weekly Tracker</a></li>';
   html += '</ul>';
 
   // Weekly Challenge
-  html += '<div style="background-color:#fff2cc;padding:15px;border-radius:5px;margin-top:20px;border:1px solid #ffe599;">';
+  html += '<div style="padding:15px;border-radius:5px;margin-top:20px;">';
   html += '<h3 style="margin-top:0;">Weekly Challenge</h3>';
   html += '<p>Increase your class\'s daily log ins, minutes, or lessons mastered to share as a class challenge.</p>';
   html += '<h3>Reflection Prompt:</h3>';

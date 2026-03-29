@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.1] - 2026-03-29
+
+### Changed
+- Removed yellow background highlight from Weekly Challenge / Reflection Prompt section
+- Added [Coaching Moves] hyperlink to Doom Loop Reset action item
+- Added Pomodoro Timer link (studient.com/customer-portal) to Resources section
+- Updated AIM Launches Week 6 URL to new Canva design
+- Updated AIM Launches Week 7 URL to new Canva design
+
 ## [v1.1.0] - 2026-03-29
 
 ### Changed
