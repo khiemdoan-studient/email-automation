@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [v1.2.0] - 2026-04-06
 
 ### Added
-- **Student Achievement Winners table** — New "Student Winners" tab populated by the Python dashboard pipeline (BigQuery query). Shows per-teacher student achievements across the last 6 weeks with "Every Week" and "1+ Times" columns.
+- **Student Achievement Winners table** — New "Student Winners" tab populated by the Python dashboard pipeline (BigQuery query). Shows per-teacher student achievements across the last 6 weeks with "3+ Weeks" and "1-2 Times" columns.
 - Achievement categories (with tiered exclusivity — students only in their highest tier):
   - Grade Level Mastered
   - 10+ Lessons/Week (excludes from 5+)
@@ -16,7 +16,8 @@ All notable changes to this project will be documented in this file.
   - 4.5+ Active Days (excludes from 4+)
   - 4+ Active Days (only if not in 4.5+)
 - `getStudentWinners()` function reads pre-computed winners from "Student Winners" tab
-- `buildWinnersHtml()` generates HTML table with category icons, alternating rows, two columns
+- `buildWinnersHtml()` generates HTML table with colored dot icons, alternating rows
+- **"Reading Teachers" tab** — Dedicated teacher list for Reading Community (IMPORTRANGE doesn't include teacher email columns for this district)
 
 ### Changed
 - **New email theme: "Culture, Shoutouts & Rewards"** replacing "Re-Engagement & Resets"
@@ -28,11 +29,14 @@ All notable changes to this project will be documented in this file.
 - AIM Launches updated to Weeks 6/7/8 (Productive Struggle, Celebrating Effort, Curiosity)
 - Participation language updated: "monitored at the school, district, and state levels"
 - Resources section now uses ordered list
+- All section headers use plain text (no emojis — they render as broken characters in email clients)
+- Category indicators use inline colored dot spans instead of emoji characters
 
 ### Removed
 - Previous "Mental Focus & Persistence" theme content (Mid-Block Breath, Doom Loop Reset, Reset Conference)
 - Week 5 AIM Launch link (Cognitive Reframing)
 - Coaching Moves link (moved to previous version's template)
+- All emoji unicode characters from email body (replaced with colored CSS dots)
 
 ## [v1.1.1] - 2026-03-29
 

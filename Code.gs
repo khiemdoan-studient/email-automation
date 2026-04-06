@@ -8,6 +8,7 @@ const CONFIG = {
   ROSTER_SHEET_NAME: "Teacher Emails",
   TEACHER_DATA_SHEET_NAME: "Teacher Metrics",
   WINNERS_SHEET_NAME: "Student Winners",
+  READING_TEACHERS_SHEET_NAME: "Reading Teachers",
 
   // Column indices in Teacher Emails sheet (0-indexed)
   CAMPUS_COL: 2,           // Column C: Campus
@@ -104,34 +105,49 @@ function getConfigValue(key) {
 }
 
 function getTeachersForSchools(schoolDisplayNames) {
-  const data = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.ROSTER_SHEET_NAME).getDataRange().getValues();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const data = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME).getDataRange().getValues();
   const teacherMap = new Map();
 
+  // Standard schools: read from Teacher Emails sheet
   for (let i = 1; i < data.length; i++) {
     const campus = String(data[i][CONFIG.CAMPUS_COL] || '').trim();
     if (!schoolDisplayNames.includes(campus)) continue;
+    if (campus === 'Reading Community City School District') continue; // handled below
 
-    let firstName, lastName, email;
-
-    if (campus === 'Reading Community City School District') {
-      // Reading schools use columns AD, AE, AF (indices 29, 30, 31)
-      firstName = String(data[i][29] || '').trim();
-      lastName = String(data[i][30] || '').trim();
-      email = String(data[i][31] || '').trim();
-    } else {
-      firstName = String(data[i][CONFIG.TEACHER_FIRST_COL] || '').trim();
-      lastName = String(data[i][CONFIG.TEACHER_LAST_COL] || '').trim();
-      email = String(data[i][CONFIG.TEACHER_EMAIL_COL] || '').trim();
-    }
+    var firstName = String(data[i][CONFIG.TEACHER_FIRST_COL] || '').trim();
+    var lastName = String(data[i][CONFIG.TEACHER_LAST_COL] || '').trim();
+    var email = String(data[i][CONFIG.TEACHER_EMAIL_COL] || '').trim();
 
     if (firstName && lastName && email) {
-      const folderName = (firstName + '_' + lastName).replace(/ /g, '_');
-      const key = folderName.toLowerCase();
+      var folderName = (firstName + '_' + lastName).replace(/ /g, '_');
+      var key = folderName.toLowerCase();
       if (!teacherMap.has(key)) {
         teacherMap.set(key, { firstName: firstName.split(' ')[0], lastName: lastName, name: firstName + ' ' + lastName, folderName: folderName, email: email, campus: campus });
       }
     }
   }
+
+  // Reading Community: read from dedicated "Reading Teachers" tab
+  if (schoolDisplayNames.includes('Reading Community City School District')) {
+    var readingSheet = ss.getSheetByName(CONFIG.READING_TEACHERS_SHEET_NAME);
+    if (readingSheet) {
+      var readingData = readingSheet.getDataRange().getValues();
+      for (var r = 1; r < readingData.length; r++) {
+        var fn = String(readingData[r][0] || '').trim();
+        var ln = String(readingData[r][1] || '').trim();
+        var em = String(readingData[r][2] || '').trim();
+        if (fn && ln && em) {
+          var fName = (fn + '_' + ln).replace(/ /g, '_');
+          var fKey = fName.toLowerCase();
+          if (!teacherMap.has(fKey)) {
+            teacherMap.set(fKey, { firstName: fn.split(' ')[0], lastName: ln, name: fn + ' ' + ln, folderName: fName, email: em, campus: 'Reading Community City School District' });
+          }
+        }
+      }
+    }
+  }
+
   return Array.from(teacherMap.values());
 }
 
@@ -268,7 +284,7 @@ function buildWinnersHtml(winnersArray) {
       categories[w.category] = { every: '', some: '' };
       sortOrders[w.category] = w.sortOrder;
     }
-    if (w.frequency === 'every') {
+    if (w.frequency === 'frequent') {
       categories[w.category].every = w.studentNames;
     } else {
       categories[w.category].some = w.studentNames;
@@ -279,23 +295,24 @@ function buildWinnersHtml(winnersArray) {
   var catNames = Object.keys(categories);
   catNames.sort(function(a, b) { return (sortOrders[a] || 99) - (sortOrders[b] || 99); });
 
-  // Category emoji/icon map
+  // Category colored dot map (inline spans — reliable across email clients)
+  var dotFn = function(c) { return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c + ';margin-right:4px;vertical-align:middle;"></span>'; };
   var catIcons = {
-    'Grade Level Mastered': '\uD83C\uDF1F',
-    '10+ Lessons/Week': '\uD83D\uDCDA',
-    '5+ Lessons/Week': '\uD83D\uDCD6',
-    'Resilience (Fail then Pass)': '\uD83D\uDCAA',
-    '125+ Minutes': '\u2B50',
-    '100+ Minutes': '\u23F1\uFE0F',
-    '4.5+ Active Days': '\uD83D\uDD25',
-    '4+ Active Days': '\u2705'
+    'Grade Level Mastered': dotFn('#FFD700'),
+    '10+ Lessons/Week': dotFn('#2e7d32'),
+    '5+ Lessons/Week': dotFn('#66bb6a'),
+    'Resilience (Fail then Pass)': dotFn('#1565c0'),
+    '125+ Minutes': dotFn('#FFD700'),
+    '100+ Minutes': dotFn('#ef6c00'),
+    '4.5+ Active Days': dotFn('#c62828'),
+    '4+ Active Days': dotFn('#e57373')
   };
 
   var html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;max-width:560px;font-size:13px;">';
   html += '<tr style="background-color:#1a1a1a;color:#fff;">';
   html += '<th style="padding:8px;text-align:left;">Category</th>';
-  html += '<th style="padding:8px;text-align:left;">Every Week</th>';
-  html += '<th style="padding:8px;text-align:left;">1+ Times in 6 Weeks</th>';
+  html += '<th style="padding:8px;text-align:left;">3+ Weeks</th>';
+  html += '<th style="padding:8px;text-align:left;">1-2 Times in 6 Weeks</th>';
   html += '</tr>';
 
   for (var j = 0; j < catNames.length; j++) {
@@ -381,31 +398,31 @@ function generateEmailBody(teacher, metricsArray, winnersArray) {
   html += '</div>';
 
   // ── Weekly Focus: Persistence ──
-  html += '<h2 style="color:#1a1a1a;">\uD83C\uDFAF Weekly Focus \u2014 Persistence</h2>';
+  html += '<h2 style="color:#1a1a1a;">Weekly Focus \u2014 Persistence</h2>';
   html += '<p>Use recognition and PBIS to build visible momentum.</p>';
 
   // Why It Matters
-  html += '<h3 style="color:#1a1a1a;">\uD83E\uDDE0 Why It Matters</h3>';
+  html += '<h3 style="color:#1a1a1a;">Why It Matters</h3>';
   html += '<p>Culture drives behavior. When students see growth celebrated and effort rewarded, classroom norms rise.</p>';
 
   // Actions This Week
-  html += '<h3 style="color:#1a1a1a;">\u2705 Your Actions This Week:</h3>';
+  html += '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>';
 
   // Trailblazer Shoutout
-  html += '<p>\uD83D\uDCAC <strong>Weekly Trailblazer Shoutout:</strong> Take 2 minutes to spotlight specific behaviors: consistent effort, encouraging peers, resilience under challenge.</p>';
+  html += '<p>' + dot('#2e7d32') + '<strong>Weekly Trailblazer Shoutout:</strong> Take 2 minutes to spotlight specific behaviors: consistent effort, encouraging peers, resilience under challenge.</p>';
 
   // Narrate the Why
-  html += '<p>\uD83D\uDC65 <strong>Narrate the Why:</strong> Don\'t give points silently \u2014 label the behavior: \u201CYou kept going when it got hard \u2014 that earns a point.\u201D</p>';
+  html += '<p>' + dot('#1565c0') + '<strong>Narrate the Why:</strong> Don\'t give points silently \u2014 label the behavior: \u201CYou kept going when it got hard \u2014 that earns a point.\u201D</p>';
 
   // Peer Nominations
-  html += '<p>\uD83C\uDFC6 <strong>Peer Nominations:</strong> Students write \u201CWin Cards\u201D for peers. Public praise builds belonging.</p>';
+  html += '<p>' + dot('#ef6c00') + '<strong>Peer Nominations:</strong> Students write \u201CWin Cards\u201D for peers. Public praise builds belonging.</p>';
 
   // ── Student Achievement Awards (Winners Table) ──
-  html += '<h3 style="color:#1a1a1a;">\uD83C\uDFC6 Student Achievement Awards (Last 6 Weeks)</h3>';
+  html += '<h3 style="color:#1a1a1a;">Student Achievement Awards (Last 6 Weeks)</h3>';
   html += buildWinnersHtml(winnersArray);
 
   // ── Resources ──
-  html += '<h3 style="color:#1a1a1a;">\uD83D\uDCDA Resources</h3>';
+  html += '<h3 style="color:#1a1a1a;">Resources</h3>';
   html += '<ol style="padding-left:20px;">';
   html += '<li><strong>Teacher Data Deep Dive</strong> (Attached)</li>';
   html += '<li><strong>AIM Launches (Next 3 weeks):</strong><br>';
@@ -418,9 +435,9 @@ function generateEmailBody(teacher, metricsArray, winnersArray) {
 
   // Weekly Challenge
   html += '<div style="padding:15px;border-radius:5px;margin-top:20px;">';
-  html += '<h3 style="margin-top:0;">\uD83D\uDDD3\uFE0F Weekly Challenge</h3>';
+  html += '<h3 style="margin-top:0;">Weekly Challenge</h3>';
   html += '<p>Increase your class\'s daily log ins, minutes, or lessons mastered to share as a class challenge.</p>';
-  html += '<h3>\uD83D\uDCAD Reflection Prompt:</h3>';
+  html += '<h3>Reflection Prompt:</h3>';
   html += '<p>What will you tweak for this coming week?</p>';
   html += '</div>';
 
