@@ -19,11 +19,11 @@ const CONFIG = {
 
 function onOpen() {
   SpreadsheetApp.getUi()
-    .createMenu('📧 Email Tools')
+    .createMenu('Email Tools')
     .addItem('Generate My Email Drafts', 'generateDraftsForCurrentUser')
-    .addItem('🛠️ Debug: Check Teacher Folders', 'checkTeacherFolders')
+    .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
     .addSeparator()
-    .addItem('⚙️ Set Date Range', 'setDateRange')
+    .addItem('Set Date Range', 'setDateRange')
     .addToUi();
 }
 
@@ -80,8 +80,8 @@ function generateDraftsForCurrentUser() {
 
   for (const teacher of teachers) {
     try {
-      const metrics = teacherMetrics[teacher.name.toLowerCase()] || null;
-      const winners = allWinners[teacher.name.toLowerCase()] || [];
+      const metrics = lookupByName(teacherMetrics, teacher.firstName, teacher.lastName, teacher.name);
+      const winners = lookupByName(allWinners, teacher.firstName, teacher.lastName, teacher.name) || [];
       const result = createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners);
       if (result.success) successCount++;
       else { errorCount++; errors.push(teacher.name + ': ' + result.error); }
@@ -97,6 +97,39 @@ function generateDraftsForCurrentUser() {
 }
 
 // --- HELPER FUNCTIONS ---
+
+/**
+ * Looks up a teacher in a name-keyed object, trying multiple name formats
+ * to handle middle names and inconsistent naming (e.g., "John Bradley Apostol"
+ * in roster vs "John Apostol" in metrics).
+ * Tries: full name, first+last only, first-word+last.
+ */
+// Manual aliases for teachers whose names differ between roster and metrics
+var NAME_ALIASES = {
+  'lisa kloesz': 'lisa kloetz'
+};
+
+function lookupByName(obj, firstName, lastName, fullName) {
+  if (!obj) return null;
+  var full = fullName.toLowerCase().trim();
+  // Try 1: exact full name
+  if (obj[full]) return obj[full];
+  // Try 2: first name (first word only) + last name
+  var first = firstName.toLowerCase().trim().split(' ')[0];
+  var last = lastName.toLowerCase().trim();
+  var shortKey = first + ' ' + last;
+  if (obj[shortKey]) return obj[shortKey];
+  // Try 3: unique last name match
+  var lastMatches = [];
+  for (var k in obj) {
+    if (k.endsWith(' ' + last)) lastMatches.push(k);
+  }
+  if (lastMatches.length === 1) return obj[lastMatches[0]];
+  // Try 4: check name aliases
+  if (NAME_ALIASES[full] && obj[NAME_ALIASES[full]]) return obj[NAME_ALIASES[full]];
+  if (NAME_ALIASES[shortKey] && obj[NAME_ALIASES[shortKey]]) return obj[NAME_ALIASES[shortKey]];
+  return null;
+}
 
 function getConfigValue(key) {
   const data = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.CONFIG_SHEET_NAME).getDataRange().getValues();
@@ -244,7 +277,7 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners)
 }
 
 // ============================================
-// EMAIL TEMPLATE — Culture, Shoutouts & Rewards
+// EMAIL TEMPLATE - Culture, Shoutouts & Rewards
 // ============================================
 
 /**
@@ -275,7 +308,7 @@ function buildWinnersHtml(winnersArray) {
     return '<p style="color:#666;font-style:italic;">No student achievement data available for this period.</p>';
   }
 
-  // Group by category → { category: { every: names, some: names } }
+  // Group by category: { category: { every: names, some: names } }
   var categories = {};
   var sortOrders = {};
   for (var i = 0; i < winnersArray.length; i++) {

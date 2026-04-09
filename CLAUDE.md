@@ -35,8 +35,20 @@ Google Sheet (4 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
    - Key columns: Campus (C/index 2), Teacher First (Y/24), Teacher Last (Z/25), Teacher Email (AA/26)
    - **Exception:** Reading Community City School District uses columns AD/AE/AF (indices 29/30/31) for teacher info
 
-4. **Teacher Metrics** (A1:K, manually populated)
+4. **Teacher Metrics** (A1:K, auto-populated by pipeline from BigQuery)
+   - Populated by `query_teacher_metrics_for_email()` in `email_winners.py`
+   - Reads Config Date Range → extracts week_start → queries `weekly_dashboard`
    - Columns: Teacher, Grade, # Students, Avg Active Days, % Logged In, % Everyday, Avg Minutes, Tests Mastered, Avg Tests, Lessons Mastered, Avg Lessons
+   - Logic matches QuickSight: % Logged In = SUM(logged_in)/COUNT(DISTINCT student_id), % Everyday = SUM(is_5_plus_days)/COUNT(DISTINCT student_id)
+
+5. **Student Winners** (auto-populated by pipeline from BigQuery)
+   - Populated by `query_student_winners()` in `queries_v3.py`
+   - Shows student achievements across last 6 weeks with "3+ Weeks" and "1-2 Times" columns
+   - 8 categories with tiered exclusivity (students only in highest tier)
+
+6. **Reading Teachers** (A1:C, manual list)
+   - Dedicated teacher list for Reading Community (IMPORTRANGE doesn't include teacher email columns for this district)
+   - Columns: FirstName, LastName, Email
 
 ### Google Drive Folder Structure
 
@@ -64,7 +76,14 @@ Main entry point. Called from the "Email Tools" menu. Flow:
 4. Loads Teacher Metrics
 5. For each teacher: finds PDF in Drive, generates HTML email, creates Gmail draft
 
-### `generateEmailBody(teacher, metricsArray)`
+### `lookupByName(obj, firstName, lastName, fullName)`
+Fuzzy teacher name matching across metrics/winners lookups:
+1. Exact full name match
+2. First-word + last name (handles middle names like "John Bradley Apostol" → "John Apostol")
+3. Unique last name match
+4. NAME_ALIASES map (handles spelling mismatches like "Kloesz" → "Kloetz")
+
+### `generateEmailBody(teacher, metricsArray, winnersArray)`
 Builds the HTML email template. Sections:
 1. Greeting ("Hi {firstName},")
 2. Data table (Teacher, Grade, Avg Active Days, Avg Minutes) with color-coded cells
@@ -108,7 +127,7 @@ Cell background colors: Green `#d9ead3`, Yellow `#fff2cc`, Red `#f4cccc`
 
 ## Important Implementation Details
 
-- **Reading Community exception:** Uses different column indices (29/30/31) for teacher first/last/email instead of the standard (24/25/26)
+- **Reading Community exception:** Uses dedicated "Reading Teachers" tab instead of Teacher Emails IMPORTRANGE (which doesn't include email columns for this district)
 - **Teacher folder naming:** `FirstName_LastName` with spaces replaced by underscores
 - **PDF matching:** File must start with `00`, contain `SUMMARY`, and end with `.PDF` (case-insensitive)
 - **Email HTML:** Uses only inline CSS (no `<style>` blocks) for email client compatibility
