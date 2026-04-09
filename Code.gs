@@ -71,6 +71,16 @@ function generateDraftsForCurrentUser() {
   const rootFolder = findFolderByName(CONFIG.ROOT_FOLDER_NAME);
   if (!rootFolder) return ui.alert('Error', 'Could not find root folder.', ui.ButtonSet.OK);
 
+  // Validate data freshness — check if Teacher Metrics matches Config date range
+  const metricsWeek = getMetricsWeekStamp();
+  const configWeekStart = dateRange.split('_to_')[0]; // "2026-03-30_to_2026-04-05" -> "2026-03-30"
+  if (metricsWeek && configWeekStart && metricsWeek !== configWeekStart) {
+    return ui.alert('Data Mismatch',
+      'Teacher Metrics data is from week ' + metricsWeek + ' but Config says ' + configWeekStart + '.\n\n' +
+      'Run the pipeline first (python generate_report_v3.py) to update the data, then try again.',
+      ui.ButtonSet.OK);
+  }
+
   // Load Teacher Metrics + Student Winners
   const teacherMetrics = getTeacherMetrics();
   const allWinners = getStudentWinners();
@@ -129,6 +139,17 @@ function lookupByName(obj, firstName, lastName, fullName) {
   if (NAME_ALIASES[full] && obj[NAME_ALIASES[full]]) return obj[NAME_ALIASES[full]];
   if (NAME_ALIASES[shortKey] && obj[NAME_ALIASES[shortKey]]) return obj[NAME_ALIASES[shortKey]];
   return null;
+}
+
+/**
+ * Reads the week_start stamp from Teacher Metrics column L (set by pipeline).
+ * Returns the date string (e.g., "2026-03-30") or null if not found.
+ */
+function getMetricsWeekStamp() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.TEACHER_DATA_SHEET_NAME);
+  if (!sheet) return null;
+  var val = sheet.getRange('L2').getValue();
+  return val ? String(val).trim() : null;
 }
 
 function getConfigValue(key) {
