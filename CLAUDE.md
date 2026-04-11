@@ -7,11 +7,13 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 ## Architecture
 
 ```
-Google Sheet (4 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
+Google Sheet (6 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
        |                        |
   Config / Mapping         Google Drive
   Teacher Emails           (folder hierarchy)
   Teacher Metrics
+  Student Winners
+  Reading Teachers
 ```
 
 ### Google Sheet
@@ -35,10 +37,11 @@ Google Sheet (4 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
    - Key columns: Campus (C/index 2), Teacher First (Y/24), Teacher Last (Z/25), Teacher Email (AA/26)
    - **Exception:** Reading Community City School District uses columns AD/AE/AF (indices 29/30/31) for teacher info
 
-4. **Teacher Metrics** (A1:K, auto-populated by pipeline from BigQuery)
+4. **Teacher Metrics** (A1:L, auto-populated by pipeline from BigQuery)
    - Populated by `query_teacher_metrics_for_email()` in `email_winners.py`
    - Reads Config Date Range → extracts week_start → queries `weekly_dashboard`
-   - Columns: Teacher, Grade, # Students, Avg Active Days, % Logged In, % Everyday, Avg Minutes, Tests Mastered, Avg Tests, Lessons Mastered, Avg Lessons
+   - Columns A-K: Teacher, Grade, # Students, Avg Active Days, % Logged In, % Everyday, Avg Minutes, Tests Mastered, Avg Tests, Lessons Mastered, Avg Lessons
+   - Column L: `week_start` — hidden stamp used by Apps Script for data freshness validation
    - Logic matches QuickSight: % Logged In = SUM(logged_in)/COUNT(DISTINCT student_id), % Everyday = SUM(is_5_plus_days)/COUNT(DISTINCT student_id)
 
 5. **Student Winners** (auto-populated by pipeline from BigQuery)
@@ -71,10 +74,11 @@ Bruna and Mark's Schools - Weekly Report/
 ### `generateDraftsForCurrentUser()`
 Main entry point. Called from the "Email Tools" menu. Flow:
 1. Gets current user's email
-2. Finds their assigned schools from School-IM Mapping
-3. Builds teacher list from Teacher Emails sheet
-4. Loads Teacher Metrics
-5. For each teacher: finds PDF in Drive, generates HTML email, creates Gmail draft
+2. Validates data freshness (metrics week_start must match Config date range)
+3. Finds their assigned schools from School-IM Mapping
+4. Builds teacher list from Teacher Emails sheet (or Reading Teachers for Reading Community)
+5. Loads Teacher Metrics and Student Winners
+6. For each teacher: finds PDF in Drive, generates HTML email, creates Gmail draft
 
 ### `lookupByName(obj, firstName, lastName, fullName)`
 Fuzzy teacher name matching across metrics/winners lookups:
@@ -83,6 +87,10 @@ Fuzzy teacher name matching across metrics/winners lookups:
 3. Unique last name match
 4. NAME_ALIASES map (handles spelling mismatches like "Kloesz" → "Kloetz")
 
+### `getMetricsWeekStamp()`
+Reads the pipeline-stamped `week_start` from Teacher Metrics column L.
+Used by `generateDraftsForCurrentUser()` to validate data freshness before generating drafts.
+
 ### `generateEmailBody(teacher, metricsArray, winnersArray)`
 Builds the HTML email template. Sections:
 1. Greeting ("Hi {firstName},")
@@ -90,14 +98,19 @@ Builds the HTML email template. Sections:
 3. Color legend (Green 4+, Yellow 3, Red 1-2)
 4. **Conditional Current Trend** - based on overall avg active days across grade rows
 5. Weekly Focus, Why It Matters, Actions This Week
-6. Resources (AIM Launches links, Goal Tracker sheets)
-7. Weekly Challenge + Reflection Prompt
+6. Student Achievement Awards table (8 categories, tiered exclusivity)
+7. Resources (AIM Launches links, Goal Tracker sheets)
+8. Weekly Challenge + Reflection Prompt
 
 ### `getOverallTrendColor(metricsArray)`
 Calculates average of activeDays across all grade rows for a teacher:
 - `>= 3.95` → green: "Great work! Your students are on track..."
 - `>= 2.95` → yellow: "You're close — schedule at least 35 minutes daily..."
 - `< 2.95` → red: "Your class isn't meeting time goals yet..."
+
+### `buildWinnersHtml(winnersArray)`
+Renders the Student Achievement Awards table in the email. Uses colored CSS dots
+(not emoji) for category indicators. Each student appears only in their highest tier.
 
 ### `createDraftForTeacher(teacher, rootFolder, dateRange, metrics)`
 Navigates Drive folder hierarchy: root → school → teacher → date range → finds `00*SUMMARY*.PDF`
@@ -133,17 +146,19 @@ Cell background colors: Green `#d9ead3`, Yellow `#fff2cc`, Red `#f4cccc`
 - **Email HTML:** Uses only inline CSS (no `<style>` blocks) for email client compatibility
 - **Colored dots:** Rendered as inline `<span>` elements with `border-radius:50%`, not emoji (for reliability)
 - **ROOT_FOLDER_NAME constant:** Hardcoded as `"Bruna and Mark's Schools - Weekly Report"` - the Config sheet's `Root Folder Name` value is informational only
+- **Data freshness:** `getMetricsWeekStamp()` validates that Teacher Metrics column L matches Config Date Range before generating drafts
 
 ## Testing
 
 1. Add test user email to School-IM Mapping with a school that has data
-2. Ensure Teacher Metrics has data for teachers at that school
+2. Ensure Teacher Metrics has data for teachers at that school (columns A-K populated, column L stamped)
 3. Ensure Drive has the folder hierarchy with PDF files for the current date range
 4. Run "Email Tools > Generate My Email Drafts" from the Google Sheet
-5. Check Gmail Drafts for correct formatting, table data, trend color, and PDF attachment
+5. Check Gmail Drafts for correct formatting, table data, trend color, winners table, and PDF attachment
 
 ## Related Project
 
-The `Studient Excel Automation` project (separate repo) generates the underlying data pipeline:
+The `Studient Excel Automation` project (separate repo: `studient-dashboard-pipeline`) generates the underlying data pipeline:
 - AWS Athena → S3 → GCS → BigQuery → Google Sheets dashboards
 - The PDF reports attached to emails come from this pipeline's output
+- `email_winners.py` populates Teacher Metrics and Student Winners tabs
