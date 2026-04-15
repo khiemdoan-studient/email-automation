@@ -88,11 +88,17 @@ function generateDraftsForCurrentUser() {
   let successCount = 0, errorCount = 0;
   const errors = [];
 
+  // Build school folder name lookup once (avoids re-reading mapping per teacher)
+  const schoolFolderMap = {};
+  for (let m = 1; m < mappingData.length; m++) {
+    schoolFolderMap[mappingData[m][1]] = mappingData[m][0];
+  }
+
   for (const teacher of teachers) {
     try {
       const metrics = lookupByName(teacherMetrics, teacher.firstName, teacher.lastName, teacher.name);
       const winners = lookupByName(allWinners, teacher.firstName, teacher.lastName, teacher.name) || [];
-      const result = createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners);
+      const result = createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap);
       if (result.success) successCount++;
       else { errorCount++; errors.push(teacher.name + ': ' + result.error); }
     } catch (e) {
@@ -149,12 +155,20 @@ function getMetricsWeekStamp() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.TEACHER_DATA_SHEET_NAME);
   if (!sheet) return null;
   var val = sheet.getRange('L2').getValue();
-  return val ? String(val).trim() : null;
+  if (!val) return null;
+  // Guard: if Sheets auto-parsed "2026-03-30" as a Date object, convert back to ISO string
+  if (val instanceof Date) {
+    var y = val.getFullYear();
+    var m = ('0' + (val.getMonth() + 1)).slice(-2);
+    var d = ('0' + val.getDate()).slice(-2);
+    return y + '-' + m + '-' + d;
+  }
+  return String(val).trim();
 }
 
 function getConfigValue(key) {
   const data = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.CONFIG_SHEET_NAME).getDataRange().getValues();
-  for (const row of data) if (row[0] === key) return row[1];
+  for (const row of data) if (String(row[0]).trim() === key) return row[1];
   return null;
 }
 
@@ -263,12 +277,8 @@ function findFolderByName(folderName, parentFolder) {
   return folders.hasNext() ? folders.next() : null;
 }
 
-function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners) {
-  const mappingData = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
-  let schoolFolderName = "";
-  for (let i = 1; i < mappingData.length; i++) {
-    if (mappingData[i][1] === teacher.campus) schoolFolderName = mappingData[i][0];
-  }
+function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap) {
+  var schoolFolderName = schoolFolderMap[teacher.campus] || "";
 
   const schoolFolder = findFolderByName(schoolFolderName, rootFolder);
   if (!schoolFolder) return { success: false, error: 'School folder not found: ' + schoolFolderName };
@@ -322,7 +332,7 @@ function getOverallTrendColor(metricsArray) {
 
 /**
  * Builds an HTML table showing student achievement "winners" grouped by category.
- * Each category row has "Every Week" and "1+ Times" columns.
+ * Each category row has "3+ Weeks" and "1-2 Times" columns.
  */
 function buildWinnersHtml(winnersArray) {
   if (!winnersArray || winnersArray.length === 0) {
