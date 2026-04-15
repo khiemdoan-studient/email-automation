@@ -44,11 +44,11 @@ var TEMPLATES = {
     buildBody: generateWeek3Body
   },
   'Week 4: Diagnosing Habits': {
-    subject: 'Data drop: Diagnosing habits with your class data',
+    subject: 'Your weekly Motivention numbers (Now with data graphs to see at a glance)',
     buildBody: generateWeek4Body
   },
   'Week 5: Re-Engagement': {
-    subject: 'Data drop: Re-engagement and reset strategies',
+    subject: 'Freshly pressed data (+ 3 insights that aren\'t just noise about Re-Engagement & Resets)',
     buildBody: generateWeek5Body
   },
   'Week 6: Culture & Shoutouts': {
@@ -56,11 +56,11 @@ var TEMPLATES = {
     buildBody: generateWeek6Body
   },
   'Week 7: I\'m Stuck Protocol': {
-    subject: 'Data drop: The "I\'m Stuck" protocol for struggling students',
+    subject: 'Data crunch complete: (+ 3 non-boring updates using the I\'m Stuck protocol)',
     buildBody: generateWeek7Body
   },
   'Week 8: Growth Mindset': {
-    subject: 'Data drop: Growth mindset reframing for the final stretch',
+    subject: 'Attached: Your Data (+ 3 things you actually need to read about Mindset Reframing)',
     buildBody: generateWeek8Body
   },
   'Wrap Up: Celebrate Wins': {
@@ -814,20 +814,45 @@ function generateWeek3Body(teacher, metricsArray, winnersArray) {
 function generateWeek4Body(teacher, metricsArray, winnersArray) {
   return wrapEmailHtml([
     buildGreeting(teacher),
+
     '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
     buildMetricsTable(teacher, metricsArray),
     '<br>',
     buildColorLegend(),
-    buildTrendAlert(metricsArray),
+    '<p><strong>Current trend:</strong> Many students are logging in only half of the expected days rather than daily.</p>',
+    '<p>Students are expected to engage every day or until weekly goals are met. Participation is monitored at the school, district, and state levels.</p>',
+    '<p><strong>Key metrics:</strong> Average active days, Daily logins, Average minutes</p>',
+    '<p>Data Deep Dive attached.</p>',
 
-    '<h2 style="color:#1a1a1a;">Weekly Focus -- Diagnosing Habits with Data</h2>',
-    '<p>[PLACEHOLDER: Week 4 focus content -- paste from Google Doc]</p>',
+    '<div style="background-color:#fff2cc;padding:12px;border-radius:6px;margin:12px 0;border:1px solid #ffe599;">',
+    '<p style="margin:0;"><strong>Implementation Note:</strong> Improved student outcomes are directly tied to implementation fidelity. Daily usage and consistent routines are essential to achieving expected growth.</p>',
+    '</div>',
 
-    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
-    '<p>[PLACEHOLDER: Week 4 action items]</p>',
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Mental Effort</h2>',
+    '<p>Using data, identify one specific blocker per student using the 3 Lenses.</p>',
 
-    buildResourcesSection([]),
-    buildWeeklyChallenge(null, null)
+    '<h3 style="color:#1a1a1a;">Why It Matters</h3>',
+    '<p>Sometimes effort is misplaced. The system shows the exact habit holding a student back (e.g., skipping explanations).</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week -- Dashboard Data Dive:</h3>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>How Many Green Days?</strong> Check the rings for a quick check in: Number of Mastered Lessons, Accuracy, Time.</p>',
+
+    '<p>' + dotSpan('#1565c0') + '<strong>Look for the Blue Coaching Flags:</strong> Open the Daily Dashboard tab in your teacher view with the student. Scan for coaching flags, open to see the feedback (e.g., "Ignoring Explanations" or "Rushing"). <em>Note: These do not appear every day.</em></p>',
+
+    '<p>' + dotSpan('#ef6c00') + '<strong>Coach the Fix:</strong> Give a precise correction: "The data shows you are skipping explanations after wrong answers. Be sure to read them before moving on."</p>',
+
+    '<p>' + dotSpan('#c62828') + '<strong>Use the 3 Lenses:</strong> AI Data -- Are they spinning their wheels? Trackers -- Are they honest? Points -- Do they need momentum?</p>',
+
+    buildResourcesSection([
+      '<strong>AIM Launches (Next 3 weeks) -- For short week combine Mon & Tues:</strong><br>'
+        + '<a href="https://www.canva.com/design/DAHDeEQyjI0/UESk6Vp4GScPIiS7Xjdhfw/view?utm_content=DAHDeEQyjI0&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=he8b086611c">Week 3 - Growth Mindset - Beginner\'s Brain</a><br>'
+        + '<a href="https://www.canva.com/design/DAHDjdCSoBE/ZhB3f6k-dMvNMQ9QtNT0iA/view?utm_content=DAHDjdCSoBE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd9e0f0c72b">Week 4 - Growth Mindset - The Power of Yet</a><br>'
+        + '<a href="https://www.canva.com/design/DAHDyS0iyd8/cMK174HeOxUmagRJvojT6Q/view?utm_content=DAHDyS0iyd8&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h3e9c4fa347">Week 5 - Growth Mindset - Cognitive Reframing</a>'
+    ]),
+    buildWeeklyChallenge(
+      'Ensure every student _____ this week.',
+      'Last week\'s goal result: ______ What will you change this week to hit ______?'
+    )
   ]);
 }
 
@@ -835,20 +860,39 @@ function generateWeek4Body(teacher, metricsArray, winnersArray) {
 function generateWeek5Body(teacher, metricsArray, winnersArray) {
   return wrapEmailHtml([
     buildGreeting(teacher),
+
     '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
     buildMetricsTable(teacher, metricsArray),
     '<br>',
     buildColorLegend(),
     buildTrendAlert(metricsArray),
 
-    '<h2 style="color:#1a1a1a;">Weekly Focus -- Re-Engagement & Resets</h2>',
-    '<p>[PLACEHOLDER: Week 5 focus content -- paste from Google Doc]</p>',
+    '<h2 style="color:#1a1a1a;">Weekly Focus: Mental Focus & Persistence</h2>',
+    '<p>Use quick resets and short plans to bring disengaged students back into learning.</p>',
+
+    '<h3 style="color:#1a1a1a;">Why It Matters</h3>',
+    '<p>When students disengage, it\'s often because they feel overwhelmed. A brief reset during class or a short-term plan can help them regain focus and rebuild confidence.</p>',
 
     '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
-    '<p>[PLACEHOLDER: Week 5 action items]</p>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>Mid-Block Breath:</strong> If a student begins to shut down or spiral, pause the moment. Ask them to take a breath and reset. Then shrink the goal for the next 5-10 minutes so they can experience quick success.<br><br>'
+      + '<em>What if the whole class is shifting focus?</em> Have everyone "Pacman" their devices, stand, stretch, take three deep breaths, and shake it out before diving back in.</p>',
 
-    buildResourcesSection([]),
-    buildWeeklyChallenge(null, null)
+    '<p>' + dotSpan('#1565c0') + '<strong>Doom Loop Reset:</strong> If a student keeps attempting the same test without progress, try one of these coaching moves to break the cycle before their next retest.</p>',
+
+    '<p>' + dotSpan('#ef6c00') + '<strong>The Reset Conference:</strong> If a student has been disengaged for two days, schedule a quick 3-minute check-in.<br>'
+      + 'Try asking: "I\'ve noticed the last few days have been challenging. What\'s getting in the way?"<br>'
+      + 'Create a Reset Goal for the next two class blocks. Keep it small and achievable. Consider offering a small mystery reward if they reach it.</p>',
+
+    buildResourcesSection([
+      '<strong>AIM Launches (Next 3 weeks):</strong><br>'
+        + '<a href="https://www.canva.com/design/DAHDyS0iyd8/cMK174HeOxUmagRJvojT6Q/view?utm_content=DAHDyS0iyd8&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h3e9c4fa347">Week 5 - Growth Mindset - Cognitive Reframing</a><br>'
+        + '<a href="https://www.canva.com/design/DAHD3NLIJ9k/SK2vLZcgFXR-T3o1i539Rw/view?utm_content=DAHD3NLIJ9k&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hffe456c812">Week 6 - Growth Mindset - Productive Struggle</a><br>'
+        + '<a href="https://www.canva.com/design/DAHENc2sjwE/UzInFMp3qcfF3zzNUzqPEg/view?utm_content=DAHENc2sjwE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hfe0b04f9e7">Week 7 - Growth Mindset - Celebrating Effort</a>'
+    ]),
+    buildWeeklyChallenge(
+      'Increase your class\'s daily log ins, minutes, or lessons mastered to share as a class challenge.',
+      'What will you tweak for this coming week?'
+    )
   ]);
 }
 
@@ -897,20 +941,41 @@ function generateWeek6Body(teacher, metricsArray, winnersArray) {
 function generateWeek7Body(teacher, metricsArray, winnersArray) {
   return wrapEmailHtml([
     buildGreeting(teacher),
+
     '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
     buildMetricsTable(teacher, metricsArray),
     '<br>',
     buildColorLegend(),
     buildTrendAlert(metricsArray),
 
-    '<h2 style="color:#1a1a1a;">Weekly Focus -- The "I\'m Stuck" Protocol</h2>',
-    '<p>[PLACEHOLDER: Week 7 focus content -- paste from Google Doc]</p>',
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Persistence</h2>',
+    '<p><strong>Persist:</strong> Students maintain focus and keep working through challenges.</p>',
+
+    '<h3 style="color:#1a1a1a;">Why It Matters</h3>',
+    '<p>When students get stuck too long, they disengage. Clear next steps help them push through instead of giving up.</p>',
 
     '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
-    '<p>[PLACEHOLDER: Week 7 action items]</p>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>Watch for Stalling</strong><br>'
+      + '<em>Problem:</em> Students sit on one lesson with no progress<br>'
+      + '<em>Action:</em> Identify and intervene quickly</p>',
 
-    buildResourcesSection([]),
-    buildWeeklyChallenge(null, null)
+    '<p>' + dotSpan('#1565c0') + '<strong>Give a Path Forward</strong><br>'
+      + '<em>Problem:</em> Students don\'t know what to do when stuck<br>'
+      + '<em>Action:</em> Prompt a choice: Try a new Toolbox strategy, or Ask for help</p>',
+
+    '<p>' + dotSpan('#ef6c00') + '<strong>Use "I\'m Stuck"</strong><br>'
+      + '<em>Problem:</em> Students stay stuck instead of taking action<br>'
+      + '<em>Action:</em> Guide them through the built-in "I\'m Stuck" protocol</p>',
+
+    buildResourcesSection([
+      '<strong>AIM Launches:</strong><br>'
+        + '<a href="https://www.canva.com/design/DAHENc2sjwE/UzInFMp3qcfF3zzNUzqPEg/view?utm_content=DAHENc2sjwE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hfe0b04f9e7">Week 7 - Growth Mindset - Celebrating Effort</a><br>'
+        + '<a href="https://www.canva.com/design/DAHEUib_nsU/uKxIbPC2qH5KKoXDUWXElQ/view?utm_content=DAHEUib_nsU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd496d310e1">Week 8 - Growth Mindset - Curiosity</a>'
+    ]),
+    buildWeeklyChallenge(
+      'Ensure every student uses a strategy to move forward when stuck this week.',
+      'Where did students stall last week? What will you adjust to help them persist through challenges?'
+    )
   ]);
 }
 
@@ -918,20 +983,40 @@ function generateWeek7Body(teacher, metricsArray, winnersArray) {
 function generateWeek8Body(teacher, metricsArray, winnersArray) {
   return wrapEmailHtml([
     buildGreeting(teacher),
+
     '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
     buildMetricsTable(teacher, metricsArray),
     '<br>',
     buildColorLegend(),
     buildTrendAlert(metricsArray),
 
-    '<h2 style="color:#1a1a1a;">Weekly Focus -- Growth Mindset Reframing</h2>',
-    '<p>[PLACEHOLDER: Week 8 focus content -- paste from Google Doc]</p>',
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Mental Effort & Focus</h2>',
+    '<p><strong>Mental Effort:</strong> Students sustain effort and avoid unproductive "doom loops."</p>',
+
+    '<h3 style="color:#1a1a1a;">Why It Matters</h3>',
+    '<p>Students may shut down when work feels hard. Reframing their thinking keeps them engaged and trying.</p>',
 
     '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
-    '<p>[PLACEHOLDER: Week 8 action items]</p>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>Catch the Language</strong><br>'
+      + '<em>Problem:</em> "I can\'t" leads to shutdown<br>'
+      + '<em>Action:</em> Reframe: "You can\'t <em>yet</em>. What\'s the first step?"</p>',
 
-    buildResourcesSection([]),
-    buildWeeklyChallenge(null, null)
+    '<p>' + dotSpan('#c62828') + '<strong>Normalize the Struggle</strong><br>'
+      + '<em>Problem:</em> Students see difficulty as failure<br>'
+      + '<em>Action:</em> Reinforce: "It\'s supposed to be hard -- your brain is growing."</p>',
+
+    '<p>' + dotSpan('#1565c0') + '<strong>Shift to Strategy</strong><br>'
+      + '<em>Problem:</em> Students equate struggle with inability<br>'
+      + '<em>Action:</em> Redirect: "You don\'t need to quit -- try a different strategy."</p>',
+
+    buildResourcesSection([
+      '<strong>AIM Launches:</strong><br>'
+        + '<a href="https://www.canva.com/design/DAHEUib_nsU/uKxIbPC2qH5KKoXDUWXElQ/view?utm_content=DAHEUib_nsU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd496d310e1">Week 8 - Growth Mindset - Curiosity</a>'
+    ]),
+    buildWeeklyChallenge(
+      'Ensure every student uses positive self-talk and applies a strategy when work gets hard this week.',
+      'Where did students shut down last week? What will you adjust to keep them engaged in productive effort?'
+    )
   ]);
 }
 
