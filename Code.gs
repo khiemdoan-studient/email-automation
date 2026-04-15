@@ -1,14 +1,18 @@
 // ============================================
 // CONFIGURATION
 // ============================================
-const CONFIG = {
+var CONFIG = {
   ROOT_FOLDER_NAME: "Bruna and Mark's Schools - Weekly Report",
   CONFIG_SHEET_NAME: "Config",
   MAPPING_SHEET_NAME: "School-IM Mapping",
   ROSTER_SHEET_NAME: "Teacher Emails",
-  TEACHER_DATA_SHEET_NAME: "Teacher Metrics",
+  ALL_METRICS_SHEET_NAME: "All Teacher Metrics",
   WINNERS_SHEET_NAME: "Student Winners",
   READING_TEACHERS_SHEET_NAME: "Reading Teachers",
+  AVAILABLE_WEEKS_SHEET_NAME: "Available Weeks",
+
+  // Legacy single-week tab (backward compat)
+  TEACHER_DATA_SHEET_NAME: "Teacher Metrics",
 
   // Column indices in Teacher Emails sheet (0-indexed)
   CAMPUS_COL: 2,           // Column C: Campus
@@ -17,6 +21,76 @@ const CONFIG = {
   TEACHER_EMAIL_COL: 26    // Column AA: Teacher 1 Email
 };
 
+// ============================================
+// TEMPLATE REGISTRY
+// ============================================
+// Each template: { subject, buildBody(teacher, metrics, winners, dot) }
+// Templates that don't use winners pass null for winnersArray
+var TEMPLATES = {
+  'Week 0: Data': {
+    subject: 'Data Delivery: Try to Contain Your Excitement -- MAP Scores Are In!',
+    buildBody: generateWeek0Body
+  },
+  'Week 1: Goals & Monitoring': {
+    subject: 'Your data is served (with a side order of goals and monitoring reminders!)',
+    buildBody: generateWeek1Body
+  },
+  'Week 2: Tech Hygiene': {
+    subject: 'Attached: Your Data (+ 3 things you actually need to read about tech hygiene and student data ownership.)',
+    buildBody: generateWeek2Body
+  },
+  'Week 3: Micro-Coaching': {
+    subject: 'Your Motivention Data (+ 3 Micro-coaching moves to keep students moving.)',
+    buildBody: generateWeek3Body
+  },
+  'Week 4: Diagnosing Habits': {
+    subject: 'Data drop: Diagnosing habits with your class data',
+    buildBody: generateWeek4Body
+  },
+  'Week 5: Re-Engagement': {
+    subject: 'Data drop: Re-engagement and reset strategies',
+    buildBody: generateWeek5Body
+  },
+  'Week 6: Culture & Shoutouts': {
+    subject: 'Data drop: A 2-minute summary of everything that matters about culture, shoutouts, & Rewards',
+    buildBody: generateWeek6Body
+  },
+  'Week 7: I\'m Stuck Protocol': {
+    subject: 'Data drop: The "I\'m Stuck" protocol for struggling students',
+    buildBody: generateWeek7Body
+  },
+  'Week 8: Growth Mindset': {
+    subject: 'Data drop: Growth mindset reframing for the final stretch',
+    buildBody: generateWeek8Body
+  },
+  'Wrap Up: Celebrate Wins': {
+    subject: 'Data drop: Celebrating your students\' wins and hard work',
+    buildBody: generateWrapUpBody
+  }
+};
+
+// Template names list for dropdown validation
+var TEMPLATE_NAMES = [
+  'Week 0: Data',
+  'Week 1: Goals & Monitoring',
+  'Week 2: Tech Hygiene',
+  'Week 3: Micro-Coaching',
+  'Week 4: Diagnosing Habits',
+  'Week 5: Re-Engagement',
+  'Week 6: Culture & Shoutouts',
+  'Week 7: I\'m Stuck Protocol',
+  'Week 8: Growth Mindset',
+  'Wrap Up: Celebrate Wins'
+];
+
+// Manual aliases for teachers whose names differ between roster and metrics
+var NAME_ALIASES = {
+  'lisa kloesz': 'lisa kloetz'
+};
+
+// ============================================
+// MENU
+// ============================================
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Email Tools')
@@ -24,40 +98,62 @@ function onOpen() {
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
     .addSeparator()
     .addItem('Set Date Range', 'setDateRange')
+    .addItem('Set Template', 'setTemplate')
     .addToUi();
 }
 
 function setDateRange() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt('Set Date Range', 'Enter the date range folder name (e.g., 2026-03-09_to_2026-03-15):', ui.ButtonSet.OK_CANCEL);
+  var ui = SpreadsheetApp.getUi();
+  // Show available weeks from helper tab
+  var weeks = getAvailableWeeks();
+  var msg = 'Enter the date range folder name (e.g., 2026-03-09_to_2026-03-15):';
+  if (weeks.length > 0) {
+    msg += '\n\nAvailable weeks:\n' + weeks.slice(0, 10).join('\n');
+  }
+  var response = ui.prompt('Set Date Range', msg, ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() === ui.Button.OK) {
-    const dateRange = response.getResponseText().trim();
-    const configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.CONFIG_SHEET_NAME);
-    const data = configSheet.getDataRange().getValues();
-    for (let i = 0; i < data.length; i++) {
-      if (data[i][0] === 'Date Range') {
-        configSheet.getRange(i + 1, 2).setValue(dateRange);
-        ui.alert('Date range set to: ' + dateRange);
-        return;
-      }
-    }
-    configSheet.appendRow(['Date Range', dateRange]);
+    var dateRange = response.getResponseText().trim();
+    setConfigValue('Date Range', dateRange);
     ui.alert('Date range set to: ' + dateRange);
   }
 }
 
-function generateDraftsForCurrentUser() {
-  const ui = SpreadsheetApp.getUi();
-  const currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+function setTemplate() {
+  var ui = SpreadsheetApp.getUi();
+  var msg = 'Enter the template name:\n\n' + TEMPLATE_NAMES.join('\n');
+  var response = ui.prompt('Set Template', msg, ui.ButtonSet.OK_CANCEL);
+  if (response.getSelectedButton() === ui.Button.OK) {
+    var template = response.getResponseText().trim();
+    if (!TEMPLATES[template]) {
+      ui.alert('Error', 'Unknown template: ' + template + '\n\nValid options:\n' + TEMPLATE_NAMES.join('\n'), ui.ButtonSet.OK);
+      return;
+    }
+    setConfigValue('Template', template);
+    ui.alert('Template set to: ' + template);
+  }
+}
 
-  const dateRange = getConfigValue('Date Range');
-  if (!dateRange) return ui.alert('Error', 'Please set the Date Range first.', ui.ButtonSet.OK);
+// ============================================
+// MAIN GENERATION FLOW
+// ============================================
+function generateDraftsForCurrentUser() {
+  var ui = SpreadsheetApp.getUi();
+  var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Read Config defaults
+  var dateRange = getConfigValue('Date Range');
+  if (!dateRange) return ui.alert('Error', 'Please set the Date Range first (Config tab or Email Tools menu).', ui.ButtonSet.OK);
+
+  var templateName = getConfigValue('Template') || 'Week 6: Culture & Shoutouts';
+  if (!TEMPLATES[templateName]) {
+    return ui.alert('Error', 'Unknown template: ' + templateName + '\n\nSet a valid template in Config or use Email Tools > Set Template.', ui.ButtonSet.OK);
+  }
 
   // Get IM's assigned schools
-  const mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
-  const mySchools = [];
-  for (let i = 1; i < mappingData.length; i++) {
+  var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
+  var mySchools = [];
+  for (var i = 1; i < mappingData.length; i++) {
     if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
       mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
     }
@@ -65,40 +161,64 @@ function generateDraftsForCurrentUser() {
 
   if (mySchools.length === 0) return ui.alert('Error', 'Your email is not assigned to any schools.', ui.ButtonSet.OK);
 
-  const teachers = getTeachersForSchools(mySchools.map(s => s.displayName));
+  var teachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
   if (teachers.length === 0) return ui.alert('Error', 'No teachers found for your schools.', ui.ButtonSet.OK);
 
-  const rootFolder = findFolderByName(CONFIG.ROOT_FOLDER_NAME);
-  if (!rootFolder) return ui.alert('Error', 'Could not find root folder.', ui.ButtonSet.OK);
+  // Validate Drive folder exists for this date range
+  var rootFolder = findFolderByName(CONFIG.ROOT_FOLDER_NAME);
+  if (!rootFolder) return ui.alert('Error', 'Could not find root folder: ' + CONFIG.ROOT_FOLDER_NAME, ui.ButtonSet.OK);
 
-  // Validate data freshness — check if Teacher Metrics matches Config date range
-  const metricsWeek = getMetricsWeekStamp();
-  const configWeekStart = dateRange.split('_to_')[0]; // "2026-03-30_to_2026-04-05" -> "2026-03-30"
-  if (metricsWeek && configWeekStart && metricsWeek !== configWeekStart) {
-    return ui.alert('Data Mismatch',
-      'Teacher Metrics data is from week ' + metricsWeek + ' but Config says ' + configWeekStart + '.\n\n' +
-      'Run the pipeline first (python generate_report_v3.py) to update the data, then try again.',
-      ui.ButtonSet.OK);
+  var driveFolderExists = checkDriveFolderExists(rootFolder, mySchools, dateRange);
+
+  // Validate metrics data exists for selected week
+  var weekStart = dateRange.split('_to_')[0];
+  var metricsExist = checkMetricsExistForWeek(weekStart);
+
+  // Show confirmation dialog
+  var dialogMsg = 'Ready to generate email drafts.\n\n'
+    + 'Date Range: ' + dateRange + '\n'
+    + 'Template: ' + templateName + '\n'
+    + 'Teachers found: ' + teachers.length + '\n'
+    + 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n'
+    + 'Drive folders: ' + (driveFolderExists ? 'Found' : 'NOT FOUND') + '\n';
+
+  if (!driveFolderExists) {
+    dialogMsg += '\nWARNING: No Drive folders found for date range "' + dateRange + '".\n'
+      + 'PDFs cannot be attached. Generation is BLOCKED.\n'
+      + 'Please check that the date range matches your Drive folder names.';
+    return ui.alert('Cannot Generate', dialogMsg, ui.ButtonSet.OK);
   }
 
-  // Load Teacher Metrics + Student Winners
-  const teacherMetrics = getTeacherMetrics();
-  const allWinners = getStudentWinners();
+  if (!metricsExist) {
+    dialogMsg += '\nWARNING: No metrics data found for week ' + weekStart + '.\n'
+      + 'Emails will be generated WITHOUT metrics tables.\n';
+  }
 
-  let successCount = 0, errorCount = 0;
-  const errors = [];
+  dialogMsg += '\nProceed?';
+  var confirm = ui.alert('Confirm Generation', dialogMsg, ui.ButtonSet.YES_NO);
+  if (confirm !== ui.Button.YES) return;
 
-  // Build school folder name lookup once (avoids re-reading mapping per teacher)
-  const schoolFolderMap = {};
-  for (let m = 1; m < mappingData.length; m++) {
+  // Load data
+  var teacherMetrics = metricsExist ? getTeacherMetricsForWeek(weekStart) : {};
+  var allWinners = getStudentWinners();
+
+  var successCount = 0, errorCount = 0;
+  var errors = [];
+
+  // Build school folder name lookup once
+  var schoolFolderMap = {};
+  for (var m = 1; m < mappingData.length; m++) {
     schoolFolderMap[mappingData[m][1]] = mappingData[m][0];
   }
 
-  for (const teacher of teachers) {
+  var template = TEMPLATES[templateName];
+
+  for (var t = 0; t < teachers.length; t++) {
+    var teacher = teachers[t];
     try {
-      const metrics = lookupByName(teacherMetrics, teacher.firstName, teacher.lastName, teacher.name);
-      const winners = lookupByName(allWinners, teacher.firstName, teacher.lastName, teacher.name) || [];
-      const result = createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap);
+      var metrics = lookupByName(teacherMetrics, teacher.firstName, teacher.lastName, teacher.name);
+      var winners = lookupByName(allWinners, teacher.firstName, teacher.lastName, teacher.name) || [];
+      var result = createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template);
       if (result.success) successCount++;
       else { errorCount++; errors.push(teacher.name + ': ' + result.error); }
     } catch (e) {
@@ -106,82 +226,164 @@ function generateDraftsForCurrentUser() {
     }
   }
 
-  let msg = "Created " + successCount + " drafts. " + errorCount + " errors.";
-  if (errorCount > 0) { msg += " | ERRORS: " + errors.join(" | "); }
-  msg += " | Check your Gmail Drafts!";
+  var msg = 'Created ' + successCount + ' drafts. ' + errorCount + ' errors.';
+  if (errorCount > 0) { msg += ' | ERRORS: ' + errors.join(' | '); }
+  msg += ' | Check your Gmail Drafts!';
   ui.alert('Complete', msg, ui.ButtonSet.OK);
 }
 
-// --- HELPER FUNCTIONS ---
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
 
 /**
- * Looks up a teacher in a name-keyed object, trying multiple name formats
- * to handle middle names and inconsistent naming (e.g., "John Bradley Apostol"
- * in roster vs "John Apostol" in metrics).
- * Tries: full name, first+last only, first-word+last.
+ * Looks up a teacher in a name-keyed object, trying multiple name formats.
  */
-// Manual aliases for teachers whose names differ between roster and metrics
-var NAME_ALIASES = {
-  'lisa kloesz': 'lisa kloetz'
-};
-
 function lookupByName(obj, firstName, lastName, fullName) {
   if (!obj) return null;
   var full = fullName.toLowerCase().trim();
-  // Try 1: exact full name
   if (obj[full]) return obj[full];
-  // Try 2: first name (first word only) + last name
   var first = firstName.toLowerCase().trim().split(' ')[0];
   var last = lastName.toLowerCase().trim();
   var shortKey = first + ' ' + last;
   if (obj[shortKey]) return obj[shortKey];
-  // Try 3: unique last name match
   var lastMatches = [];
   for (var k in obj) {
     if (k.endsWith(' ' + last)) lastMatches.push(k);
   }
   if (lastMatches.length === 1) return obj[lastMatches[0]];
-  // Try 4: check name aliases
   if (NAME_ALIASES[full] && obj[NAME_ALIASES[full]]) return obj[NAME_ALIASES[full]];
   if (NAME_ALIASES[shortKey] && obj[NAME_ALIASES[shortKey]]) return obj[NAME_ALIASES[shortKey]];
   return null;
 }
 
-/**
- * Reads the week_start stamp from Teacher Metrics column L (set by pipeline).
- * Returns the date string (e.g., "2026-03-30") or null if not found.
- */
-function getMetricsWeekStamp() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.TEACHER_DATA_SHEET_NAME);
-  if (!sheet) return null;
-  var val = sheet.getRange('L2').getValue();
-  if (!val) return null;
-  // Guard: if Sheets auto-parsed "2026-03-30" as a Date object, convert back to ISO string
-  if (val instanceof Date) {
-    var y = val.getFullYear();
-    var m = ('0' + (val.getMonth() + 1)).slice(-2);
-    var d = ('0' + val.getDate()).slice(-2);
-    return y + '-' + m + '-' + d;
-  }
-  return String(val).trim();
-}
-
 function getConfigValue(key) {
-  const data = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.CONFIG_SHEET_NAME).getDataRange().getValues();
-  for (const row of data) if (String(row[0]).trim() === key) return row[1];
+  var data = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.CONFIG_SHEET_NAME).getDataRange().getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim() === key) return String(data[i][1] || '').trim();
+  }
   return null;
 }
 
-function getTeachersForSchools(schoolDisplayNames) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const data = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME).getDataRange().getValues();
-  const teacherMap = new Map();
+function setConfigValue(key, value) {
+  var configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.CONFIG_SHEET_NAME);
+  var data = configSheet.getDataRange().getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim() === key) {
+      configSheet.getRange(i + 1, 2).setValue(value);
+      return;
+    }
+  }
+  configSheet.appendRow([key, value]);
+}
 
-  // Standard schools: read from Teacher Emails sheet
-  for (let i = 1; i < data.length; i++) {
-    const campus = String(data[i][CONFIG.CAMPUS_COL] || '').trim();
-    if (!schoolDisplayNames.includes(campus)) continue;
-    if (campus === 'Reading Community City School District') continue; // handled below
+function getAvailableWeeks() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.AVAILABLE_WEEKS_SHEET_NAME);
+  if (!sheet) return [];
+  var data = sheet.getDataRange().getValues();
+  var weeks = [];
+  for (var i = 1; i < data.length; i++) {
+    var dateRange = String(data[i][1] || '').trim();
+    if (dateRange) weeks.push(dateRange);
+  }
+  return weeks;
+}
+
+/**
+ * Check if "All Teacher Metrics" tab has data for a given week_start.
+ */
+function checkMetricsExistForWeek(weekStart) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.ALL_METRICS_SHEET_NAME);
+  if (!sheet) return false;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var val = data[i][0];
+    if (val instanceof Date) {
+      var y = val.getFullYear();
+      var m = ('0' + (val.getMonth() + 1)).slice(-2);
+      var d = ('0' + val.getDate()).slice(-2);
+      val = y + '-' + m + '-' + d;
+    } else {
+      val = String(val).trim();
+    }
+    if (val === weekStart) return true;
+  }
+  return false;
+}
+
+/**
+ * Check if at least one school's Drive folder has a subfolder for the date range.
+ */
+function checkDriveFolderExists(rootFolder, schools, dateRange) {
+  for (var i = 0; i < schools.length; i++) {
+    var schoolFolder = findFolderByName(schools[i].folderName, rootFolder);
+    if (!schoolFolder) continue;
+    // Check if any teacher folder has the date range subfolder
+    var teacherFolders = schoolFolder.getFolders();
+    while (teacherFolders.hasNext()) {
+      var tf = teacherFolders.next();
+      var dateFolder = findFolderByName(dateRange, tf);
+      if (dateFolder) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Reads "All Teacher Metrics" tab and returns metrics for a specific week.
+ * Filters by week_start (column A), returns teacher-keyed object.
+ */
+function getTeacherMetricsForWeek(weekStart) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.ALL_METRICS_SHEET_NAME);
+  if (!sheet) return {};
+  var data = sheet.getDataRange().getValues();
+  var metrics = {};
+
+  for (var i = 1; i < data.length; i++) {
+    // Column A: week_start
+    var wsVal = data[i][0];
+    if (wsVal instanceof Date) {
+      var y = wsVal.getFullYear();
+      var m = ('0' + (wsVal.getMonth() + 1)).slice(-2);
+      var d = ('0' + wsVal.getDate()).slice(-2);
+      wsVal = y + '-' + m + '-' + d;
+    } else {
+      wsVal = String(wsVal).trim();
+    }
+
+    if (wsVal !== weekStart) continue;
+
+    // Column B: Teacher, C: Grade, D-L: metrics
+    var teacherName = String(data[i][1]).trim().toLowerCase();
+    var grade = String(data[i][2]).trim();
+    if (!teacherName || teacherName === '') continue;
+
+    if (!metrics[teacherName]) metrics[teacherName] = [];
+    metrics[teacherName].push({
+      grade: grade,
+      numStudents: parseFloat(data[i][3]) || 0,
+      activeDays: parseFloat(data[i][4]) || 0,
+      pctLoggedIn: parseFloat(data[i][5]) || 0,
+      pctEveryday: parseFloat(data[i][6]) || 0,
+      avgMins: parseFloat(data[i][7]) || 0,
+      testsMastered: parseFloat(data[i][8]) || 0,
+      avgTests: parseFloat(data[i][9]) || 0,
+      lessonsMastered: parseFloat(data[i][10]) || 0,
+      avgLessons: parseFloat(data[i][11]) || 0
+    });
+  }
+  return metrics;
+}
+
+function getTeachersForSchools(schoolDisplayNames) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var data = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME).getDataRange().getValues();
+  var teacherMap = new Map();
+
+  for (var i = 1; i < data.length; i++) {
+    var campus = String(data[i][CONFIG.CAMPUS_COL] || '').trim();
+    if (schoolDisplayNames.indexOf(campus) === -1) continue;
+    if (campus === 'Reading Community City School District') continue;
 
     var firstName = String(data[i][CONFIG.TEACHER_FIRST_COL] || '').trim();
     var lastName = String(data[i][CONFIG.TEACHER_LAST_COL] || '').trim();
@@ -196,8 +398,8 @@ function getTeachersForSchools(schoolDisplayNames) {
     }
   }
 
-  // Reading Community: read from dedicated "Reading Teachers" tab
-  if (schoolDisplayNames.includes('Reading Community City School District')) {
+  // Reading Community: dedicated tab
+  if (schoolDisplayNames.indexOf('Reading Community City School District') !== -1) {
     var readingSheet = ss.getSheetByName(CONFIG.READING_TEACHERS_SHEET_NAME);
     if (readingSheet) {
       var readingData = readingSheet.getDataRange().getValues();
@@ -219,43 +421,11 @@ function getTeachersForSchools(schoolDisplayNames) {
   return Array.from(teacherMap.values());
 }
 
-function getTeacherMetrics() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.TEACHER_DATA_SHEET_NAME);
-  if (!sheet) return {};
-  const data = sheet.getDataRange().getValues();
-  const metrics = {};
-
-  for (let i = 1; i < data.length; i++) {
-    const teacherName = String(data[i][0]).trim().toLowerCase();
-    const grade = String(data[i][1]).trim();
-    if (!teacherName || teacherName === "") continue;
-    if (!metrics[teacherName]) { metrics[teacherName] = []; }
-    metrics[teacherName].push({
-      grade: grade,
-      numStudents: parseFloat(data[i][2]) || 0,
-      activeDays: parseFloat(data[i][3]) || 0,
-      pctLoggedIn: parseFloat(data[i][4]) || 0,
-      pctEveryday: parseFloat(data[i][5]) || 0,
-      avgMins: parseFloat(data[i][6]) || 0,
-      testsMastered: parseFloat(data[i][7]) || 0,
-      avgTests: parseFloat(data[i][8]) || 0,
-      lessonsMastered: parseFloat(data[i][9]) || 0,
-      avgLessons: parseFloat(data[i][10]) || 0
-    });
-  }
-  return metrics;
-}
-
-/**
- * Reads "Student Winners" tab and returns a teacher-keyed lookup.
- * Schema: campus_name | teacher_name | category | sort_order | frequency | student_names | student_count
- * Returns: { "teacher name (lower)": [ { category, sort_order, frequency, studentNames, studentCount } ] }
- */
 function getStudentWinners() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.WINNERS_SHEET_NAME);
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.WINNERS_SHEET_NAME);
   if (!sheet) return {};
-  const data = sheet.getDataRange().getValues();
-  const winners = {};
+  var data = sheet.getDataRange().getValues();
+  var winners = {};
 
   for (var i = 1; i < data.length; i++) {
     var teacherName = String(data[i][1]).trim().toLowerCase();
@@ -273,73 +443,117 @@ function getStudentWinners() {
 }
 
 function findFolderByName(folderName, parentFolder) {
-  const folders = parentFolder ? parentFolder.getFoldersByName(folderName) : DriveApp.getFoldersByName(folderName);
+  var folders = parentFolder ? parentFolder.getFoldersByName(folderName) : DriveApp.getFoldersByName(folderName);
   return folders.hasNext() ? folders.next() : null;
 }
 
-function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap) {
-  var schoolFolderName = schoolFolderMap[teacher.campus] || "";
-
-  const schoolFolder = findFolderByName(schoolFolderName, rootFolder);
+function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template) {
+  var schoolFolderName = schoolFolderMap[teacher.campus] || '';
+  var schoolFolder = findFolderByName(schoolFolderName, rootFolder);
   if (!schoolFolder) return { success: false, error: 'School folder not found: ' + schoolFolderName };
 
-  const teacherFolder = findFolderByName(teacher.folderName, schoolFolder);
+  var teacherFolder = findFolderByName(teacher.folderName, schoolFolder);
   if (!teacherFolder) return { success: false, error: 'Teacher folder not found: ' + teacher.folderName };
 
-  const dateFolder = findFolderByName(dateRange, teacherFolder);
+  var dateFolder = findFolderByName(dateRange, teacherFolder);
   if (!dateFolder) return { success: false, error: 'Date folder not found: ' + dateRange };
 
-  const files = dateFolder.getFiles();
-  let summaryPdf = null;
+  var files = dateFolder.getFiles();
+  var summaryPdf = null;
   while (files.hasNext()) {
-    const file = files.next();
-    const fileName = file.getName().toUpperCase();
-    if (fileName.startsWith('00') && fileName.includes('SUMMARY') && fileName.endsWith('.PDF')) {
+    var file = files.next();
+    var fileName = file.getName().toUpperCase();
+    if (fileName.indexOf('00') === 0 && fileName.indexOf('SUMMARY') !== -1 && fileName.indexOf('.PDF') === fileName.length - 4) {
       summaryPdf = file; break;
     }
   }
   if (!summaryPdf) return { success: false, error: 'Summary PDF not found' };
 
-  const subject = 'Data drop: A 2-minute summary of everything that matters about culture, shoutouts, & Rewards';
-  const body = generateEmailBody(teacher, metrics, winners);
-
-  GmailApp.createDraft(teacher.email, subject, '', { htmlBody: body, attachments: [summaryPdf.getAs(MimeType.PDF)] });
+  var body = template.buildBody(teacher, metrics, winners);
+  GmailApp.createDraft(teacher.email, template.subject, '', { htmlBody: body, attachments: [summaryPdf.getAs(MimeType.PDF)] });
   return { success: true };
 }
 
 // ============================================
-// EMAIL TEMPLATE - Culture, Shoutouts & Rewards
+// SHARED EMAIL COMPONENTS
 // ============================================
 
-/**
- * Determines the overall trend color for a teacher based on
- * the average of activeDays across all their grade rows.
- * Returns 'green', 'yellow', or 'red'.
- */
+function dotSpan(color) {
+  return '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + color + ';margin-right:6px;vertical-align:middle;"></span>';
+}
+
+function buildGreeting(teacher) {
+  return '<p>Hi ' + String(teacher.firstName || '') + ',</p>';
+}
+
+function buildMetricsTable(teacher, metricsArray) {
+  if (!metricsArray || metricsArray.length === 0) {
+    return '<p><em>No data available for this week.</em></p>';
+  }
+  var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:560px;">';
+  html += '<tr style="background-color:#f3f3f3;"><th style="padding:8px;">Teacher</th><th style="padding:8px;">Grade</th><th style="padding:8px;">Avg Active Days</th><th style="padding:8px;">Avg Minutes</th></tr>';
+  for (var i = 0; i < metricsArray.length; i++) {
+    var m = metricsArray[i];
+    var activeDays = Number(m.activeDays || 0);
+    var avgMins = Number(m.avgMins || 0);
+    var daysColor = activeDays >= 3.95 ? '#d9ead3' : (activeDays >= 2.95 ? '#fff2cc' : '#f4cccc');
+    var minsColor = avgMins >= 99.5 ? '#d9ead3' : (avgMins >= 79.5 ? '#fff2cc' : '#f4cccc');
+    html += '<tr>';
+    html += '<td style="padding:8px;">' + String(teacher.name || '') + '</td>';
+    html += '<td style="padding:8px;">' + String(m.grade || '') + '</td>';
+    html += '<td style="padding:8px;background-color:' + daysColor + ';">' + activeDays.toFixed(1) + '</td>';
+    html += '<td style="padding:8px;background-color:' + minsColor + ';">' + avgMins.toFixed(1) + '</td>';
+    html += '</tr>';
+  }
+  html += '</table>';
+  return html;
+}
+
+function buildColorLegend() {
+  var html = '<p><strong>Average Active Days:</strong> ';
+  html += dotSpan('#2e7d32') + '<span style="color:#2e7d32;font-weight:bold;">Green 4+</span> &nbsp; ';
+  html += dotSpan('#DAA520') + '<span style="color:#DAA520;font-weight:bold;">Yellow 3</span> &nbsp; ';
+  html += dotSpan('#c62828') + '<span style="color:#c62828;font-weight:bold;">Red 1-2</span></p>';
+  html += '<p><strong>Key metrics:</strong> Average active days, Daily logins, Average minutes</p>';
+  return html;
+}
+
 function getOverallTrendColor(metricsArray) {
   if (!metricsArray || metricsArray.length === 0) return 'red';
   var totalActiveDays = 0;
-  var count = 0;
   for (var i = 0; i < metricsArray.length; i++) {
     totalActiveDays += parseFloat(metricsArray[i].activeDays) || 0;
-    count++;
   }
-  var avg = totalActiveDays / count;
+  var avg = totalActiveDays / metricsArray.length;
   if (avg >= 3.95) return 'green';
   if (avg >= 2.95) return 'yellow';
   return 'red';
 }
 
-/**
- * Builds an HTML table showing student achievement "winners" grouped by category.
- * Each category row has "3+ Weeks" and "1-2 Times" columns.
- */
+function buildTrendAlert(metricsArray) {
+  var trendColor = getOverallTrendColor(metricsArray);
+  var trendMessages = {
+    green: 'Great work! Your students are on track and meeting their goals.',
+    yellow: "You're close -- schedule at least 35 minutes daily so students can meet their goals.",
+    red: "Your class isn't meeting time goals yet -- students need 35 minutes daily in Motivention."
+  };
+  var trendDotColors = { green: '#2e7d32', yellow: '#DAA520', red: '#c62828' };
+  var trendBgColors = { green: '#d9ead3', yellow: '#fff2cc', red: '#f4cccc' };
+  var trendBorderColors = { green: '#b6d7a8', yellow: '#ffe599', red: '#ea9999' };
+
+  var html = '<div style="background-color:' + trendBgColors[trendColor] + ';padding:12px;border-radius:6px;margin:12px 0;border:1px solid ' + trendBorderColors[trendColor] + ';">';
+  html += '<p style="margin:0 0 8px 0;">' + dotSpan(trendDotColors[trendColor]) + '<strong>Current trend:</strong> ' + trendMessages[trendColor] + '</p>';
+  html += '<p style="margin:0 0 8px 0;">Students are expected to engage every day or until weekly goals are met.</p>';
+  html += '<p style="margin:0;">Participation is monitored at the school, district, and state levels.</p>';
+  html += '</div>';
+  return html;
+}
+
 function buildWinnersHtml(winnersArray) {
   if (!winnersArray || winnersArray.length === 0) {
     return '<p style="color:#666;font-style:italic;">No student achievement data available for this period.</p>';
   }
 
-  // Group by category: { category: { every: names, some: names } }
   var categories = {};
   var sortOrders = {};
   for (var i = 0; i < winnersArray.length; i++) {
@@ -355,21 +569,19 @@ function buildWinnersHtml(winnersArray) {
     }
   }
 
-  // Sort categories by sort_order
   var catNames = Object.keys(categories);
   catNames.sort(function(a, b) { return (sortOrders[a] || 99) - (sortOrders[b] || 99); });
 
-  // Category colored dot map (inline spans — reliable across email clients)
-  var dotFn = function(c) { return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c + ';margin-right:4px;vertical-align:middle;"></span>'; };
+  var smallDot = function(c) { return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c + ';margin-right:4px;vertical-align:middle;"></span>'; };
   var catIcons = {
-    'Grade Level Mastered': dotFn('#FFD700'),
-    '10+ Lessons/Week': dotFn('#2e7d32'),
-    '5+ Lessons/Week': dotFn('#66bb6a'),
-    'Resilience (Fail then Pass)': dotFn('#1565c0'),
-    '125+ Minutes': dotFn('#FFD700'),
-    '100+ Minutes': dotFn('#ef6c00'),
-    '4.5+ Active Days': dotFn('#c62828'),
-    '4+ Active Days': dotFn('#e57373')
+    'Grade Level Mastered': smallDot('#FFD700'),
+    '10+ Lessons/Week': smallDot('#2e7d32'),
+    '5+ Lessons/Week': smallDot('#66bb6a'),
+    'Resilience (Fail then Pass)': smallDot('#1565c0'),
+    '125+ Minutes': smallDot('#FFD700'),
+    '100+ Minutes': smallDot('#ef6c00'),
+    '4.5+ Active Days': smallDot('#c62828'),
+    '4+ Active Days': smallDot('#e57373')
   };
 
   var html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;max-width:560px;font-size:13px;">';
@@ -384,140 +596,382 @@ function buildWinnersHtml(winnersArray) {
     var data = categories[cat];
     var icon = catIcons[cat] || '';
     var bgColor = j % 2 === 0 ? '#f9f9f9' : '#ffffff';
-
     html += '<tr style="background-color:' + bgColor + ';">';
     html += '<td style="padding:6px 8px;font-weight:bold;white-space:nowrap;">' + icon + ' ' + cat + '</td>';
-    html += '<td style="padding:6px 8px;">' + (data.every || '\u2014') + '</td>';
-    html += '<td style="padding:6px 8px;">' + (data.some || '\u2014') + '</td>';
+    html += '<td style="padding:6px 8px;">' + (data.every || '--') + '</td>';
+    html += '<td style="padding:6px 8px;">' + (data.some || '--') + '</td>';
     html += '</tr>';
   }
   html += '</table>';
   return html;
 }
 
-function generateEmailBody(teacher, metricsArray, winnersArray) {
-  // Helper: colored dot span
-  var dot = function(color) {
-    return '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + color + ';margin-right:6px;vertical-align:middle;"></span>';
-  };
-
-  // --- Teacher Data Table ---
-  var metricsHtml = '<p><em>No data available for this week.</em></p>';
-  if (metricsArray && metricsArray.length > 0) {
-    metricsHtml = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:560px;">';
-    metricsHtml += '<tr style="background-color:#f3f3f3;"><th style="padding:8px;">Teacher</th><th style="padding:8px;">Grade</th><th style="padding:8px;">Avg Active Days</th><th style="padding:8px;">Avg Minutes</th></tr>';
-    for (var i = 0; i < metricsArray.length; i++) {
-      var m = metricsArray[i];
-      var activeDays = Number(m.activeDays || 0);
-      var avgMins = Number(m.avgMins || 0);
-      var daysColor = activeDays >= 3.95 ? '#d9ead3' : (activeDays >= 2.95 ? '#fff2cc' : '#f4cccc');
-      var minsColor = avgMins >= 99.5 ? '#d9ead3' : (avgMins >= 79.5 ? '#fff2cc' : '#f4cccc');
-      metricsHtml += '<tr>';
-      metricsHtml += '<td style="padding:8px;">' + String(teacher.name || '') + '</td>';
-      metricsHtml += '<td style="padding:8px;">' + String(m.grade || '') + '</td>';
-      metricsHtml += '<td style="padding:8px;background-color:' + daysColor + ';">' + activeDays.toFixed(1) + '</td>';
-      metricsHtml += '<td style="padding:8px;background-color:' + minsColor + ';">' + avgMins.toFixed(1) + '</td>';
-      metricsHtml += '</tr>';
-    }
-    metricsHtml += '</table>';
-  }
-
-  // --- Conditional Trend ---
-  var trendColor = getOverallTrendColor(metricsArray);
-  var trendMessages = {
-    green: 'Great work! Your students are on track and meeting their goals.',
-    yellow: "You're close \u2014 schedule at least 35 minutes daily so students can meet their goals.",
-    red: "Your class isn't meeting time goals yet \u2014 students need 35 minutes daily in Motivention."
-  };
-  var trendDotColors = { green: '#2e7d32', yellow: '#DAA520', red: '#c62828' };
-  var trendBgColors = { green: '#d9ead3', yellow: '#fff2cc', red: '#f4cccc' };
-  var trendBorderColors = { green: '#b6d7a8', yellow: '#ffe599', red: '#ea9999' };
-
-  // --- Build Email HTML ---
-  var html = '<meta charset="utf-8">';
-  html += '<div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.6;color:#333;">';
-
-  // Greeting
-  html += '<p>Hi ' + String(teacher.firstName || '') + ',</p>';
-
-  // Header + Table
-  html += '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>';
-  html += metricsHtml;
-  html += '<br>';
-
-  // Color Legend
-  html += '<p><strong>Average Active Days:</strong> ';
-  html += dot('#2e7d32') + '<span style="color:#2e7d32;font-weight:bold;">Green 4+</span> &nbsp; ';
-  html += dot('#DAA520') + '<span style="color:#DAA520;font-weight:bold;">Yellow 3</span> &nbsp; ';
-  html += dot('#c62828') + '<span style="color:#c62828;font-weight:bold;">Red 1-2</span></p>';
-
-  // Key metrics
-  html += '<p><strong>Key metrics:</strong> Average active days, Daily logins, Average minutes</p>';
-
-  // Conditional Current Trend
-  html += '<div style="background-color:' + trendBgColors[trendColor] + ';padding:12px;border-radius:6px;margin:12px 0;border:1px solid ' + trendBorderColors[trendColor] + ';">';
-  html += '<p style="margin:0 0 8px 0;">' + dot(trendDotColors[trendColor]) + '<strong>Current trend:</strong> ' + trendMessages[trendColor] + '</p>';
-  html += '<p style="margin:0 0 8px 0;">Students are expected to engage every day or until weekly goals are met.</p>';
-  html += '<p style="margin:0;">Participation is monitored at the school, district, and state levels.</p>';
-  html += '</div>';
-
-  // ── Weekly Focus: Persistence ──
-  html += '<h2 style="color:#1a1a1a;">Weekly Focus \u2014 Persistence</h2>';
-  html += '<p>Use recognition and PBIS to build visible momentum.</p>';
-
-  // Why It Matters
-  html += '<h3 style="color:#1a1a1a;">Why It Matters</h3>';
-  html += '<p>Culture drives behavior. When students see growth celebrated and effort rewarded, classroom norms rise.</p>';
-
-  // Actions This Week
-  html += '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>';
-
-  // Trailblazer Shoutout
-  html += '<p>' + dot('#2e7d32') + '<strong>Weekly Trailblazer Shoutout:</strong> Take 2 minutes to spotlight specific behaviors: consistent effort, encouraging peers, resilience under challenge.</p>';
-
-  // Narrate the Why
-  html += '<p>' + dot('#1565c0') + '<strong>Narrate the Why:</strong> Don\'t give points silently \u2014 label the behavior: \u201CYou kept going when it got hard \u2014 that earns a point.\u201D</p>';
-
-  // Peer Nominations
-  html += '<p>' + dot('#ef6c00') + '<strong>Peer Nominations:</strong> Students write \u201CWin Cards\u201D for peers. Public praise builds belonging.</p>';
-
-  // ── Student Achievement Awards (Winners Table) ──
-  html += '<h3 style="color:#1a1a1a;">Student Achievement Awards (Last 6 Weeks)</h3>';
-  html += buildWinnersHtml(winnersArray);
-
-  // ── Resources ──
-  html += '<h3 style="color:#1a1a1a;">Resources</h3>';
+function buildResourcesSection(links) {
+  var html = '<h3 style="color:#1a1a1a;">Resources</h3>';
   html += '<ol style="padding-left:20px;">';
   html += '<li><strong>Teacher Data Deep Dive</strong> (Attached)</li>';
-  html += '<li><strong>AIM Launches (Next 3 weeks):</strong><br>';
-  html += '<a href="https://www.canva.com/design/DAHD3NLIJ9k/SK2vLZcgFXR-T3o1i539Rw/view?utm_content=DAHD3NLIJ9k&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hffe456c812">Week 6 - Growth Mindset - Productive Struggle</a><br>';
-  html += '<a href="https://www.canva.com/design/DAHENc2sjwE/UzInFMp3qcfF3zzNUzqPEg/view?utm_content=DAHENc2sjwE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hfe0b04f9e7">Week 7 - Growth Mindset - Celebrating Effort</a><br>';
-  html += '<a href="https://www.canva.com/design/DAHEUib_nsU/uKxIbPC2qH5KKoXDUWXElQ/view?utm_content=DAHEUib_nsU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd496d310e1">Week 8 - Growth Mindset - Curiosity</a></li>';
+  if (links && links.length > 0) {
+    for (var i = 0; i < links.length; i++) {
+      html += '<li>' + links[i] + '</li>';
+    }
+  }
   html += '<li><strong>Pomodoro Timer:</strong> <a href="https://studient.com/customer-portal">studient.com/customer-portal</a></li>';
   html += '<li><strong>Goal Tracker Sheet:</strong> <a href="https://drive.google.com/file/d/1aA963Hk-r4WJ3OEEa2GLTEPwerRZOAQ8/view?usp=drive_link">ELA Weekly Tracker</a>; <a href="https://drive.google.com/file/d/1alli2qWNmgNfWV5rXAGQXAtE7InQE2LR/view?usp=drive_link">Math Weekly Tracker</a></li>';
   html += '</ol>';
+  return html;
+}
 
-  // Weekly Challenge
-  html += '<div style="padding:15px;border-radius:5px;margin-top:20px;">';
+function buildWeeklyChallenge(challengeText, reflectionText) {
+  var html = '<div style="padding:15px;border-radius:5px;margin-top:20px;">';
   html += '<h3 style="margin-top:0;">Weekly Challenge</h3>';
-  html += '<p>Increase your class\'s daily log ins, minutes, or lessons mastered to share as a class challenge.</p>';
+  html += '<p>' + (challengeText || "Increase your class's daily log ins, minutes, or lessons mastered to share as a class challenge.") + '</p>';
   html += '<h3>Reflection Prompt:</h3>';
-  html += '<p>What will you tweak for this coming week?</p>';
-  html += '</div>';
-
+  html += '<p>' + (reflectionText || 'What will you tweak for this coming week?') + '</p>';
   html += '</div>';
   return html;
 }
 
-// --- DIAGNOSTIC TOOL ---
-function checkTeacherFolders() {
-  const ui = SpreadsheetApp.getUi();
-  const currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+/**
+ * Wraps content sections into the standard email container.
+ */
+function wrapEmailHtml(sections) {
+  return '<meta charset="utf-8"><div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.6;color:#333;">'
+    + sections.join('')
+    + '</div>';
+}
 
-  const mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
-  const mySchools = [];
-  for (let i = 1; i < mappingData.length; i++) {
+
+// ============================================
+// TEMPLATE FUNCTIONS
+// ============================================
+// Each returns the full HTML email body.
+// Week 6 is the reference implementation; others are skeletons
+// that will be filled with content from the Google Doc.
+
+// --- WEEK 0: Map Data ---
+function generateWeek0Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    '<h2 style="color:#1a1a1a;">Map Data From Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus: Review and familiarize yourself with individual MAP data</h2>',
+    '<p>This data will serve as each student\'s baseline within Motivention.</p>',
+    '<p>' + dotSpan('#1565c0') + '<strong>Placement Note:</strong> Students are placed 2-3 grade levels below their baseline to ensure they can demonstrate mastery before advancing. Many students may start at Kindergarten level, and that is intentional to build confidence and momentum.</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>Ground Yourself:</strong> Access and familiarize yourself with each student\'s MAP baseline data.</p>',
+    '<p>' + dotSpan('#1565c0') + '<strong>Identify What Matters:</strong> Note key strengths and areas of need that may influence how students engage in the classroom and while accessing Motivention.</p>',
+    '<p>' + dotSpan('#ef6c00') + '<strong>Coach From Evidence:</strong> Keep baseline data accessible as you coach and monitor growth.</p>',
+
+    '<h3 style="color:#1a1a1a;">Student MAP Scores</h3>',
+    '<p><a href="https://docs.google.com/spreadsheets/d/1PWBHLO5DzQAAJp2vajf16n6wb9XCPwB53URuoKT4xJw/edit?gid=1538111350#gid=1538111350">View MAP Scores Spreadsheet</a></p>',
+
+    buildResourcesSection([]),
+    buildWeeklyChallenge(
+      'Review your MAP baseline data and identify one student who may need extra support this week.',
+      'What patterns do you notice in your students\' baseline data?'
+    )
+  ]);
+}
+
+// --- WEEK 1: Goals & Monitoring ---
+function generateWeek1Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    '<h2 style="color:#1a1a1a;">Your Weekly Data</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    '<p>___ Tests Mastered (90+) &nbsp;&nbsp; ___ Tests Attempted</p>',
+    '<p>Next week we will share % of your students who logged in everyday.</p>',
+    '<p><strong>Data Deep Dive attached. Be sure to award points in LiveSchool!</strong></p>',
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Start</h2>',
+    '<p>Anchor the block with clear goals and active monitoring. Review systems with this week\'s AIM Launches.</p>',
+
+    '<h3 style="color:#1a1a1a;">Why It Matters</h3>',
+    '<p>Students need a specific target to aim for, and your presence ensures they stay on the path. Active monitoring prevents "fake working" and aimlessness.</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>The Doorway Greeting:</strong> Greet every student by name. Before they log in, prompt them to write down a specific target on their goal sheet. (e.g., "Complete 2 lessons")</p>',
+
+    '<p>' + dotSpan('#1565c0') + '<strong>Tests or Lessons?</strong><br>'
+      + 'Complete any tests in Reading or Language first.<br>'
+      + 'Lessons are listed under Language.<br>'
+      + '<em>Lessons Pro Tip:</em> After students log in with the lesson key, return to the dashboard and click the lesson to ensure they receive credit.</p>',
+
+    '<p>' + dotSpan('#ef6c00') + '<strong>Walk the Room:</strong> Don\'t sit. Circulate to check screens. Use subtle cues (a tap on the desk, thumbs up, sticky note, etc.) to redirect focus -- Avoid Public Call Outs.</p>',
+
+    buildResourcesSection([
+      '<strong>AIM Launches for this week</strong>',
+      '<strong>Goal Setting Sheet</strong>',
+      '<strong>Your Teacher Dash:</strong> Here you can see what students see. Log in with your email and the password <code>Iloveschool1!</code>'
+    ]),
+    buildWeeklyChallenge(
+      'Ensure every student _____ this week.',
+      'Did your class meet the _____ goal last week?'
+    )
+  ]);
+}
+
+// --- WEEK 2: Tech Hygiene & Student Ownership ---
+function generateWeek2Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    '<h2 style="color:#1a1a1a;">% of Students Logged In Everyday</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    '<p><strong>Color Key:</strong> '
+      + dotSpan('#2e7d32') + '<span style="color:#2e7d32;font-weight:bold;">Green 85%+</span> &nbsp; '
+      + dotSpan('#DAA520') + '<span style="color:#DAA520;font-weight:bold;">Yellow 75-84%</span> &nbsp; '
+      + dotSpan('#c62828') + '<span style="color:#c62828;font-weight:bold;">Red &lt;75%</span></p>',
+    '<p>Students are expected to engage in Motivention for the full scheduled time each day or until they meet their weekly goals. Participation data is reviewed at the school, district, and state levels.</p>',
+    '<p><strong>This next week, ensure all students log in daily and work toward their goals.</strong></p>',
+    '<p>Data Deep Dive: Daily log ins, # tests mastered, # Lessons Mastered (Attached)</p>',
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Start</h2>',
+    '<p>Build two habits: stable tech routines and students who understand their own data.</p>',
+
+    '<h3 style="color:#1a1a1a;">Why It Matters</h3>',
+    '<p>Glitches quickly drain motivation. And when students don\'t understand their dashboard, they can\'t adjust their effort.</p>',
+    '<p>A quick Dash check throughout the session gives them instant, objective feedback. Starting the day by reviewing their Daily Dash helps students set goals that match their actual progress.</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>Verify the Path:</strong> Make sure students can navigate directly to their Required Learning page so they never need to ask, "What should I do next?". Tests always come first. After logging in iXL, students should go back to Dash and select the lesson to ensure they are in the correct lesson.</p>',
+
+    '<p>' + dotSpan('#1565c0') + '<strong>Use the Path (Quick Dash Check):</strong><br>'
+      + 'Near the end of class, check the Dash with students in two steps:<br>'
+      + '1. On the Required Learning Page, do they have at least two lessons crossed off?<br>'
+      + '2. On their Dash > My Daily Activity, check the Daily Learning section.<br><br>'
+      + 'Ask:<br>'
+      + '- Did you meet your minimum accuracy goal? (Is the blue ring closed at 80%?)<br>'
+      + '- Did you meet your working time goal? (Is the red ring closed at 25 minutes?)<br><br>'
+      + '<em>Pro Tip: Data is most accurate the following morning.</em></p>',
+
+    '<p>' + dotSpan('#ef6c00') + '<strong>Teach the "Green Outline" for Goal Setting:</strong> A subject box outlined in green means the student met their daily goals. Any day a student takes a test or meets their goals will appear green. Have students check My Daily Activity from the previous day to find the Green Outline. Use those updated rings to help them set today\'s goal.</p>',
+
+    '<p>' + dotSpan('#c62828') + '<strong>The Restart Routine:</strong> Remind students to fully close Chrome (not just tabs) and fully shut down their device daily to keep tech running smoothly.</p>',
+
+    buildResourcesSection([
+      '<strong>This Week\'s AIM Launches</strong>',
+      '<strong>Share teacher Dash Login Details</strong>',
+      'Something Wonky (i.e. a student is missing a key, a test or lessons didn\'t populate, etc.)? <a href="https://studient.com/customer-portal">Submit a ticket here</a>'
+    ]),
+    buildWeeklyChallenge(
+      'Ensure every student logs in daily this week.',
+      'What will you tweak for this coming week to meet this week\'s goal?'
+    )
+  ]);
+}
+
+// --- WEEK 3: The Art of Micro-Coaching ---
+function generateWeek3Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    '<h2 style="color:#1a1a1a;">% of Students Logged In Everyday</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    '<p><strong>Color Key:</strong> '
+      + dotSpan('#2e7d32') + '<span style="color:#2e7d32;font-weight:bold;">Green 85%+</span> &nbsp; '
+      + dotSpan('#DAA520') + '<span style="color:#DAA520;font-weight:bold;">Yellow 75-84%</span> &nbsp; '
+      + dotSpan('#c62828') + '<span style="color:#c62828;font-weight:bold;">Red &lt;75%</span></p>',
+    '<p>Students are expected to engage in Motivention daily until they meet their weekly goals. Participation data is reviewed at the school, district, and state levels.</p>',
+    '<p>Data Deep Dive: Daily log ins, # tests mastered, # Lessons Mastered (Attached)</p>',
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus</h2>',
+    '<p>Executing 2-4 minute 1:1 check-ins and managing frustration.</p>',
+
+    '<h3 style="color:#1a1a1a;">Why It Matters</h3>',
+    '<p>Students need to know you are "on the sidelines calling the plays." Catching frustration early prevents full shutdown.</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>Track the "Big 3":</strong> Keep your Coach Dashboard open. Scan for Time-on-task, Accuracy, and Goal Progress.</p>',
+
+    '<p>' + dotSpan('#1565c0') + '<strong>Ask, Don\'t Tell:</strong> When a student is stuck, avoid giving the answer. Ask: "What strategy could you try here?" or "Where have you seen a problem like this before?"</p>',
+
+    '<p>' + dotSpan('#ef6c00') + '<strong>Spot Frustration:</strong> Look for rapid clicking, long periods of inaction, or slumped posture. Intervene immediately -- not to rescue, but to support.</p>',
+
+    '<p>' + dotSpan('#c62828') + '<strong>Reframe Negative Talk:</strong> If a student says, "I\'m bad at math," interrupt the narrative. Highlight their effort: "You didn\'t give up; you tried a new way."</p>',
+
+    buildResourcesSection([
+      '<strong>Growth Mindset AIM Launches for this week!</strong>'
+    ]),
+    buildWeeklyChallenge(
+      'Ensure every student _____ this week.',
+      'What will you tweak for this coming week to meet ______?'
+    )
+  ]);
+}
+
+// --- WEEK 4: Diagnosing Habits with Data ---
+function generateWeek4Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Diagnosing Habits with Data</h2>',
+    '<p>[PLACEHOLDER: Week 4 focus content -- paste from Google Doc]</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>[PLACEHOLDER: Week 4 action items]</p>',
+
+    buildResourcesSection([]),
+    buildWeeklyChallenge(null, null)
+  ]);
+}
+
+// --- WEEK 5: Re-Engagement & Resets ---
+function generateWeek5Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Re-Engagement & Resets</h2>',
+    '<p>[PLACEHOLDER: Week 5 focus content -- paste from Google Doc]</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>[PLACEHOLDER: Week 5 action items]</p>',
+
+    buildResourcesSection([]),
+    buildWeeklyChallenge(null, null)
+  ]);
+}
+
+// --- WEEK 6: Culture, Shoutouts & Rewards (FULL IMPLEMENTATION) ---
+function generateWeek6Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    // Weekly Focus: Persistence
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Persistence</h2>',
+    '<p>Use recognition and PBIS to build visible momentum.</p>',
+
+    '<h3 style="color:#1a1a1a;">Why It Matters</h3>',
+    '<p>Culture drives behavior. When students see growth celebrated and effort rewarded, classroom norms rise.</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>' + dotSpan('#2e7d32') + '<strong>Weekly Trailblazer Shoutout:</strong> Take 2 minutes to spotlight specific behaviors: consistent effort, encouraging peers, resilience under challenge.</p>',
+    '<p>' + dotSpan('#1565c0') + '<strong>Narrate the Why:</strong> Don\'t give points silently -- label the behavior: "You kept going when it got hard -- that earns a point."</p>',
+    '<p>' + dotSpan('#ef6c00') + '<strong>Peer Nominations:</strong> Students write "Win Cards" for peers. Public praise builds belonging.</p>',
+
+    // Student Achievement Awards (Week 6 only)
+    '<h3 style="color:#1a1a1a;">Student Achievement Awards (Last 6 Weeks)</h3>',
+    buildWinnersHtml(winnersArray),
+
+    // Resources with AIM Launch links
+    buildResourcesSection([
+      '<strong>AIM Launches (Next 3 weeks):</strong><br>' +
+      '<a href="https://www.canva.com/design/DAHD3NLIJ9k/SK2vLZcgFXR-T3o1i539Rw/view?utm_content=DAHD3NLIJ9k&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hffe456c812">Week 6 - Growth Mindset - Productive Struggle</a><br>' +
+      '<a href="https://www.canva.com/design/DAHENc2sjwE/UzInFMp3qcfF3zzNUzqPEg/view?utm_content=DAHENc2sjwE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hfe0b04f9e7">Week 7 - Growth Mindset - Celebrating Effort</a><br>' +
+      '<a href="https://www.canva.com/design/DAHEUib_nsU/uKxIbPC2qH5KKoXDUWXElQ/view?utm_content=DAHEUib_nsU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd496d310e1">Week 8 - Growth Mindset - Curiosity</a>'
+    ]),
+    buildWeeklyChallenge(
+      "Increase your class's daily log ins, minutes, or lessons mastered to share as a class challenge.",
+      'What will you tweak for this coming week?'
+    )
+  ]);
+}
+
+// --- WEEK 7: The "I'm Stuck" Protocol ---
+function generateWeek7Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- The "I\'m Stuck" Protocol</h2>',
+    '<p>[PLACEHOLDER: Week 7 focus content -- paste from Google Doc]</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>[PLACEHOLDER: Week 7 action items]</p>',
+
+    buildResourcesSection([]),
+    buildWeeklyChallenge(null, null)
+  ]);
+}
+
+// --- WEEK 8: Growth Mindset Reframing ---
+function generateWeek8Body(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Growth Mindset Reframing</h2>',
+    '<p>[PLACEHOLDER: Week 8 focus content -- paste from Google Doc]</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>[PLACEHOLDER: Week 8 action items]</p>',
+
+    buildResourcesSection([]),
+    buildWeeklyChallenge(null, null)
+  ]);
+}
+
+// --- WRAP UP: Celebrate the Wins ---
+function generateWrapUpBody(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    '<h2 style="color:#1a1a1a;">Wrap Up -- Celebrating the Wins</h2>',
+    '<p>[PLACEHOLDER: Wrap Up focus content -- paste from Google Doc]</p>',
+
+    // Wrap Up may include winners with extended window
+    '<h3 style="color:#1a1a1a;">Student Achievement Awards</h3>',
+    buildWinnersHtml(winnersArray),
+
+    buildResourcesSection([]),
+    buildWeeklyChallenge(
+      'Celebrate! Share your class achievements and reflect on the journey.',
+      'What are you most proud of from this period?'
+    )
+  ]);
+}
+
+
+// ============================================
+// DIAGNOSTIC TOOL
+// ============================================
+function checkTeacherFolders() {
+  var ui = SpreadsheetApp.getUi();
+  var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
+  var mySchools = [];
+  for (var i = 1; i < mappingData.length; i++) {
     if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
       mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
     }
@@ -525,42 +979,41 @@ function checkTeacherFolders() {
 
   if (mySchools.length === 0) return ui.alert('Error', 'No schools assigned to you.', ui.ButtonSet.OK);
 
-  const teachers = getTeachersForSchools(mySchools.map(s => s.displayName));
-  const rootFolder = findFolderByName(CONFIG.ROOT_FOLDER_NAME);
+  var teachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
+  var rootFolder = findFolderByName(CONFIG.ROOT_FOLDER_NAME);
   if (!rootFolder) return ui.alert('Error', 'Root folder not found.', ui.ButtonSet.OK);
 
-  let report = "<h2>Teacher Folder Diagnostic Report</h2>";
+  var report = '<h2>Teacher Folder Diagnostic Report</h2>';
 
-  for (const school of mySchools) {
+  for (var s = 0; s < mySchools.length; s++) {
+    var school = mySchools[s];
     report += '<h3>' + school.displayName + '</h3>';
-    const schoolFolder = findFolderByName(school.folderName, rootFolder);
+    var schoolFolder = findFolderByName(school.folderName, rootFolder);
 
     if (!schoolFolder) {
       report += '<p style="color:red;">School folder not found in Drive: <b>' + school.folderName + '</b></p>';
       continue;
     }
 
-    // Get all actual folders in Drive
-    const driveFolders = schoolFolder.getFolders();
-    const driveFolderNames = [];
+    var driveFolders = schoolFolder.getFolders();
+    var driveFolderNames = [];
     while (driveFolders.hasNext()) {
       driveFolderNames.push(driveFolders.next().getName().toLowerCase());
     }
 
-    // Compare with teachers in spreadsheet
-    const schoolTeachers = teachers.filter(t => t.campus === school.displayName);
-    report += "<ul>";
-    for (const t of schoolTeachers) {
-      const expectedFolderName = t.folderName;
-      if (driveFolderNames.includes(expectedFolderName.toLowerCase())) {
-        report += '<li>Found folder for: ' + t.name + ' (<i>' + expectedFolderName + '</i>)</li>';
+    var schoolTeachers = teachers.filter(function(t) { return t.campus === school.displayName; });
+    report += '<ul>';
+    for (var ti = 0; ti < schoolTeachers.length; ti++) {
+      var t = schoolTeachers[ti];
+      if (driveFolderNames.indexOf(t.folderName.toLowerCase()) !== -1) {
+        report += '<li>Found folder for: ' + t.name + ' (<i>' + t.folderName + '</i>)</li>';
       } else {
-        report += '<li style="color:red;"><b>MISSING</b> folder for: ' + t.name + ' (Expected exactly: <b>' + expectedFolderName + '</b>)</li>';
+        report += '<li style="color:red;"><b>MISSING</b> folder for: ' + t.name + ' (Expected: <b>' + t.folderName + '</b>)</li>';
       }
     }
-    report += "</ul><hr>";
+    report += '</ul><hr>';
   }
 
-  const htmlOutput = HtmlService.createHtmlOutput(report).setWidth(600).setHeight(500);
+  var htmlOutput = HtmlService.createHtmlOutput(report).setWidth(600).setHeight(500);
   ui.showModalDialog(htmlOutput, 'Folder Diagnostic');
 }

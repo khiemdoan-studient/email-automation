@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.0.0] - 2026-04-15
+
+### Added — Flexible Email System (Selectable Dates & Templates)
+Major rewrite: IMs can now choose any available week and any email template before generating drafts.
+
+- **Template system** — 10 email templates (Week 0-8 + Wrap Up), each with unique subject, coaching content, and action items. Templates are registered in `TEMPLATES` object and dispatched by name.
+  - Weeks 0-3 and 6: fully implemented with content from Google Doc
+  - Weeks 4-5, 7-8, Wrap Up: skeleton templates (placeholder content)
+- **Preloaded metrics** — Pipeline now loads ALL weeks of teacher metrics into "All Teacher Metrics" tab (~2600 rows). Apps Script filters by selected week at generation time. No pipeline re-run needed when switching weeks.
+- **Available Weeks helper tab** — Pipeline writes distinct weeks with `YYYY-MM-DD_to_YYYY-MM-DD` format to "Available Weeks" tab, feeding the Config dropdown.
+- **Confirmation dialog** — Before generating, shows date range, template, teacher count. Validates Drive folder existence (blocks if missing) and metrics availability.
+- **Config: Template row** — New "Template" setting in Config tab with dropdown of all template names.
+- **Shared components** — Extracted `buildGreeting()`, `buildMetricsTable()`, `buildTrendAlert()`, `buildColorLegend()`, `buildWinnersHtml()`, `buildResourcesSection()`, `buildWeeklyChallenge()`, `wrapEmailHtml()` as reusable functions.
+- **`getTeacherMetricsForWeek(weekStart)`** — Filters "All Teacher Metrics" by selected week, with Date-to-ISO guard for Sheets auto-parsing.
+- **`checkDriveFolderExists()`** — Pre-validates Drive folder structure before generation.
+
+### Changed
+- `generateDraftsForCurrentUser()` now reads template from Config and passes it through the pipeline
+- `createDraftForTeacher()` takes a `template` parameter (subject + body function)
+- Legacy "Teacher Metrics" single-week tab kept for backward compatibility
+
 ## [v1.2.2] - 2026-04-09
 
 ### Added
