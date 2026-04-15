@@ -4,16 +4,24 @@
 
 Google Apps Script email automation system that generates weekly Gmail drafts for teachers with performance metrics tables and PDF attachments. Built for non-technical Implementation Managers (IMs) to run via a custom menu in Google Sheets.
 
+**v2.0**: IMs can now select any available week and any email template (Week 0-8 + Wrap Up) before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks.
+
 ## Architecture
 
 ```
-Google Sheet (6 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
+Python Pipeline (BigQuery)
+       |
+       v
+Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
        |                        |
-  Config / Mapping         Google Drive
-  Teacher Emails           (folder hierarchy)
-  Teacher Metrics
+  Config (dropdowns)       Google Drive
+  All Teacher Metrics      (folder hierarchy)
+  Available Weeks
   Student Winners
+  School-IM Mapping
+  Teacher Emails
   Reading Teachers
+  Teacher Metrics (legacy)
 ```
 
 ### Google Sheet
@@ -23,97 +31,99 @@ Google Sheet (6 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
 
 ### Sheet Tabs
 
-1. **Config** (A1:B3)
-   - `Date Range` - e.g., `2026-03-23_to_2026-03-29` (matches Drive folder names)
+1. **Config** (A1:B4)
+   - `Date Range` - dropdown from Available Weeks tab (e.g., `2026-03-30_to_2026-04-05`)
    - `Root Folder Name` - informational only; code uses hardcoded constant
+   - `Template` - dropdown of 10 templates (Week 0-8 + Wrap Up)
 
 2. **School-IM Mapping** (A1:C11)
-   - Column A: School Folder Name (underscored, matches Drive folder names)
-   - Column B: School Display Name (human-readable, matches Campus column in Teacher Emails)
-   - Column C: IM Email (determines which schools each IM generates drafts for)
+   - Column A: School Folder Name (underscored, matches Drive)
+   - Column B: School Display Name (human-readable)
+   - Column C: IM Email
 
-3. **Teacher Emails** (A1:AA, dynamically populated via IMPORTRANGE)
-   - Pulls from a separate master roster spreadsheet
-   - Key columns: Campus (C/index 2), Teacher First (Y/24), Teacher Last (Z/25), Teacher Email (AA/26)
-   - **Exception:** Reading Community City School District uses columns AD/AE/AF (indices 29/30/31) for teacher info
+3. **Teacher Emails** (dynamically populated via IMPORTRANGE)
+   - Key columns: Campus (C/2), Teacher First (Y/24), Last (Z/25), Email (AA/26)
+   - Reading Community uses dedicated "Reading Teachers" tab instead
 
-4. **Teacher Metrics** (A1:L, auto-populated by pipeline from BigQuery)
-   - Populated by `query_teacher_metrics_for_email()` in `email_winners.py`
-   - Reads Config Date Range → extracts week_start → queries `weekly_dashboard`
-   - Columns A-K: Teacher, Grade, # Students, Avg Active Days, % Logged In, % Everyday, Avg Minutes, Tests Mastered, Avg Tests, Lessons Mastered, Avg Lessons
-   - Column L: `week_start` — hidden stamp used by Apps Script for data freshness validation
-   - Logic matches QuickSight: % Logged In = SUM(logged_in)/COUNT(DISTINCT student_id), % Everyday = SUM(is_5_plus_days)/COUNT(DISTINCT student_id)
+4. **All Teacher Metrics** (auto-populated, ALL weeks preloaded)
+   - ~3000 rows across 30+ weeks
+   - Column A: `week_start`, B: Teacher, C: Grade, D-L: metrics
+   - Apps Script filters by selected week at generation time via `getTeacherMetricsForWeek()`
 
-5. **Student Winners** (auto-populated by pipeline from BigQuery)
-   - Populated by `query_student_winners()` in `queries_v3.py`
-   - Shows student achievements across last 6 weeks with "3+ Weeks" and "1-2 Times" columns
-   - 8 categories with tiered exclusivity (students only in highest tier)
+5. **Available Weeks** (auto-populated helper tab)
+   - Column A: `week_start` (ISO date), Column B: `date_range` (folder format)
+   - Feeds the Config Date Range dropdown via data validation
 
-6. **Reading Teachers** (A1:C, manual list)
-   - Dedicated teacher list for Reading Community (IMPORTRANGE doesn't include teacher email columns for this district)
+6. **Student Winners** (auto-populated, last 6 weeks)
+   - 8 achievement categories with tiered exclusivity
+   - Only used by Week 6 and Wrap Up templates
+
+7. **Reading Teachers** (manual list)
    - Columns: FirstName, LastName, Email
+
+8. **Teacher Metrics** (legacy, single-week, backward compat)
+   - Column L: `week_start` stamp for legacy validation
 
 ### Google Drive Folder Structure
 
 ```
 Bruna and Mark's Schools - Weekly Report/
-  ├── AASP_-_Allendale_Aspire_Academy/
-  │   ├── FirstName_LastName/
-  │   │   ├── 2026-03-23_to_2026-03-29/
-  │   │   │   ├── 00_SUMMARY_....PDF    <-- attached to email
-  │   │   │   └── other files...
-  │   │   └── ...
-  │   └── ...
-  ├── Reading_Community_City_School_District/
-  │   └── ...
-  └── ...
+  +-- AASP_-_Allendale_Aspire_Academy/
+  |   +-- FirstName_LastName/
+  |   |   +-- 2026-03-30_to_2026-04-05/
+  |   |   |   +-- 00_SUMMARY_....PDF    <-- attached to email
+  +-- Reading_Community_City_School_District/
+  +-- ...
 ```
+
+## Template System
+
+### Registry
+`TEMPLATES` object maps template name to `{ subject, buildBody }`. Each template function receives `(teacher, metricsArray, winnersArray)` and returns HTML.
+
+### Available Templates
+| Key | Subject | Winners? |
+|-----|---------|----------|
+| Week 0: Data | Data Delivery: MAP Scores Are In! | No |
+| Week 1: Goals & Monitoring | Your data is served... | No |
+| Week 2: Tech Hygiene | Attached: Your Data (+ tech hygiene...) | No |
+| Week 3: Micro-Coaching | Your Motivention Data (+ micro-coaching...) | No |
+| Week 4: Diagnosing Habits | [placeholder] | No |
+| Week 5: Re-Engagement | [placeholder] | No |
+| Week 6: Culture & Shoutouts | Data drop: culture, shoutouts, & Rewards | **Yes** |
+| Week 7: I'm Stuck Protocol | [placeholder] | No |
+| Week 8: Growth Mindset | [placeholder] | No |
+| Wrap Up: Celebrate Wins | Celebrating your students' wins... | **Yes** |
+
+### Shared Components
+- `buildGreeting(teacher)` - "Hi {firstName},"
+- `buildMetricsTable(teacher, metricsArray)` - color-coded data table
+- `buildColorLegend()` - green/yellow/red thresholds
+- `buildTrendAlert(metricsArray)` - conditional trend box
+- `buildWinnersHtml(winnersArray)` - achievement awards table
+- `buildResourcesSection(links)` - resources list with standard items
+- `buildWeeklyChallenge(challenge, reflection)` - challenge + prompt
+- `wrapEmailHtml(sections)` - wraps sections in email container
+- `dotSpan(color)` - colored CSS dot (replaces emoji)
 
 ## Key Functions
 
 ### `generateDraftsForCurrentUser()`
-Main entry point. Called from the "Email Tools" menu. Flow:
-1. Gets current user's email
-2. Validates data freshness (metrics week_start must match Config date range)
-3. Finds their assigned schools from School-IM Mapping
-4. Builds teacher list from Teacher Emails sheet (or Reading Teachers for Reading Community)
-5. Loads Teacher Metrics and Student Winners
-6. For each teacher: finds PDF in Drive, generates HTML email, creates Gmail draft
+Main entry point. Flow:
+1. Reads Config: Date Range + Template
+2. Finds IM's assigned schools
+3. **Confirmation dialog**: shows date range, template, teacher count, validates Drive folders (blocks if missing) and metrics availability
+4. Loads metrics for selected week via `getTeacherMetricsForWeek()`
+5. For each teacher: finds PDF, generates HTML via template function, creates Gmail draft
+
+### `getTeacherMetricsForWeek(weekStart)`
+Filters "All Teacher Metrics" by week_start column A. Returns teacher-keyed object. Handles Date-to-ISO conversion guard for Sheets auto-parsing.
+
+### `checkDriveFolderExists(rootFolder, schools, dateRange)`
+Pre-validates that at least one school has teacher folders with the selected date range subfolder. Blocks generation if not found.
 
 ### `lookupByName(obj, firstName, lastName, fullName)`
-Fuzzy teacher name matching across metrics/winners lookups:
-1. Exact full name match
-2. First-word + last name (handles middle names like "John Bradley Apostol" → "John Apostol")
-3. Unique last name match
-4. NAME_ALIASES map (handles spelling mismatches like "Kloesz" → "Kloetz")
-
-### `getMetricsWeekStamp()`
-Reads the pipeline-stamped `week_start` from Teacher Metrics column L.
-Used by `generateDraftsForCurrentUser()` to validate data freshness before generating drafts.
-
-### `generateEmailBody(teacher, metricsArray, winnersArray)`
-Builds the HTML email template. Sections:
-1. Greeting ("Hi {firstName},")
-2. Data table (Teacher, Grade, Avg Active Days, Avg Minutes) with color-coded cells
-3. Color legend (Green 4+, Yellow 3, Red 1-2)
-4. **Conditional Current Trend** - based on overall avg active days across grade rows
-5. Weekly Focus, Why It Matters, Actions This Week
-6. Student Achievement Awards table (8 categories, tiered exclusivity)
-7. Resources (AIM Launches links, Goal Tracker sheets)
-8. Weekly Challenge + Reflection Prompt
-
-### `getOverallTrendColor(metricsArray)`
-Calculates average of activeDays across all grade rows for a teacher:
-- `>= 3.95` → green: "Great work! Your students are on track..."
-- `>= 2.95` → yellow: "You're close — schedule at least 35 minutes daily..."
-- `< 2.95` → red: "Your class isn't meeting time goals yet..."
-
-### `buildWinnersHtml(winnersArray)`
-Renders the Student Achievement Awards table in the email. Uses colored CSS dots
-(not emoji) for category indicators. Each student appears only in their highest tier.
-
-### `createDraftForTeacher(teacher, rootFolder, dateRange, metrics)`
-Navigates Drive folder hierarchy: root → school → teacher → date range → finds `00*SUMMARY*.PDF`
+Fuzzy name matching: exact -> first+last -> unique last -> NAME_ALIASES
 
 ## Color Thresholds
 
@@ -122,43 +132,26 @@ Navigates Drive folder hierarchy: root → school → teacher → date range →
 | Avg Active Days | >= 3.95 | >= 2.95 | < 2.95 |
 | Avg Minutes | >= 99.5 | >= 79.5 | < 79.5 |
 
-Cell background colors: Green `#d9ead3`, Yellow `#fff2cc`, Red `#f4cccc`
-
-## Schools & IMs
-
-| School Folder | Display Name | IM |
-|---|---|---|
-| AASP_-_Allendale_Aspire_Academy | AASP - Allendale Aspire Academy | frank.galindo |
-| AFES_-_Allendale_Fairfax_Elementary_School | AFES - Allendale Fairfax Elementary School | alicia.westcot |
-| AFMS_-_Allendale_Fairfax_Middle_School | AFMS - Allendale Fairfax Middle School | margaret.olah |
-| JHES_-_Hardeeville_Elementary_School | JHES - Hardeeville Elementary School | kelli.helle |
-| JHMS_-_Hardeeville_Junior_Senior_High_School | JHMS - Hardeeville Junior Senior High School | gaston.griffin |
-| JRES_-_Ridgeland_Elementary_School | JRES - Ridgeland Elementary School | tony.disario |
-| JRHS_-_Ridgeland_Secondary_Academy_of_Excellence | JRHS - Ridgeland Secondary Academy of Excellence | allison.atkins |
-| Metro_Schools | Metro Schools | margaret.olah |
-| Reading_Community_City_School_District | Reading Community City School District | frank.galindo |
-
 ## Important Implementation Details
 
-- **Reading Community exception:** Uses dedicated "Reading Teachers" tab instead of Teacher Emails IMPORTRANGE (which doesn't include email columns for this district)
-- **Teacher folder naming:** `FirstName_LastName` with spaces replaced by underscores
-- **PDF matching:** File must start with `00`, contain `SUMMARY`, and end with `.PDF` (case-insensitive)
-- **Email HTML:** Uses only inline CSS (no `<style>` blocks) for email client compatibility
-- **Colored dots:** Rendered as inline `<span>` elements with `border-radius:50%`, not emoji (for reliability)
-- **ROOT_FOLDER_NAME constant:** Hardcoded as `"Bruna and Mark's Schools - Weekly Report"` - the Config sheet's `Root Folder Name` value is informational only
-- **Data freshness:** `getMetricsWeekStamp()` validates that Teacher Metrics column L matches Config Date Range before generating drafts
+- **No emojis in Code.gs** - causes "could not save" errors. Use `dotSpan()` colored CSS dots
+- **Reading Community exception** - uses "Reading Teachers" tab
+- **PDF matching** - starts with `00`, contains `SUMMARY`, ends with `.PDF`
+- **Email HTML** - inline CSS only (no `<style>` blocks)
+- **Drive validation blocks generation** if no matching folders exist
+- **Winners table only in Week 6 and Wrap Up** templates
 
 ## Testing
 
-1. Add test user email to School-IM Mapping with a school that has data
-2. Ensure Teacher Metrics has data for teachers at that school (columns A-K populated, column L stamped)
-3. Ensure Drive has the folder hierarchy with PDF files for the current date range
-4. Run "Email Tools > Generate My Email Drafts" from the Google Sheet
-5. Check Gmail Drafts for correct formatting, table data, trend color, winners table, and PDF attachment
+1. Run `python email_only.py` to populate All Teacher Metrics + Available Weeks + Winners
+2. Set Config: Date Range (dropdown) + Template (dropdown)
+3. Copy Code.gs to Apps Script editor (paste, no emojis)
+4. Email Tools > Generate My Email Drafts
+5. Confirmation dialog shows settings -> confirm -> check Gmail Drafts
 
 ## Related Project
 
-The `Studient Excel Automation` project (separate repo: `studient-dashboard-pipeline`) generates the underlying data pipeline:
-- AWS Athena → S3 → GCS → BigQuery → Google Sheets dashboards
-- The PDF reports attached to emails come from this pipeline's output
-- `email_winners.py` populates Teacher Metrics and Student Winners tabs
+`Studient Excel Automation` repo (`studient-dashboard-pipeline`) generates the data:
+- AWS Athena -> S3 -> GCS -> BigQuery -> Google Sheets
+- `email_winners.py`: `query_all_teacher_metrics()`, `write_all_metrics_to_email_sheet()`, winners
+- `email_only.py`: quick script for email data only (~30s)
