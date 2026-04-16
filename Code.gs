@@ -313,15 +313,25 @@ function checkMetricsExistForWeek(weekStart) {
 
 /**
  * Check if at least one school's Drive folder has a subfolder for the date range.
+ * Uses findFolderByName (which normalizes for spaces/underscores/case) at each level.
+ * Short-circuits on the first match for speed — no need to check every teacher.
  */
 function checkDriveFolderExists(rootFolder, schools, dateRange) {
   for (var i = 0; i < schools.length; i++) {
     var schoolFolder = findFolderByName(schools[i].folderName, rootFolder);
+    // Also try the display name in case Drive uses the human-readable version
+    if (!schoolFolder && schools[i].displayName) {
+      schoolFolder = findFolderByName(schools[i].displayName, rootFolder);
+    }
     if (!schoolFolder) continue;
+
     // Check if any teacher folder has the date range subfolder
     var teacherFolders = schoolFolder.getFolders();
-    while (teacherFolders.hasNext()) {
+    var teacherCount = 0;
+    var maxTeachersToCheck = 50; // Safety: stop after checking 50 teachers
+    while (teacherFolders.hasNext() && teacherCount < maxTeachersToCheck) {
       var tf = teacherFolders.next();
+      teacherCount++;
       var dateFolder = findFolderByName(dateRange, tf);
       if (dateFolder) return true;
     }
@@ -442,18 +452,60 @@ function getStudentWinners() {
   return winners;
 }
 
+/**
+ * Find a folder by name. Tries exact match first, then falls back to a
+ * normalized comparison (case-insensitive, treats underscores and spaces
+ * as equivalent) by iterating the parent's folders.
+ *
+ * Handles the case where Drive folders may be named with either spaces
+ * ("Reading Community City School District", "Kim Bell") or underscores
+ * ("Reading_Community_City_School_District", "Kim_Bell").
+ */
 function findFolderByName(folderName, parentFolder) {
+  if (!folderName) return null;
+
+  // 1. Try exact match first (fast path)
   var folders = parentFolder ? parentFolder.getFoldersByName(folderName) : DriveApp.getFoldersByName(folderName);
-  return folders.hasNext() ? folders.next() : null;
+  if (folders.hasNext()) return folders.next();
+
+  // 2. Fallback: normalize and iterate (only works inside a parent)
+  if (!parentFolder) return null;
+
+  var target = normalizeFolderName(folderName);
+  var it = parentFolder.getFolders();
+  while (it.hasNext()) {
+    var f = it.next();
+    if (normalizeFolderName(f.getName()) === target) return f;
+  }
+  return null;
+}
+
+/**
+ * Normalize a folder name for flexible matching:
+ * - lowercase
+ * - trim whitespace
+ * - replace underscores with spaces
+ * - collapse multiple whitespace to one
+ */
+function normalizeFolderName(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template) {
   var schoolFolderName = schoolFolderMap[teacher.campus] || '';
   var schoolFolder = findFolderByName(schoolFolderName, rootFolder);
-  if (!schoolFolder) return { success: false, error: 'School folder not found: ' + schoolFolderName };
+  // Fallback: also try the display name (in case Drive uses human-readable names)
+  if (!schoolFolder) schoolFolder = findFolderByName(teacher.campus, rootFolder);
+  if (!schoolFolder) return { success: false, error: 'School folder not found: tried "' + schoolFolderName + '" and "' + teacher.campus + '"' };
 
+  // Try teacher.folderName first (FirstName_LastName), then fall back to FirstName LastName (space)
   var teacherFolder = findFolderByName(teacher.folderName, schoolFolder);
-  if (!teacherFolder) return { success: false, error: 'Teacher folder not found: ' + teacher.folderName };
+  if (!teacherFolder) teacherFolder = findFolderByName(teacher.name, schoolFolder);
+  if (!teacherFolder) return { success: false, error: 'Teacher folder not found: tried "' + teacher.folderName + '" and "' + teacher.name + '"' };
 
   var dateFolder = findFolderByName(dateRange, teacherFolder);
   if (!dateFolder) return { success: false, error: 'Date folder not found: ' + dateRange };

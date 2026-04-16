@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.0.1] - 2026-04-15
+
+### Fixed — Flexible Folder Name Matching
+Drive folders can now be named with either spaces OR underscores and the code will find them. Previously, `findFolderByName` required exact case-sensitive matches, which broke when folders were named `"Reading Community City School District"` (spaces) but the School-IM Mapping had `"Reading_Community_City_School_District"` (underscores). Similar issue for teacher folders: `"Kim Bell"` (space) vs `"Kim_Bell"` (underscore).
+
+- `findFolderByName()` now tries exact match first (fast path), then falls back to normalized comparison (case-insensitive, underscores and spaces treated as equivalent)
+- New `normalizeFolderName()` helper: lowercases, replaces underscores with spaces, collapses whitespace
+- `checkDriveFolderExists()` also tries the school's display name as a fallback
+- `createDraftForTeacher()` tries both `firstname_lastname` and `firstname lastname` formats for teacher folders
+- Added safety cap of 50 teacher folders in checkDriveFolderExists to prevent runaway iteration
+
 ## [v2.0.0] - 2026-04-15
 
 ### Added — Flexible Email System (Selectable Dates & Templates)
