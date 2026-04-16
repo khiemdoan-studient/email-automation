@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.0.3] - 2026-04-16
+
+### Fixed — Root Folder Lookup (REVERT + bulletproof fallback)
+v2.0.2 incorrectly dropped "- Weekly Report" from the root folder name. Restored.
+
+**Verified via Playwright against live Drive:**
+- Root: `Bruna and Mark's Schools - Weekly Report` (id: 1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR)
+- Schools: human-readable with spaces (`Reading Community City School District`, `AFMS - Allendale Fairfax Middle School`, etc.)
+- Teachers: `First Last` (spaces, e.g., `Danielle Roberts`, `Kim Bell`)
+- PDFs: `First Last - YYYY-MM-DD - YYYY-MM-DD.pdf` directly in teacher folder
+
+### Added
+- **`CONFIG.ROOT_FOLDER_ID`** — direct folder ID fallback (bulletproof against future name changes)
+- **`getRootFolder()`** — tries ID first via `getFolderById()`, falls back to name lookup
+- **`debugDriveAccess()`** — comprehensive diagnostic accessible from Email Tools menu:
+  - Shows which user is running
+  - Root folder lookup via both ID and name
+  - Lists all school folders in root
+  - For each of current user's assigned schools: lists teacher folders + whether a PDF matches the current Config date range pattern
+- Better error messages with actionable next steps
+
 ## [v2.0.2] - 2026-04-15
 
 ### Fixed — New Drive Folder Structure (April 2026 change)

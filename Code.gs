@@ -2,7 +2,8 @@
 // CONFIGURATION
 // ============================================
 var CONFIG = {
-  ROOT_FOLDER_NAME: "Bruna and Mark's Schools",
+  ROOT_FOLDER_NAME: "Bruna and Mark's Schools - Weekly Report",
+  ROOT_FOLDER_ID: "1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR",  // Bulletproof fallback: direct folder ID
   CONFIG_SHEET_NAME: "Config",
   MAPPING_SHEET_NAME: "School-IM Mapping",
   ROSTER_SHEET_NAME: "Teacher Emails",
@@ -96,10 +97,26 @@ function onOpen() {
     .createMenu('Email Tools')
     .addItem('Generate My Email Drafts', 'generateDraftsForCurrentUser')
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
+    .addItem('Debug: Drive Access', 'debugDriveAccess')
     .addSeparator()
     .addItem('Set Date Range', 'setDateRange')
     .addItem('Set Template', 'setTemplate')
     .addToUi();
+}
+
+/**
+ * Returns the root folder, using folder ID first (bulletproof),
+ * then falling back to name lookup.
+ */
+function getRootFolder() {
+  if (CONFIG.ROOT_FOLDER_ID) {
+    try {
+      return DriveApp.getFolderById(CONFIG.ROOT_FOLDER_ID);
+    } catch (e) {
+      // ID didn't work (deleted, no access, etc.) — fall through to name lookup
+    }
+  }
+  return findFolderByName(CONFIG.ROOT_FOLDER_NAME);
 }
 
 function setDateRange() {
@@ -165,8 +182,9 @@ function generateDraftsForCurrentUser() {
   if (teachers.length === 0) return ui.alert('Error', 'No teachers found for your schools.', ui.ButtonSet.OK);
 
   // Validate Drive folder exists for this date range
-  var rootFolder = findFolderByName(CONFIG.ROOT_FOLDER_NAME);
-  if (!rootFolder) return ui.alert('Error', 'Could not find root folder: ' + CONFIG.ROOT_FOLDER_NAME, ui.ButtonSet.OK);
+  // Primary: use ROOT_FOLDER_ID (bulletproof). Fallback: name lookup.
+  var rootFolder = getRootFolder();
+  if (!rootFolder) return ui.alert('Error', 'Could not find root folder: tried ID "' + CONFIG.ROOT_FOLDER_ID + '" and name "' + CONFIG.ROOT_FOLDER_NAME + '". Run Email Tools > Debug: Drive Access to diagnose.', ui.ButtonSet.OK);
 
   var driveFolderExists = checkDriveFolderExists(rootFolder, mySchools, dateRange);
 
@@ -506,10 +524,13 @@ function findFolderByName(folderName, parentFolder) {
  * - trim whitespace
  * - replace underscores with spaces
  * - collapse multiple whitespace to one
+ * - normalize apostrophe variants (straight ', curly ', curly ')
+ * - strip trailing punctuation
  */
 function normalizeFolderName(name) {
   return String(name || '')
     .toLowerCase()
+    .replace(/[\u2018\u2019\u201B\u0060\u00B4]/g, "'")  // curly + backticks to straight '
     .replace(/_/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -1153,8 +1174,8 @@ function checkTeacherFolders() {
   if (mySchools.length === 0) return ui.alert('Error', 'No schools assigned to you.', ui.ButtonSet.OK);
 
   var teachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
-  var rootFolder = findFolderByName(CONFIG.ROOT_FOLDER_NAME);
-  if (!rootFolder) return ui.alert('Error', 'Root folder not found.', ui.ButtonSet.OK);
+  var rootFolder = getRootFolder();
+  if (!rootFolder) return ui.alert('Error', 'Root folder not found. Run Debug: Drive Access.', ui.ButtonSet.OK);
 
   var report = '<h2>Teacher Folder Diagnostic Report</h2>';
 
@@ -1189,4 +1210,108 @@ function checkTeacherFolders() {
 
   var htmlOutput = HtmlService.createHtmlOutput(report).setWidth(600).setHeight(500);
   ui.showModalDialog(htmlOutput, 'Folder Diagnostic');
+}
+
+/**
+ * Comprehensive Drive access diagnostic.
+ * Shows exactly what DriveApp can see from the current user's perspective:
+ *   - Root folder lookup (by ID and by name)
+ *   - All school folders
+ *   - Teacher folders inside each school
+ *   - PDFs in teacher folders matching the current Config date range
+ */
+function debugDriveAccess() {
+  var ui = SpreadsheetApp.getUi();
+  var dateRange = getConfigValue('Date Range') || '(none set)';
+  var pdfPattern = dateRangeToPdfPattern(dateRange);
+  var report = '<h2>Drive Access Diagnostic</h2>';
+  report += '<p><b>User:</b> ' + Session.getActiveUser().getEmail() + '</p>';
+  report += '<p><b>Config Date Range:</b> ' + dateRange + '</p>';
+  report += '<p><b>Expected PDF pattern:</b> "' + pdfPattern + '"</p>';
+  report += '<hr>';
+
+  // 1. Root folder lookup
+  report += '<h3>1. Root Folder</h3>';
+  var rootById = null;
+  try { rootById = DriveApp.getFolderById(CONFIG.ROOT_FOLDER_ID); }
+  catch (e) { report += '<p style="color:red;">getFolderById("' + CONFIG.ROOT_FOLDER_ID + '") FAILED: ' + e.message + '</p>'; }
+  if (rootById) report += '<p style="color:green;">Found by ID: <b>' + rootById.getName() + '</b> (id=' + rootById.getId() + ')</p>';
+
+  var rootByName = findFolderByName(CONFIG.ROOT_FOLDER_NAME);
+  if (rootByName) report += '<p style="color:green;">Found by name: <b>' + rootByName.getName() + '</b> (id=' + rootByName.getId() + ')</p>';
+  else report += '<p style="color:red;">NOT found by name "' + CONFIG.ROOT_FOLDER_NAME + '"</p>';
+
+  var rootFolder = rootById || rootByName;
+  if (!rootFolder) {
+    report += '<p style="color:red;"><b>FATAL:</b> cannot find root folder by either method.</p>';
+    var h1 = HtmlService.createHtmlOutput(report).setWidth(800).setHeight(600);
+    ui.showModalDialog(h1, 'Drive Diagnostic');
+    return;
+  }
+
+  // 2. List all school folders
+  report += '<h3>2. School Folders in Root</h3><ul>';
+  var schoolFolders = rootFolder.getFolders();
+  var schoolNames = [];
+  while (schoolFolders.hasNext()) {
+    var sf = schoolFolders.next();
+    schoolNames.push({ name: sf.getName(), id: sf.getId() });
+    report += '<li>' + sf.getName() + ' <i>(id=' + sf.getId() + ')</i></li>';
+  }
+  report += '</ul>';
+
+  // 3. For current user's schools, check teacher folders + PDFs
+  var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
+  var mySchools = [];
+  for (var i = 1; i < mappingData.length; i++) {
+    if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
+      mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
+    }
+  }
+
+  report += '<h3>3. Your Schools (from School-IM Mapping)</h3>';
+  for (var s = 0; s < mySchools.length; s++) {
+    var sch = mySchools[s];
+    report += '<h4>' + sch.displayName + '</h4>';
+    report += '<p>Looking for folder named: "' + sch.folderName + '" or "' + sch.displayName + '"</p>';
+
+    var schoolFolder = findFolderByName(sch.folderName, rootFolder);
+    if (!schoolFolder) schoolFolder = findFolderByName(sch.displayName, rootFolder);
+    if (!schoolFolder) {
+      report += '<p style="color:red;">NOT FOUND in Drive. Available folders listed above.</p>';
+      continue;
+    }
+    report += '<p style="color:green;">Found: <b>' + schoolFolder.getName() + '</b></p>';
+
+    // List teacher folders
+    report += '<ul>';
+    var tfs = schoolFolder.getFolders();
+    var count = 0;
+    while (tfs.hasNext() && count < 15) {
+      var tf = tfs.next();
+      count++;
+      // Count PDFs matching the date pattern
+      var pdfMatches = [];
+      var files = tf.getFiles();
+      var fileCount = 0;
+      while (files.hasNext() && fileCount < 20) {
+        var f = files.next();
+        fileCount++;
+        var fn = f.getName();
+        if (fn.indexOf(pdfPattern) !== -1 && fn.toUpperCase().indexOf('.PDF') !== -1) {
+          pdfMatches.push(fn);
+        }
+      }
+      var pdfInfo = pdfMatches.length > 0
+        ? '<span style="color:green;"> -> ' + pdfMatches.length + ' PDF match(es): ' + pdfMatches.join(', ') + '</span>'
+        : '<span style="color:red;"> -> no PDF matching pattern</span>';
+      report += '<li>' + tf.getName() + pdfInfo + '</li>';
+    }
+    report += '</ul>';
+  }
+
+  var html = HtmlService.createHtmlOutput(report).setWidth(900).setHeight(700);
+  ui.showModalDialog(html, 'Drive Access Diagnostic');
 }
