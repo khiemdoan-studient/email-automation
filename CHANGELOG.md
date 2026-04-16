@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.0.2] - 2026-04-15
+
+### Fixed — New Drive Folder Structure (April 2026 change)
+The weekly-report Drive structure was restructured. Updated code to match.
+
+**Old structure:**
+```
+Bruna and Mark's Schools - Weekly Report/
+  School_Folder/Teacher_Folder/
+    2026-04-06_to_2026-04-12/
+      00_SUMMARY_....PDF
+```
+
+**New structure:**
+```
+Bruna and Mark's Schools/                  (no "- Weekly Report")
+  School Folder/Teacher Name/              (spaces, not underscores)
+    Teacher Name - 2026-04-06 - 2026-04-12.pdf   (PDF directly in folder)
+```
+
+Changes:
+- `CONFIG.ROOT_FOLDER_NAME` → `"Bruna and Mark's Schools"`
+- New `dateRangeToPdfPattern()` — converts `2026-04-06_to_2026-04-12` → `2026-04-06 - 2026-04-12`
+- `checkDriveFolderExists()` now searches for PDFs matching the date pattern directly in teacher folders (no date subfolder)
+- `createDraftForTeacher()` searches teacher folder for PDF matching date pattern; falls back to old structure (date subfolder + `00_SUMMARY_...PDF`) for backward compatibility
+
 ## [v2.0.1] - 2026-04-15
 
 ### Fixed — Flexible Folder Name Matching

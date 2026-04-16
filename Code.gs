@@ -2,7 +2,7 @@
 // CONFIGURATION
 // ============================================
 var CONFIG = {
-  ROOT_FOLDER_NAME: "Bruna and Mark's Schools - Weekly Report",
+  ROOT_FOLDER_NAME: "Bruna and Mark's Schools",
   CONFIG_SHEET_NAME: "Config",
   MAPPING_SHEET_NAME: "School-IM Mapping",
   ROSTER_SHEET_NAME: "Teacher Emails",
@@ -312,28 +312,48 @@ function checkMetricsExistForWeek(weekStart) {
 }
 
 /**
- * Check if at least one school's Drive folder has a subfolder for the date range.
- * Uses findFolderByName (which normalizes for spaces/underscores/case) at each level.
- * Short-circuits on the first match for speed — no need to check every teacher.
+ * Convert a Config date range string to the PDF filename date pattern.
+ *   Input:  "2026-04-06_to_2026-04-12"
+ *   Output: "2026-04-06 - 2026-04-12"
+ *
+ * PDFs are named like "Rebecca Reynolds - 2026-04-06 - 2026-04-12.pdf",
+ * so we check for the start-end pattern with " - " separator.
+ */
+function dateRangeToPdfPattern(dateRange) {
+  var parts = dateRange.split('_to_');
+  if (parts.length !== 2) return dateRange;
+  return parts[0] + ' - ' + parts[1];
+}
+
+/**
+ * Check if at least one school has a PDF matching the date range.
+ * New Drive structure (Apr 2026): PDFs sit directly in teacher folders,
+ * named like "Teacher Name - 2026-04-06 - 2026-04-12.pdf" (no date subfolder).
  */
 function checkDriveFolderExists(rootFolder, schools, dateRange) {
+  var pdfPattern = dateRangeToPdfPattern(dateRange); // "2026-04-06 - 2026-04-12"
+
   for (var i = 0; i < schools.length; i++) {
     var schoolFolder = findFolderByName(schools[i].folderName, rootFolder);
-    // Also try the display name in case Drive uses the human-readable version
     if (!schoolFolder && schools[i].displayName) {
       schoolFolder = findFolderByName(schools[i].displayName, rootFolder);
     }
     if (!schoolFolder) continue;
 
-    // Check if any teacher folder has the date range subfolder
+    // Check if any teacher folder has a PDF matching the date range
     var teacherFolders = schoolFolder.getFolders();
     var teacherCount = 0;
-    var maxTeachersToCheck = 50; // Safety: stop after checking 50 teachers
+    var maxTeachersToCheck = 50;
     while (teacherFolders.hasNext() && teacherCount < maxTeachersToCheck) {
       var tf = teacherFolders.next();
       teacherCount++;
-      var dateFolder = findFolderByName(dateRange, tf);
-      if (dateFolder) return true;
+      var files = tf.getFiles();
+      while (files.hasNext()) {
+        var fn = files.next().getName();
+        if (fn.indexOf(pdfPattern) !== -1 && fn.toUpperCase().indexOf('.PDF') !== -1) {
+          return true;
+        }
+      }
     }
   }
   return false;
@@ -498,28 +518,44 @@ function normalizeFolderName(name) {
 function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template) {
   var schoolFolderName = schoolFolderMap[teacher.campus] || '';
   var schoolFolder = findFolderByName(schoolFolderName, rootFolder);
-  // Fallback: also try the display name (in case Drive uses human-readable names)
   if (!schoolFolder) schoolFolder = findFolderByName(teacher.campus, rootFolder);
   if (!schoolFolder) return { success: false, error: 'School folder not found: tried "' + schoolFolderName + '" and "' + teacher.campus + '"' };
 
-  // Try teacher.folderName first (FirstName_LastName), then fall back to FirstName LastName (space)
+  // Try teacher.folderName first (FirstName_LastName), then "FirstName LastName" (space)
   var teacherFolder = findFolderByName(teacher.folderName, schoolFolder);
   if (!teacherFolder) teacherFolder = findFolderByName(teacher.name, schoolFolder);
   if (!teacherFolder) return { success: false, error: 'Teacher folder not found: tried "' + teacher.folderName + '" and "' + teacher.name + '"' };
 
-  var dateFolder = findFolderByName(dateRange, teacherFolder);
-  if (!dateFolder) return { success: false, error: 'Date folder not found: ' + dateRange };
-
-  var files = dateFolder.getFiles();
+  // NEW FORMAT: PDFs sit directly in teacher folder, named like
+  //   "Rebecca Reynolds - 2026-04-06 - 2026-04-12.pdf"
+  // Match by date-range pattern "YYYY-MM-DD - YYYY-MM-DD" within filename.
+  var pdfPattern = dateRangeToPdfPattern(dateRange);
+  var files = teacherFolder.getFiles();
   var summaryPdf = null;
   while (files.hasNext()) {
     var file = files.next();
-    var fileName = file.getName().toUpperCase();
-    if (fileName.indexOf('00') === 0 && fileName.indexOf('SUMMARY') !== -1 && fileName.indexOf('.PDF') === fileName.length - 4) {
+    var fileName = file.getName();
+    if (fileName.indexOf(pdfPattern) !== -1 && fileName.toUpperCase().indexOf('.PDF') !== -1) {
       summaryPdf = file; break;
     }
   }
-  if (!summaryPdf) return { success: false, error: 'Summary PDF not found' };
+
+  // Backward compat: old structure (date subfolder + 00_SUMMARY.PDF)
+  if (!summaryPdf) {
+    var dateFolder = findFolderByName(dateRange, teacherFolder);
+    if (dateFolder) {
+      var oldFiles = dateFolder.getFiles();
+      while (oldFiles.hasNext()) {
+        var f = oldFiles.next();
+        var name = f.getName().toUpperCase();
+        if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.indexOf('.PDF') === name.length - 4) {
+          summaryPdf = f; break;
+        }
+      }
+    }
+  }
+
+  if (!summaryPdf) return { success: false, error: 'PDF not found for "' + pdfPattern + '" in ' + teacher.name + ' folder' };
 
   var body = template.buildBody(teacher, metrics, winners);
   GmailApp.createDraft(teacher.email, template.subject, '', { htmlBody: body, attachments: [summaryPdf.getAs(MimeType.PDF)] });
