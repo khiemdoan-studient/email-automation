@@ -1,12 +1,15 @@
 """Write formatted documentation to the Email Automation Google Doc."""
+
 import sys
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 creds = service_account.Credentials.from_service_account_file(
     r"C:\Users\doank\Documents\Projects\Studient Excel Automation\service account key.json",
-    scopes=["https://www.googleapis.com/auth/documents"])
+    scopes=["https://www.googleapis.com/auth/documents"],
+)
 docs = build("docs", "v1", credentials=creds)
 DOC_ID = "1CDTKCSgFN5vsljZLnK-JiEd1b8RY1MFxtTd7P-SLyZk"
 
@@ -16,56 +19,92 @@ body_content = doc.get("body", {}).get("content", [])
 end_index = body_content[-1]["endIndex"] if body_content else 1
 requests = []
 if end_index > 2:
-    requests.append({"deleteContentRange": {"range": {"startIndex": 1, "endIndex": end_index - 1}}})
+    requests.append(
+        {"deleteContentRange": {"range": {"startIndex": 1, "endIndex": end_index - 1}}}
+    )
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation\n"
+    "User Guide & Documentation (v2.0.3)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
-    "Each email includes the teacher\u2019s performance data, a list of student achievement awards, "
-    "and a PDF report attached. You don\u2019t need to write any emails manually \u2014 the system builds them for you.\n"
+    "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
+    "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.0\n"
+    "You can now pick the week AND the template from dropdowns. You are no longer locked "
+    "to one hardcoded template or date range. All available weeks are preloaded, so switching "
+    "weeks is instant \u2014 no need to re-run the pipeline each time.\n"
     "\n"
     "How to Send Weekly Emails (3 Steps)\n"
     "\n"
-    "Step 1: Update the date range\n"
-    "Open the spreadsheet. Go to the Config tab. Change the Date Range to match this week\u2019s folder "
-    "(for example: 2026-03-30_to_2026-04-05). This tells the system which week of data to use.\n"
+    "Step 1: Refresh the data (only needed once per new week)\n"
+    "Khiem runs the Python pipeline to pull all available weeks from BigQuery into the "
+    "spreadsheet. This populates the All Teacher Metrics and Student Winners tabs with every "
+    "week of data. You do not need to run this yourself \u2014 it runs on a schedule.\n"
+    "To refresh manually (Khiem only):  python email_only.py\n"
     "\n"
-    "Step 2: Run the data pipeline\n"
-    "Open a terminal and run:  python generate_report_v3.py\n"
-    "This does two things automatically:\n"
-    "\u2022 Pulls this week\u2019s Teacher Metrics from the database and writes them to the spreadsheet\n"
-    "\u2022 Pulls the last 6 weeks of Student Achievement data and writes the winners to the spreadsheet\n"
-    "You used to download Teacher Metrics manually from QuickSight. You no longer need to do that.\n"
+    "Step 2: Pick your week and template in Config\n"
+    "Open the spreadsheet. Go to the Config tab. Two dropdowns drive everything:\n"
+    "\u2022 Date Range \u2014 pick from the list of available weeks (newest first)\n"
+    "\u2022 Template \u2014 pick Week 0 through Week 8, or Wrap Up\n"
+    "You can change either one without re-running the pipeline.\n"
     "\n"
     "Step 3: Generate the email drafts\n"
-    "Go back to the spreadsheet. Click Email Tools in the menu bar, then click Generate My Email Drafts. "
-    "Wait for it to finish. Check your Gmail Drafts folder \u2014 you\u2019ll see one draft per teacher, "
-    "ready to review and send.\n"
+    "Click Email Tools in the menu bar, then click Generate My Email Drafts.\n"
+    "A confirmation dialog will show you:\n"
+    "\u2022 The date range and template you picked\n"
+    "\u2022 How many teachers were found\n"
+    "\u2022 Whether the metrics data and Drive folders are available\n"
+    "Click Yes to proceed. Check your Gmail Drafts folder \u2014 one draft per teacher, ready to review and send.\n"
     "\n"
-    "Important: These 3 steps do not happen automatically. You must do all three each week, in this order.\n"
+    "Email Tools Menu\n"
+    "\n"
+    "\u2022 Generate My Email Drafts \u2014 Main action, creates Gmail drafts for all your teachers\n"
+    "\u2022 Debug: Check Teacher Folders \u2014 Lists any missing teacher folders per school\n"
+    "\u2022 Debug: Drive Access \u2014 Shows exactly what the system can see in Drive (use this first when anything breaks)\n"
+    "\u2022 Set Date Range \u2014 Type a custom date range if the dropdown doesn\u2019t have what you need\n"
+    "\u2022 Set Template \u2014 Type a template name manually\n"
+    "\n"
+    "Template Library\n"
+    "\n"
+    "10 templates covering a full semester arc:\n"
+    "\u2022 Week 0: Data \u2014 MAP baseline review\n"
+    "\u2022 Week 1: Goals & Monitoring \u2014 setting targets, doorway greeting, walk the room\n"
+    "\u2022 Week 2: Tech Hygiene \u2014 daily logins, Dash routines, restart routine\n"
+    "\u2022 Week 3: Micro-Coaching \u2014 the \u201cBig 3,\u201d ask don\u2019t tell, reframe negative talk\n"
+    "\u2022 Week 4: Diagnosing Habits \u2014 coaching flags, the 3 Lenses\n"
+    "\u2022 Week 5: Re-Engagement \u2014 mid-block breath, doom loop reset, 3-minute conference\n"
+    "\u2022 Week 6: Culture & Shoutouts \u2014 Trailblazer shoutout + Student Achievement Awards table\n"
+    "\u2022 Week 7: I\u2019m Stuck Protocol \u2014 watch for stalling, path forward, built-in protocol\n"
+    "\u2022 Week 8: Growth Mindset \u2014 catch the language, normalize struggle, shift to strategy\n"
+    "\u2022 Wrap Up: Celebrate Wins \u2014 final celebration (content still in progress)\n"
+    "\n"
+    "Only Week 6 and Wrap Up include the Student Achievement Awards table. Other templates "
+    "focus on the coaching theme for that week.\n"
     "\n"
     "What\u2019s in Each Email?\n"
     "\n"
-    "Each teacher receives an email with these sections:\n"
+    "All templates share these sections:\n"
     "\u2022 Performance Table \u2014 Avg Active Days and Avg Minutes per grade, color-coded green/yellow/red\n"
-    "\u2022 Current Trend \u2014 A message based on overall performance (on track, close, or needs attention)\n"
-    "\u2022 Weekly Focus \u2014 This week\u2019s coaching theme and 3 action items\n"
-    "\u2022 Student Achievement Awards \u2014 Students who hit milestones in the last 6 weeks\n"
-    "\u2022 Resources \u2014 Links to AIM Launches, Pomodoro Timer, and Goal Tracker sheets\n"
+    "\u2022 Current Trend \u2014 Message based on overall performance (on track, close, or needs attention)\n"
+    "\u2022 Weekly Focus \u2014 The theme for the selected template\n"
+    "\u2022 Your Actions This Week \u2014 3 action items specific to the template\n"
+    "\u2022 Resources \u2014 Links to AIM Launches, Pomodoro Timer, Goal Tracker sheets\n"
     "\u2022 Weekly Challenge & Reflection Prompt\n"
     "\u2022 PDF Attachment \u2014 The teacher\u2019s detailed data report\n"
     "\n"
-    "Student Achievement Awards\n"
+    "Week 6 and Wrap Up also include the Student Achievement Awards table.\n"
     "\n"
-    "The awards table highlights students who reached specific milestones. Each student appears only once, "
-    "in their highest category. The table has two columns:\n"
-    "\u2022 3+ Weeks \u2014 Students who hit the milestone in 3 or more of the last 6 weeks\n"
-    "\u2022 1-2 Times \u2014 Students who hit it once or twice\n"
+    "Student Achievement Awards (Week 6 / Wrap Up only)\n"
     "\n"
-    "Categories (highest to lowest):\n"
+    "The awards table highlights students who reached specific milestones over the last 6 weeks. "
+    "Each student appears only once, in their highest category. Two columns:\n"
+    "\u2022 3+ Weeks \u2014 Hit the milestone in 3+ of the last 6 weeks\n"
+    "\u2022 1-2 Times \u2014 Hit it once or twice\n"
+    "\n"
+    "Categories (highest tier shown first):\n"
     "\u2022 Grade Level Mastered \u2014 Passed a placement test\n"
     "\u2022 10+ Lessons/Week \u2014 Completed 10+ lessons (excludes from 5+ category)\n"
     "\u2022 5+ Lessons/Week \u2014 Completed 5-9 lessons\n"
@@ -83,35 +122,43 @@ text = (
     "\u2022 Red \u2014 Avg Active Days 1-2, Avg Minutes below 80\n"
     "\n"
     "Current Trend messages:\n"
-    "\u2022 Green: \u201CGreat work! Your students are on track and meeting their goals.\u201D\n"
-    "\u2022 Yellow: \u201CYou\u2019re close \u2014 schedule at least 35 minutes daily.\u201D\n"
-    "\u2022 Red: \u201CYour class isn\u2019t meeting time goals yet \u2014 students need 35 minutes daily.\u201D\n"
+    "\u2022 Green: \u201cGreat work! Your students are on track and meeting their goals.\u201d\n"
+    "\u2022 Yellow: \u201cYou\u2019re close \u2014 schedule at least 35 minutes daily.\u201d\n"
+    "\u2022 Red: \u201cYour class isn\u2019t meeting time goals yet \u2014 students need 35 minutes daily.\u201d\n"
     "\n"
     "Spreadsheet Tabs Explained\n"
     "\n"
-    "Config \u2014 The date range for this week. This is the only tab you need to edit each week.\n"
+    "Config \u2014 Two dropdowns: Date Range and Template. This is the only tab you edit.\n"
     "\n"
-    "School-IM Mapping \u2014 Controls which schools you generate emails for. The system checks your "
-    "email address against this list to find your assigned schools.\n"
+    "School-IM Mapping \u2014 Controls which schools you generate emails for. Your email must "
+    "appear in column C for at least one school.\n"
     "\n"
     "Teacher Emails \u2014 A live feed of teacher names and emails from the master roster. Do not edit.\n"
     "\n"
-    "Teacher Metrics \u2014 This week\u2019s performance numbers for every teacher. Auto-populated by the pipeline "
-    "(Step 2). Previously required a manual download from QuickSight. Do not edit manually.\n"
+    "All Teacher Metrics \u2014 Every week of performance data for every teacher, preloaded by the "
+    "pipeline. Apps Script filters by your selected week. Do not edit manually.\n"
     "\n"
-    "Student Winners \u2014 Student achievement data for the last 6 weeks. Auto-populated by the pipeline. "
-    "Do not edit manually.\n"
+    "Available Weeks \u2014 The list of weeks that have data available, used to populate the Date "
+    "Range dropdown in Config. Auto-populated. Do not edit.\n"
+    "\n"
+    "Student Winners \u2014 Student achievement data for the last 6 weeks. Auto-populated. Do not edit.\n"
     "\n"
     "Reading Teachers \u2014 Teacher names and emails for Reading Community City School District. "
-    "Manual list because the roster import doesn\u2019t include emails for this district. "
-    "Add new Reading teachers here when hired.\n"
+    "Manual list because the roster import doesn\u2019t include emails for this district.\n"
+    "\n"
+    "Teacher Metrics \u2014 Legacy single-week tab kept for backward compatibility. Safe to ignore.\n"
     "\n"
     "PDF Attachments\n"
     "\n"
     "The system finds PDF files in Google Drive at this path:\n"
-    "Bruna and Mark\u2019s Schools - Weekly Report > School Folder > Teacher Folder > Date Folder > PDF\n"
-    "The PDF filename must start with \u201C00\u201D and contain \u201CSUMMARY.\u201D "
-    "If the folder or PDF is missing, that teacher shows as an error.\n"
+    "Bruna and Mark\u2019s Schools - Weekly Report > School Folder > Teacher Folder > PDF\n"
+    "\n"
+    "PDFs now sit directly in the teacher folder (no date subfolder). The filename format is:\n"
+    "Teacher Name - YYYY-MM-DD - YYYY-MM-DD.pdf\n"
+    "For example: Danielle Roberts - 2026-04-06 - 2026-04-12.pdf\n"
+    "\n"
+    "The system matches the selected Date Range to the filename date pattern. If no matching "
+    "PDF is found, generation is blocked for that teacher.\n"
     "\n"
     "Schools and Assigned IMs\n"
     "\n"
@@ -127,27 +174,51 @@ text = (
     "\n"
     "Troubleshooting\n"
     "\n"
-    "\u201CNo teachers found\u201D \u2014 Your email isn\u2019t in School-IM Mapping, or teachers are missing from the roster.\n"
+    "FIRST STEP FOR ANY ERROR: Click Email Tools > Debug: Drive Access. The report shows "
+    "exactly what the system sees in your Drive and where it breaks.\n"
     "\n"
-    "\u201CTeacher folder not found\u201D \u2014 The Drive folder doesn\u2019t exist or has a different name.\n"
+    "\u201cDrive folders: NOT FOUND\u201d \u2014 The PDF for the selected date range doesn\u2019t exist yet, or "
+    "the folder names have changed. Run Debug: Drive Access to see which school/teacher is missing.\n"
     "\n"
-    "\u201CNo data available\u201D in the email \u2014 Teacher Metrics is empty for that teacher. "
-    "Make sure you ran Step 2 first.\n"
+    "\u201cNo teachers found\u201d \u2014 Your email isn\u2019t in School-IM Mapping column C for any school.\n"
     "\n"
-    "\u201CNo student achievement data\u201D \u2014 None of that teacher\u2019s students hit milestones in the last 6 weeks.\n"
+    "\u201cMetrics data: NOT FOUND\u201d \u2014 Pipeline hasn\u2019t been run for that week. Ask Khiem to run it.\n"
+    "\n"
+    "\u201cTeacher folder not found\u201d \u2014 The Drive folder for that teacher doesn\u2019t exist or is named differently. "
+    "The system tries both \u201cFirst_Last\u201d and \u201cFirst Last\u201d automatically.\n"
+    "\n"
+    "\u201cNo data available\u201d in the email \u2014 Teacher Metrics is empty for that teacher. "
+    "Run Debug: Drive Access to confirm, then ask Khiem to re-run the pipeline.\n"
     "\n"
     "Version History\n"
     "\n"
+    "v2.0.3 \u2014 April 16, 2026\n"
+    "\u2022 Bulletproof root folder lookup via folder ID (survives folder renames)\n"
+    "\u2022 New Debug: Drive Access diagnostic showing exactly what Drive looks like from the system\u2019s view\n"
+    "\u2022 Verified Drive structure against live production Drive\n"
+    "\u2022 Flexible folder name matching: underscores / spaces / case / apostrophe variants all treated as equivalent\n"
+    "\n"
+    "v2.0.2 \u2014 April 15, 2026\n"
+    "\u2022 Support for new PDF format: \u201cTeacher Name - YYYY-MM-DD - YYYY-MM-DD.pdf\u201d directly in teacher folder\n"
+    "\u2022 Backward compat with old structure (date subfolder + 00_SUMMARY_...PDF)\n"
+    "\n"
+    "v2.0.0 \u2014 April 15, 2026\n"
+    "\u2022 Selectable templates (Week 0 through Wrap Up \u2014 10 total)\n"
+    "\u2022 Date Range dropdown populated from preloaded weeks\n"
+    "\u2022 Template dropdown in Config\n"
+    "\u2022 Confirmation dialog before generation with validation status\n"
+    "\u2022 All weeks of data preloaded \u2014 no pipeline re-run when switching weeks\n"
+    "\u2022 Drive folder existence validation blocks generation if PDFs missing\n"
+    "\n"
     "v1.2.1 \u2014 April 7, 2026\n"
-    "\u2022 Teacher Metrics now auto-populated (no more QuickSight download)\n"
+    "\u2022 Teacher Metrics auto-populated (no more QuickSight download)\n"
     "\u2022 Fixed name matching for middle names and spelling variations\n"
-    "\u2022 Added Queenie Henry to Reading Teachers\n"
+    "\u2022 Added Reading Teachers tab for Reading Community\n"
     "\n"
     "v1.2.0 \u2014 April 6, 2026\n"
     "\u2022 Added Student Achievement Awards table to emails\n"
     "\u2022 New email theme: Culture, Shoutouts & Rewards\n"
     "\u2022 AIM Launches updated to Weeks 6, 7, 8\n"
-    "\u2022 Added Reading Teachers tab\n"
     "\n"
     "v1.1.0 \u2014 March 29, 2026\n"
     "\u2022 New theme: Mental Focus & Persistence with coaching strategies\n"
@@ -165,50 +236,129 @@ print("Text inserted.")
 fmt = []
 idx = 1
 end = 1 + text.index("\n")
-fmt.append({"updateParagraphStyle": {"range": {"startIndex": idx, "endIndex": end},
-    "paragraphStyle": {"namedStyleType": "HEADING_1"}, "fields": "namedStyleType"}})
+fmt.append(
+    {
+        "updateParagraphStyle": {
+            "range": {"startIndex": idx, "endIndex": end},
+            "paragraphStyle": {"namedStyleType": "HEADING_1"},
+            "fields": "namedStyleType",
+        }
+    }
+)
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation")
-fmt.append({"updateParagraphStyle": {"range": {"startIndex": sub_start, "endIndex": sub_end},
-    "paragraphStyle": {"namedStyleType": "SUBTITLE"}, "fields": "namedStyleType"}})
+sub_end = sub_start + len("User Guide & Documentation (v2.0.3)")
+fmt.append(
+    {
+        "updateParagraphStyle": {
+            "range": {"startIndex": sub_start, "endIndex": sub_end},
+            "paragraphStyle": {"namedStyleType": "SUBTITLE"},
+            "fields": "namedStyleType",
+        }
+    }
+)
 
-for title in ["What Is This?", "How to Send Weekly Emails (3 Steps)",
-    "What\u2019s in Each Email?", "Student Achievement Awards", "Color Coding",
-    "Spreadsheet Tabs Explained", "PDF Attachments", "Schools and Assigned IMs",
-    "Troubleshooting", "Version History"]:
+for title in [
+    "What Is This?",
+    "What\u2019s New in v2.0",
+    "How to Send Weekly Emails (3 Steps)",
+    "Email Tools Menu",
+    "Template Library",
+    "What\u2019s in Each Email?",
+    "Student Achievement Awards (Week 6 / Wrap Up only)",
+    "Color Coding",
+    "Spreadsheet Tabs Explained",
+    "PDF Attachments",
+    "Schools and Assigned IMs",
+    "Troubleshooting",
+    "Version History",
+]:
     i = text.find(title)
     if i >= 0:
-        fmt.append({"updateParagraphStyle": {"range": {"startIndex": 1+i, "endIndex": 1+i+len(title)},
-            "paragraphStyle": {"namedStyleType": "HEADING_2"}, "fields": "namedStyleType"}})
+        fmt.append(
+            {
+                "updateParagraphStyle": {
+                    "range": {"startIndex": 1 + i, "endIndex": 1 + i + len(title)},
+                    "paragraphStyle": {"namedStyleType": "HEADING_2"},
+                    "fields": "namedStyleType",
+                }
+            }
+        )
 
-for title in ["Step 1: Update the date range", "Step 2: Run the data pipeline",
-    "Step 3: Generate the email drafts"]:
+for title in [
+    "Step 1: Refresh the data (only needed once per new week)",
+    "Step 2: Pick your week and template in Config",
+    "Step 3: Generate the email drafts",
+]:
     i = text.find(title)
     if i >= 0:
-        fmt.append({"updateParagraphStyle": {"range": {"startIndex": 1+i, "endIndex": 1+i+len(title)},
-            "paragraphStyle": {"namedStyleType": "HEADING_3"}, "fields": "namedStyleType"}})
+        fmt.append(
+            {
+                "updateParagraphStyle": {
+                    "range": {"startIndex": 1 + i, "endIndex": 1 + i + len(title)},
+                    "paragraphStyle": {"namedStyleType": "HEADING_3"},
+                    "fields": "namedStyleType",
+                }
+            }
+        )
 
-imp = "Important: These 3 steps do not happen automatically. You must do all three each week, in this order."
+imp = "FIRST STEP FOR ANY ERROR: Click Email Tools > Debug: Drive Access. The report shows exactly what the system sees in your Drive and where it breaks."
 i = text.find(imp)
 if i >= 0:
-    fmt.append({"updateTextStyle": {"range": {"startIndex": 1+i, "endIndex": 1+i+len(imp)},
-        "textStyle": {"bold": True}, "fields": "bold"}})
+    fmt.append(
+        {
+            "updateTextStyle": {
+                "range": {"startIndex": 1 + i, "endIndex": 1 + i + len(imp)},
+                "textStyle": {"bold": True},
+                "fields": "bold",
+            }
+        }
+    )
 
-for tab in ["Config", "School-IM Mapping", "Teacher Emails", "Teacher Metrics", "Student Winners", "Reading Teachers"]:
+for tab in [
+    "Config",
+    "School-IM Mapping",
+    "Teacher Emails",
+    "All Teacher Metrics",
+    "Available Weeks",
+    "Student Winners",
+    "Reading Teachers",
+    "Teacher Metrics",
+]:
     search = tab + " \u2014"
     start = text.find("Spreadsheet Tabs Explained")
     i = text.find(search, start)
     if i >= 0:
-        fmt.append({"updateTextStyle": {"range": {"startIndex": 1+i, "endIndex": 1+i+len(tab)},
-            "textStyle": {"bold": True}, "fields": "bold"}})
+        fmt.append(
+            {
+                "updateTextStyle": {
+                    "range": {"startIndex": 1 + i, "endIndex": 1 + i + len(tab)},
+                    "textStyle": {"bold": True},
+                    "fields": "bold",
+                }
+            }
+        )
 
-for ver in ["v1.2.1 \u2014 April 7, 2026", "v1.2.0 \u2014 April 6, 2026",
-            "v1.1.0 \u2014 March 29, 2026", "v1.0.0 \u2014 March 23, 2026"]:
+for ver in [
+    "v2.0.3 \u2014 April 16, 2026",
+    "v2.0.2 \u2014 April 15, 2026",
+    "v2.0.0 \u2014 April 15, 2026",
+    "v1.2.1 \u2014 April 7, 2026",
+    "v1.2.0 \u2014 April 6, 2026",
+    "v1.1.0 \u2014 March 29, 2026",
+    "v1.0.0 \u2014 March 23, 2026",
+]:
     i = text.find(ver)
     if i >= 0:
-        fmt.append({"updateTextStyle": {"range": {"startIndex": 1+i, "endIndex": 1+i+len(ver)},
-            "textStyle": {"bold": True}, "fields": "bold"}})
+        fmt.append(
+            {
+                "updateTextStyle": {
+                    "range": {"startIndex": 1 + i, "endIndex": 1 + i + len(ver)},
+                    "textStyle": {"bold": True},
+                    "fields": "bold",
+                }
+            }
+        )
 
 docs.documents().batchUpdate(documentId=DOC_ID, body={"requests": fmt}).execute()
 print("Formatting applied.")
