@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.1.1] - 2026-04-17
+
+### Docs — Troubleshooting entry for stale Template dropdown
+Real-world validation of v2.1.0: after pasting the new Code.gs into Apps Script, the new 4/20 templates appeared in the "Set Template" popup (which reads `TEMPLATE_NAMES` directly) but NOT in the Config B4 dropdown (which uses fixed data validation). The fix is `Email Tools > Refresh Template Dropdown`, but this wasn't documented.
+
+- `CLAUDE.md` — added "New templates don't appear in the Config Template dropdown" troubleshooting section with explanation of the popup vs dropdown source-of-truth difference
+- `write_doc.py` (Google Doc user guide) — added matching troubleshooting entry
+
 ## [v2.1.0] - 2026-04-17
 
 ### Added — Avg Lessons/Student column + 2 new templates

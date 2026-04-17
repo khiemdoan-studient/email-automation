@@ -235,6 +235,11 @@ Most common causes:
 - Verify the PDF follows format: `{Teacher Name} - {start} - {end}.pdf`
 - Check teacher name spelling matches roster (use NAME_ALIASES for mismatches)
 
+### New templates don't appear in the Config Template dropdown
+The Config B4 data validation is set once (manually or via `setupTemplateDropdown()`) and does NOT auto-update when `TEMPLATE_NAMES` changes in Code.gs.
+- After adding/removing any template in Code.gs, run **Email Tools > Refresh Template Dropdown**
+- The "Set Template" popup reads `TEMPLATE_NAMES` directly, so it always shows the current list — if the popup shows more templates than the B4 dropdown, the data validation is stale and needs refreshing
+
 ## Related Project
 
 `Studient Excel Automation` repo (`studient-dashboard-pipeline`) generates the data:
