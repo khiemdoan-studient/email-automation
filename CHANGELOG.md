@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.1.0] - 2026-04-17
+
+### Added — Avg Lessons/Student column + 2 new templates
+
+**New column: Avg Lessons/Student**
+- `buildMetricsTable()` (`Code.gs:620-639`) now renders 5 columns instead of 4. New rightmost column: `Avg Lessons/Student`, pulled from `m.avgLessons` (already parsed from "All Teacher Metrics" column L).
+- Max table width bumped `560px` → `640px` to accommodate the new column.
+- Propagates to **every** template automatically since `buildMetricsTable()` is the shared component.
+
+**New templates (total now 12)**
+- **`4/20 Jasper: Finishing Strong`** — `generateJasperFinishingStrongBody()` (`Code.gs:1213`). Reading Focus next 2 weeks, Personalized Reading (AlphaRead/Lalilo), Math Fluency via Fast Math, Incentivized Progress. Subject: "Data drop: What's changing this week (and why it matters)". AIM Launches: Weeks 7-8 + Bonus Confidence week.
+- **`4/20 Math+ELA: Finishing Strong`** — `generateMathElaFinishingStrongBody()` (`Code.gs:1256`). Same intro as Jasper plus New Math App (Math Academy for 4th grade+), math-track students below 4th grade spend full block on fluency. Same subject line. Same AIM Launches.
+
+**Color legend updated**
+- `buildColorLegend()` (`Code.gs:640-647`) "Key metrics" line updated: `Average active days, Daily logins, Average minutes` → `Average mastered lessons, active days, Daily logins, Average minutes`. Cascades to Week 0, 4, 5, 6, 7, 8, Wrap Up, and both new 4/20 templates.
+
+**New menu item + function**
+- **Email Tools > Refresh Template Dropdown** — runs `setupTemplateDropdown()` (`Code.gs:107-147`) which finds the "Template" row on Config and sets a ONE_OF_LIST data validation rule from the current `TEMPLATE_NAMES`. Run this once after any template add/remove in Code.gs to sync the dropdown. Avoids manually editing Sheets data validation.
+
+### Verification
+- Node syntax check passed (via renamed `.js` tmp file)
+- 12 TEMPLATES keys = 12 TEMPLATE_NAMES entries = 12 `generate*Body` function definitions, all names match exactly
+- Both new templates executed with realistic metrics in Node harness; 19/19 content assertions passed (columns, Reading Focus, Incentivized Progress, Math Academy, Fast Math, below-4th-grade note, Bonus Confidence week, trend alert, updated color legend, no emoji, wrapper, greeting, subject strings)
+- No non-ASCII characters introduced (em-dash at byte 4194 is pre-existing from v2.0.3)
+
 ## [v2.0.3] - 2026-04-16
 
 ### Fixed — Root Folder Lookup (REVERT + bulletproof fallback)

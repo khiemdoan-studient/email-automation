@@ -25,12 +25,18 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.0.3)\n"
+    "User Guide & Documentation (v2.1.0)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.1\n"
+    "Every email\u2019s data table now includes Avg Lessons/Student as a column so teachers "
+    "can see mastered-lesson volume at a glance. Two new Finishing Strong templates were "
+    "added (Jasper and Math+ELA) covering Reading Focus, Math Academy, Fast Math, and "
+    "testing-prep updates. Total templates: 12.\n"
     "\n"
     "What\u2019s New in v2.0\n"
     "You can now pick the week AND the template from dropdowns. You are no longer locked "
@@ -48,7 +54,7 @@ text = (
     "Step 2: Pick your week and template in Config\n"
     "Open the spreadsheet. Go to the Config tab. Two dropdowns drive everything:\n"
     "\u2022 Date Range \u2014 pick from the list of available weeks (newest first)\n"
-    "\u2022 Template \u2014 pick Week 0 through Week 8, or Wrap Up\n"
+    "\u2022 Template \u2014 pick Week 0 through Week 8, Wrap Up, or one of the Finishing Strong templates (12 total)\n"
     "You can change either one without re-running the pipeline.\n"
     "\n"
     "Step 3: Generate the email drafts\n"
@@ -66,10 +72,11 @@ text = (
     "\u2022 Debug: Drive Access \u2014 Shows exactly what the system can see in Drive (use this first when anything breaks)\n"
     "\u2022 Set Date Range \u2014 Type a custom date range if the dropdown doesn\u2019t have what you need\n"
     "\u2022 Set Template \u2014 Type a template name manually\n"
+    "\u2022 Refresh Template Dropdown \u2014 Rebuilds the Config Template dropdown from the template list in Code.gs (run this after any template add or rename)\n"
     "\n"
     "Template Library\n"
     "\n"
-    "10 templates covering a full semester arc:\n"
+    "12 templates covering the full semester arc plus end-of-year Finishing Strong:\n"
     "\u2022 Week 0: Data \u2014 MAP baseline review\n"
     "\u2022 Week 1: Goals & Monitoring \u2014 setting targets, doorway greeting, walk the room\n"
     "\u2022 Week 2: Tech Hygiene \u2014 daily logins, Dash routines, restart routine\n"
@@ -80,6 +87,8 @@ text = (
     "\u2022 Week 7: I\u2019m Stuck Protocol \u2014 watch for stalling, path forward, built-in protocol\n"
     "\u2022 Week 8: Growth Mindset \u2014 catch the language, normalize struggle, shift to strategy\n"
     "\u2022 Wrap Up: Celebrate Wins \u2014 final celebration (content still in progress)\n"
+    "\u2022 4/20 Jasper: Finishing Strong \u2014 Reading Focus, Personalized Reading (AlphaRead/Lalilo), Math Fluency via Fast Math, Incentivized Progress\n"
+    "\u2022 4/20 Math+ELA: Finishing Strong \u2014 Same as Jasper plus Math Academy rollout for 4th grade+ students\n"
     "\n"
     "Only Week 6 and Wrap Up include the Student Achievement Awards table. Other templates "
     "focus on the coaching theme for that week.\n"
@@ -87,7 +96,7 @@ text = (
     "What\u2019s in Each Email?\n"
     "\n"
     "All templates share these sections:\n"
-    "\u2022 Performance Table \u2014 Avg Active Days and Avg Minutes per grade, color-coded green/yellow/red\n"
+    "\u2022 Performance Table \u2014 5 columns per grade: Teacher, Grade, Avg Active Days, Avg Minutes, Avg Lessons/Student. Active Days and Minutes are color-coded green/yellow/red.\n"
     "\u2022 Current Trend \u2014 Message based on overall performance (on track, close, or needs attention)\n"
     "\u2022 Weekly Focus \u2014 The theme for the selected template\n"
     "\u2022 Your Actions This Week \u2014 3 action items specific to the template\n"
@@ -116,10 +125,13 @@ text = (
     "\n"
     "Color Coding\n"
     "\n"
-    "Performance table colors:\n"
+    "Performance table colors (Avg Active Days and Avg Minutes columns only \u2014 Avg Lessons/Student is uncolored):\n"
     "\u2022 Green \u2014 Avg Active Days 4+, Avg Minutes 100+\n"
     "\u2022 Yellow \u2014 Avg Active Days 3, Avg Minutes 80-99\n"
     "\u2022 Red \u2014 Avg Active Days 1-2, Avg Minutes below 80\n"
+    "\n"
+    "Key metrics reference (shown below the trend alert):\n"
+    "\u2022 Average mastered lessons, active days, Daily logins, Average minutes\n"
     "\n"
     "Current Trend messages:\n"
     "\u2022 Green: \u201cGreat work! Your students are on track and meeting their goals.\u201d\n"
@@ -192,6 +204,13 @@ text = (
     "\n"
     "Version History\n"
     "\n"
+    "v2.1.0 \u2014 April 17, 2026\n"
+    "\u2022 Added Avg Lessons/Student column to the shared performance table (cascades to every template)\n"
+    "\u2022 Added 4/20 Jasper: Finishing Strong template\n"
+    "\u2022 Added 4/20 Math+ELA: Finishing Strong template (includes Math Academy rollout for 4th grade+)\n"
+    "\u2022 Key metrics line updated to include Average mastered lessons\n"
+    "\u2022 Added Refresh Template Dropdown menu item for syncing the Config dropdown with Code.gs\n"
+    "\n"
     "v2.0.3 \u2014 April 16, 2026\n"
     "\u2022 Bulletproof root folder lookup via folder ID (survives folder renames)\n"
     "\u2022 New Debug: Drive Access diagnostic showing exactly what Drive looks like from the system\u2019s view\n"
@@ -247,7 +266,7 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation (v2.0.3)")
+sub_end = sub_start + len("User Guide & Documentation (v2.1.0)")
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -260,6 +279,7 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    "What\u2019s New in v2.1",
     "What\u2019s New in v2.0",
     "How to Send Weekly Emails (3 Steps)",
     "Email Tools Menu",
@@ -340,6 +360,7 @@ for tab in [
         )
 
 for ver in [
+    "v2.1.0 \u2014 April 17, 2026",
     "v2.0.3 \u2014 April 16, 2026",
     "v2.0.2 \u2014 April 15, 2026",
     "v2.0.0 \u2014 April 15, 2026",

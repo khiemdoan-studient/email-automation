@@ -6,7 +6,9 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.0**: IMs can select any available week and any email template (Week 0-8 + Wrap Up) before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks.
 
-**v2.0.3 (current)**: Bulletproof root folder lookup via folder ID + comprehensive Drive diagnostic. Drive structure verified against live production Drive (April 2026).
+**v2.0.3**: Bulletproof root folder lookup via folder ID + comprehensive Drive diagnostic. Drive structure verified against live production Drive (April 2026).
+
+**v2.1.0 (current)**: Added `Avg Lessons/Student` column to the shared teacher metrics table (cascades to every template). Added 2 new "Finishing Strong" templates (`4/20 Jasper` and `4/20 Math+ELA`) bringing the total to 12. Added `setupTemplateDropdown()` menu item to sync the Config Template dropdown with `TEMPLATE_NAMES` without manual sheet editing.
 
 ## Architecture
 
@@ -115,11 +117,13 @@ Bruna and Mark's Schools - Weekly Report/   <- ROOT_FOLDER_NAME / ROOT_FOLDER_ID
 | Week 7: I'm Stuck Protocol | Data crunch complete... | No |
 | Week 8: Growth Mindset | Attached: Your Data (+ Mindset Reframing) | No |
 | Wrap Up: Celebrate Wins | Celebrating your students' wins... | **Yes** (placeholder) |
+| 4/20 Jasper: Finishing Strong | Data drop: What's changing this week (and why it matters) | No |
+| 4/20 Math+ELA: Finishing Strong | Data drop: What's changing this week (and why it matters) | No |
 
 ### Shared Components
 - `buildGreeting(teacher)` - "Hi {firstName},"
-- `buildMetricsTable(teacher, metricsArray)` - color-coded data table
-- `buildColorLegend()` - green/yellow/red thresholds
+- `buildMetricsTable(teacher, metricsArray)` - 5-column color-coded data table: **Teacher | Grade | Avg Active Days | Avg Minutes | Avg Lessons/Student**. Max width 640px.
+- `buildColorLegend()` - green/yellow/red thresholds; "Key metrics" line now includes `Average mastered lessons`
 - `buildTrendAlert(metricsArray)` - conditional trend box
 - `buildWinnersHtml(winnersArray)` - achievement awards table
 - `buildResourcesSection(links)` - resources list with standard items
@@ -179,6 +183,7 @@ Use this first when "Drive folders NOT FOUND" appears.
 | Debug: Drive Access | `debugDriveAccess` | **Full Drive visibility diagnostic** |
 | Set Date Range | `setDateRange` | Manual override for Config Date Range |
 | Set Template | `setTemplate` | Manual override for Config Template |
+| Refresh Template Dropdown | `setupTemplateDropdown` | Rebuilds the Config Template data validation from `TEMPLATE_NAMES`. Run after adding/removing templates in Code.gs. |
 
 ## Color Thresholds
 

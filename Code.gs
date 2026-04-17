@@ -67,6 +67,14 @@ var TEMPLATES = {
   'Wrap Up: Celebrate Wins': {
     subject: 'Data drop: Celebrating your students\' wins and hard work',
     buildBody: generateWrapUpBody
+  },
+  '4/20 Jasper: Finishing Strong': {
+    subject: 'Data drop: What\'s changing this week (and why it matters)',
+    buildBody: generateJasperFinishingStrongBody
+  },
+  '4/20 Math+ELA: Finishing Strong': {
+    subject: 'Data drop: What\'s changing this week (and why it matters)',
+    buildBody: generateMathElaFinishingStrongBody
   }
 };
 
@@ -81,7 +89,9 @@ var TEMPLATE_NAMES = [
   'Week 6: Culture & Shoutouts',
   'Week 7: I\'m Stuck Protocol',
   'Week 8: Growth Mindset',
-  'Wrap Up: Celebrate Wins'
+  'Wrap Up: Celebrate Wins',
+  '4/20 Jasper: Finishing Strong',
+  '4/20 Math+ELA: Finishing Strong'
 ];
 
 // Manual aliases for teachers whose names differ between roster and metrics
@@ -101,7 +111,50 @@ function onOpen() {
     .addSeparator()
     .addItem('Set Date Range', 'setDateRange')
     .addItem('Set Template', 'setTemplate')
+    .addItem('Refresh Template Dropdown', 'setupTemplateDropdown')
     .addToUi();
+}
+
+/**
+ * Rebuilds the Template dropdown on the Config tab so it reflects the
+ * current TEMPLATE_NAMES list. Run this after adding/removing templates
+ * in Code.gs so IMs see the new options.
+ *
+ * Writes a ONE_OF_LIST data validation rule to whichever row in Config
+ * has "Template" in column A.
+ */
+function setupTemplateDropdown() {
+  var ui = SpreadsheetApp.getUi();
+  var configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.CONFIG_SHEET_NAME);
+  if (!configSheet) {
+    ui.alert('Error', 'Config sheet not found.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var data = configSheet.getDataRange().getValues();
+  var templateRow = -1;
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim().toLowerCase() === 'template') {
+      templateRow = i + 1; // 1-indexed for getRange
+      break;
+    }
+  }
+  if (templateRow === -1) {
+    ui.alert('Error', 'No "Template" row found on Config tab. Add a row with "Template" in column A first.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(TEMPLATE_NAMES, true)
+    .setAllowInvalid(false)
+    .setHelpText('Select a template. Edit TEMPLATE_NAMES in Code.gs to add more.')
+    .build();
+  configSheet.getRange(templateRow, 2).setDataValidation(rule);
+
+  ui.alert('Done',
+    'Template dropdown refreshed with ' + TEMPLATE_NAMES.length + ' options:\n\n'
+      + TEMPLATE_NAMES.join('\n'),
+    ui.ButtonSet.OK);
 }
 
 /**
@@ -599,12 +652,13 @@ function buildMetricsTable(teacher, metricsArray) {
   if (!metricsArray || metricsArray.length === 0) {
     return '<p><em>No data available for this week.</em></p>';
   }
-  var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:560px;">';
-  html += '<tr style="background-color:#f3f3f3;"><th style="padding:8px;">Teacher</th><th style="padding:8px;">Grade</th><th style="padding:8px;">Avg Active Days</th><th style="padding:8px;">Avg Minutes</th></tr>';
+  var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:640px;">';
+  html += '<tr style="background-color:#f3f3f3;"><th style="padding:8px;">Teacher</th><th style="padding:8px;">Grade</th><th style="padding:8px;">Avg Active Days</th><th style="padding:8px;">Avg Minutes</th><th style="padding:8px;">Avg Lessons/Student</th></tr>';
   for (var i = 0; i < metricsArray.length; i++) {
     var m = metricsArray[i];
     var activeDays = Number(m.activeDays || 0);
     var avgMins = Number(m.avgMins || 0);
+    var avgLessons = Number(m.avgLessons || 0);
     var daysColor = activeDays >= 3.95 ? '#d9ead3' : (activeDays >= 2.95 ? '#fff2cc' : '#f4cccc');
     var minsColor = avgMins >= 99.5 ? '#d9ead3' : (avgMins >= 79.5 ? '#fff2cc' : '#f4cccc');
     html += '<tr>';
@@ -612,6 +666,7 @@ function buildMetricsTable(teacher, metricsArray) {
     html += '<td style="padding:8px;">' + String(m.grade || '') + '</td>';
     html += '<td style="padding:8px;background-color:' + daysColor + ';">' + activeDays.toFixed(1) + '</td>';
     html += '<td style="padding:8px;background-color:' + minsColor + ';">' + avgMins.toFixed(1) + '</td>';
+    html += '<td style="padding:8px;">' + avgLessons.toFixed(1) + '</td>';
     html += '</tr>';
   }
   html += '</table>';
@@ -623,7 +678,7 @@ function buildColorLegend() {
   html += dotSpan('#2e7d32') + '<span style="color:#2e7d32;font-weight:bold;">Green 4+</span> &nbsp; ';
   html += dotSpan('#DAA520') + '<span style="color:#DAA520;font-weight:bold;">Yellow 3</span> &nbsp; ';
   html += dotSpan('#c62828') + '<span style="color:#c62828;font-weight:bold;">Red 1-2</span></p>';
-  html += '<p><strong>Key metrics:</strong> Average active days, Daily logins, Average minutes</p>';
+  html += '<p><strong>Key metrics:</strong> Average mastered lessons, active days, Daily logins, Average minutes</p>';
   return html;
 }
 
@@ -1150,6 +1205,96 @@ function generateWrapUpBody(teacher, metricsArray, winnersArray) {
     buildWeeklyChallenge(
       'Celebrate! Share your class achievements and reflect on the journey.',
       'What are you most proud of from this period?'
+    )
+  ]);
+}
+
+// --- 4/20 JASPER: Finishing Strong! ---
+function generateJasperFinishingStrongBody(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Finishing Strong</h2>',
+    '<p>Here are a few updates you\'ll notice in your students\' dashboards this week:</p>',
+
+    '<p>' + dotSpan('#2e7d32') + '<strong>Reading Focus (Next 2 Weeks):</strong><br>'
+      + 'We\'ll be prioritizing the Reading Block to help students build momentum and confidence. (Students will find lessons under Reading not Language)</p>',
+
+    '<p>' + dotSpan('#1565c0') + '<strong>Personalized Reading Practice:</strong><br>'
+      + 'Each student will be assigned either AlphaRead or Lalilo based on their current placement level, ensuring targeted support where they need it most.</p>',
+
+    '<p>' + dotSpan('#ef6c00') + '<strong>Math Fluency Support:</strong><br>'
+      + 'To help students strengthen math facts ahead of state testing, Fast Math is now available for all students in their dashboard. This can be an optional choice after they meet their goals, last 10 mins, or even during their math block.</p>',
+
+    '<p>' + dotSpan('#FFD700') + '<strong>Incentivized Progress:</strong><br>'
+      + 'Once students meet their reading goals, they can unlock time to practice math fluency -- keeping motivation high while reinforcing key skills.</p>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>' + dotSpan('#2e7d32') + 'Help students navigate getting to lessons.</p>',
+    '<p>' + dotSpan('#1565c0') + 'Coach students for mastery.</p>',
+
+    buildResourcesSection([
+      '<strong>AIM Launches:</strong><br>'
+        + '<a href="https://www.canva.com/design/DAHENc2sjwE/UzInFMp3qcfF3zzNUzqPEg/view?utm_content=DAHENc2sjwE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hfe0b04f9e7">Week 7 - Growth Mindset - Celebrating Effort</a><br>'
+        + '<a href="https://www.canva.com/design/DAHEUib_nsU/uKxIbPC2qH5KKoXDUWXElQ/view?utm_content=DAHEUib_nsU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd496d310e1">Week 8 - Growth Mindset - Curiosity</a><br>'
+        + '<strong>Bonus Week - Confidence - What Is Confidence?</strong> (Great for leading up to testing)'
+    ]),
+    buildWeeklyChallenge(
+      'Help every student navigate smoothly to their assigned reading lessons this week.',
+      'Which students will benefit most from the new Reading Focus, and how will you coach them toward mastery?'
+    )
+  ]);
+}
+
+// --- 4/20 MATH+ELA: Finishing Strong! ---
+function generateMathElaFinishingStrongBody(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Updates & Finishing Strong</h2>',
+    '<p>Updates you\'ll notice in your students\' dashboards this week:</p>',
+
+    '<p>' + dotSpan('#2e7d32') + '<strong>Reading Focus (Next 2 Weeks):</strong><br>'
+      + 'We\'re prioritizing the Reading Block to build momentum and confidence. (Lessons are under Reading -- not Language.)</p>',
+
+    '<p>' + dotSpan('#1565c0') + '<strong>Personalized Reading Practice:</strong><br>'
+      + 'Students will use AlphaRead or Lalilo based on placement -- targeting exactly what they need.</p>',
+
+    '<p>' + dotSpan('#ef6c00') + '<strong>New Math App: Math Academy (For students placed 4th grade or higher):</strong><br>'
+      + 'Students working in 4th grade+ will spend 25 minutes in Math Academy, then 10 minutes in Fast Math.</p>',
+
+    '<p>' + dotSpan('#FFD700') + '<strong>Math Fluency Support:</strong><br>'
+      + 'Fast Math is available to all students to strengthen math facts before state testing. ELA students can use it after meeting goals, in the last 10 minutes, or even during their math block.</p>',
+
+    '<div style="background-color:#fff2cc;padding:12px;border-radius:6px;margin:12px 0;border:1px solid #ffe599;">',
+    '<p style="margin:0;"><strong>Note:</strong> Math-track students below 4th grade will spend the full Motivation Block on math fluency. Let\'s lock those facts in!</p>',
+    '</div>',
+
+    '<h3 style="color:#1a1a1a;">Your Actions This Week:</h3>',
+    '<p>' + dotSpan('#2e7d32') + 'Help students navigate getting to lessons.</p>',
+    '<p>' + dotSpan('#1565c0') + 'Coach students for mastering lessons.</p>',
+
+    buildResourcesSection([
+      '<strong>AIM Launches:</strong><br>'
+        + '<a href="https://www.canva.com/design/DAHENc2sjwE/UzInFMp3qcfF3zzNUzqPEg/view?utm_content=DAHENc2sjwE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hfe0b04f9e7">Week 7 - Growth Mindset - Celebrating Effort</a><br>'
+        + '<a href="https://www.canva.com/design/DAHEUib_nsU/uKxIbPC2qH5KKoXDUWXElQ/view?utm_content=DAHEUib_nsU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd496d310e1">Week 8 - Growth Mindset - Curiosity</a><br>'
+        + '<strong>Bonus Week - Confidence - What Is Confidence?</strong> (Great for leading up to testing)'
+    ]),
+    buildWeeklyChallenge(
+      'Help every student navigate smoothly to their assigned reading + math lessons this week.',
+      'Where will Math Academy + Fast Math make the biggest difference for your students heading into testing?'
     )
   ]);
 }
