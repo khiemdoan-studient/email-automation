@@ -243,7 +243,19 @@ function generateDraftsForCurrentUser() {
   var rootFolder = getRootFolder();
   if (!rootFolder) return ui.alert('Error', 'Could not find root folder: tried ID "' + CONFIG.ROOT_FOLDER_ID + '" and name "' + CONFIG.ROOT_FOLDER_NAME + '". Run Email Tools > Debug: Drive Access to diagnose.', ui.ButtonSet.OK);
 
-  var driveFolderExists = checkDriveFolderExists(rootFolder, mySchools, dateRange);
+  // Pre-resolve school folders ONCE, keyed by displayName.
+  // Eliminates ~1 redundant Drive API call per teacher in the per-teacher loop below.
+  // checkDriveFolderExists + createDraftForTeacher both consume this cache; they fall
+  // back to fresh lookup defensively on cache miss so behavior is preserved.
+  var schoolFolderCache = {};
+  for (var sIdx = 0; sIdx < mySchools.length; sIdx++) {
+    var sch = mySchools[sIdx];
+    var folder = findFolderByName(sch.folderName, rootFolder);
+    if (!folder && sch.displayName) folder = findFolderByName(sch.displayName, rootFolder);
+    if (folder) schoolFolderCache[sch.displayName] = folder;
+  }
+
+  var driveFolderExists = checkDriveFolderExists(rootFolder, mySchools, dateRange, schoolFolderCache);
 
   // Validate metrics data exists for selected week
   var weekStart = dateRange.split('_to_')[0];
@@ -293,7 +305,7 @@ function generateDraftsForCurrentUser() {
     try {
       var metrics = lookupByName(teacherMetrics, teacher.firstName, teacher.lastName, teacher.name);
       var winners = lookupByName(allWinners, teacher.firstName, teacher.lastName, teacher.name) || [];
-      var result = createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template);
+      var result = createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache);
       if (result.success) successCount++;
       else { errorCount++; errors.push(teacher.name + ': ' + result.error); }
     } catch (e) {
@@ -336,13 +348,16 @@ function lookupByName(obj, firstName, lastName, fullName) {
   var last = lastName.toLowerCase().trim();
   var shortKey = first + ' ' + last;
   if (obj[shortKey]) return obj[shortKey];
-  // Last-name fallback: only accept a unique match if the first letter of the first
-  // name also matches. Prevents cross-teacher data leak when two teachers share a last
-  // name and only one is present in the metrics tab for this week.
-  var firstLetter = first.charAt(0);
+  // Last-name fallback: only accept a unique match if the first-name section of the
+  // metrics key EXACTLY equals our lookup first name OR starts with "lookup-name + space"
+  // (handles middle names like "lisa marie smith"). Prevents cross-teacher data leak
+  // when two teachers share a last name (e.g., looking up "Lisa Smith" must NOT match
+  // "liam smith" just because both start with 'L').
   var lastMatches = [];
   for (var k in obj) {
-    if (k.endsWith(' ' + last) && k.charAt(0) === firstLetter) lastMatches.push(k);
+    if (!k.endsWith(' ' + last)) continue;
+    var beforeLast = k.substring(0, k.length - last.length - 1);
+    if (beforeLast === first || beforeLast.startsWith(first + ' ')) lastMatches.push(k);
   }
   if (lastMatches.length === 1) return obj[lastMatches[0]];
   if (NAME_ALIASES[full] && obj[NAME_ALIASES[full]]) return obj[NAME_ALIASES[full]];
@@ -423,13 +438,18 @@ function dateRangeToPdfPattern(dateRange) {
  * New Drive structure (Apr 2026): PDFs sit directly in teacher folders,
  * named like "Teacher Name - 2026-04-06 - 2026-04-12.pdf" (no date subfolder).
  */
-function checkDriveFolderExists(rootFolder, schools, dateRange) {
+function checkDriveFolderExists(rootFolder, schools, dateRange, schoolFolderCache) {
   var pdfPattern = dateRangeToPdfPattern(dateRange); // "2026-04-06 - 2026-04-12"
 
   for (var i = 0; i < schools.length; i++) {
-    var schoolFolder = findFolderByName(schools[i].folderName, rootFolder);
-    if (!schoolFolder && schools[i].displayName) {
-      schoolFolder = findFolderByName(schools[i].displayName, rootFolder);
+    // Use pre-resolved cache (built once in generateDraftsForCurrentUser); fall back to
+    // fresh lookup defensively. schoolFolderCache is optional for backward-compat callers.
+    var schoolFolder = (schoolFolderCache && schoolFolderCache[schools[i].displayName]) || null;
+    if (!schoolFolder) {
+      schoolFolder = findFolderByName(schools[i].folderName, rootFolder);
+      if (!schoolFolder && schools[i].displayName) {
+        schoolFolder = findFolderByName(schools[i].displayName, rootFolder);
+      }
     }
     if (!schoolFolder) continue;
 
@@ -616,10 +636,15 @@ function normalizeFolderName(name) {
     .trim();
 }
 
-function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template) {
+function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache) {
   var schoolFolderName = schoolFolderMap[teacher.campus] || '';
-  var schoolFolder = findFolderByName(schoolFolderName, rootFolder);
-  if (!schoolFolder) schoolFolder = findFolderByName(teacher.campus, rootFolder);
+  // Try cache first (eliminates redundant Drive API call vs fresh lookup); fall back
+  // defensively if cache miss.
+  var schoolFolder = (schoolFolderCache && schoolFolderCache[teacher.campus]) || null;
+  if (!schoolFolder) {
+    schoolFolder = findFolderByName(schoolFolderName, rootFolder);
+    if (!schoolFolder) schoolFolder = findFolderByName(teacher.campus, rootFolder);
+  }
   if (!schoolFolder) return { success: false, error: 'School folder not found: tried "' + schoolFolderName + '" and "' + teacher.campus + '"' };
 
   // Try teacher.folderName first (FirstName_LastName), then "FirstName LastName" (space)

@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.3.1] - 2026-04-27
+
+### Fixed — `lookupByName` last-name fallback (Code.gs:~339)
+
+v2.3.0 tightened the fallback to require first-letter match — but `Lisa` and `Liam` both start with `L`, so a same-last-name same-first-letter collision could still leak data. Replaced with smart-prefix matching:
+
+```
+beforeLast = k.substring(0, k.length - last.length - 1);
+if (beforeLast === first || beforeLast.startsWith(first + ' ')) lastMatches.push(k);
+```
+
+- **Match**: `lisa smith`, `lisa marie smith`, `lisa b smith` (lookup: Lisa Smith)
+- **Reject**: `liam smith`, `marion smith`, `alisa smith`, `lisa jones`
+
+Verified via 11 edge-case unit tests in verify-build (Liam/Lisa, Marion/Mary, alisa/Lisa, two-teacher ambiguous case all behave correctly).
+
+### Performance — School folder caching across validation + per-teacher loops (Code.gs:~245, ~426, ~619)
+
+`generateDraftsForCurrentUser` now pre-resolves each school's Drive folder ONCE into a `schoolFolderCache` keyed by displayName. `checkDriveFolderExists` and `createDraftForTeacher` consume the cache instead of re-doing `findFolderByName()` for every teacher.
+
+For an IM with 4 schools and 30 teachers, this saves **~30 redundant Drive API calls per run** (~50% reduction in school-folder lookups). Both consumers fall back to fresh lookup defensively if the cache misses, so behavior is preserved.
+
+New signatures:
+- `checkDriveFolderExists(rootFolder, schools, dateRange, schoolFolderCache)` — fourth param optional for backward compat
+- `createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache)` — eighth param optional
+
+### Docs
+
+- `CLAUDE.md` (parent repo `Studient Excel Automation`): Cross-project dependencies row for email-automation updated. Was stale — listed `teacher_email`, `pts_earned`, `target_status` columns that don't exist. Now correctly lists all 12 actual columns of `All Teacher Metrics` plus `Available Weeks` + `Student Winners` schemas. Separate isolated commit on parent repo `main`.
+- `CLAUDE.md` (this repo): v2.3.1 entry in version history.
+- `write_doc.py`: v2.3.1 + version-history entry. Google Doc pushed live.
+
+### Verification
+
+25/25 verification checks passed. 11 lookupByName edge cases + 7 folder cache plumbing checks + 7 regression checks (template count, 4/27 trend omission, LockService preserved, default template, etc.).
+
+### Known limitations carried forward
+
+- Same-first-name same-last-name + ambiguous match (e.g., `lisa marie smith` AND `lisa beth smith` both in metrics) returns `null` rather than guessing — IM sees "No data available" for that teacher. Correct conservative behavior; if it ever occurs in practice we can add an alias.
+- Teacher folder caching not done (school cache only). Lower payoff since teacher folders are looked up once per teacher anyway.
+- Default template still hardcoded to 4/27. Update at next cycle handoff.
+
+### Action required after deploy
+
+After pasting Code.gs into Apps Script:
+1. Save in editor
+2. Reload spreadsheet tab
+3. Test draft on one teacher with 4/27 template — confirm trend box still GONE, draft still attaches the correct PDF, draft still creates correctly. The cache should produce **identical output** to v2.3.0 for the happy path.
+
 ## [v2.3.0] - 2026-04-26
 
 ### Changed — 4/27 template omits trend alert

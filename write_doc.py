@@ -25,12 +25,19 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.3.0)\n"
+    "User Guide & Documentation (v2.3.1)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.3.1\n"
+    "Behind-the-scenes tightening release. The name-matching logic now correctly "
+    "rejects same-last-name same-first-letter collisions (Liam vs Lisa Smith would "
+    "previously have leaked data; now it returns no-match). Drive folder lookups are "
+    "cached so a 30-teacher run does ~50% fewer Drive API calls \u2014 each draft generates "
+    "noticeably faster. No user-visible changes for the happy path.\n"
     "\n"
     "What\u2019s New in v2.3\n"
     "Audit-driven hardening release. The 4/27 template now also drops the green/yellow/red "
@@ -223,6 +230,11 @@ text = (
     "\n"
     "Version History\n"
     "\n"
+    "v2.3.1 \u2014 April 27, 2026\n"
+    "\u2022 Smart-prefix name matching (Liam vs Lisa Smith collision fixed)\n"
+    "\u2022 School folder caching saves ~50% of Drive API calls per run\n"
+    "\u2022 Parent repo CLAUDE.md cross-project dependencies row corrected\n"
+    "\n"
     "v2.3.0 \u2014 April 26, 2026\n"
     "\u2022 4/27 template now omits the trend alert (context-appropriate)\n"
     "\u2022 Default template changed to 4/27 Last Week of Motivention\n"
@@ -301,7 +313,7 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation (v2.3.0)")
+sub_end = sub_start + len("User Guide & Documentation (v2.3.1)")
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -314,6 +326,7 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    "What\u2019s New in v2.3.1",
     "What\u2019s New in v2.3",
     "What\u2019s New in v2.2",
     "What\u2019s New in v2.1",
@@ -397,6 +410,7 @@ for tab in [
         )
 
 for ver in [
+    "v2.3.1 \u2014 April 27, 2026",
     "v2.3.0 \u2014 April 26, 2026",
     "v2.2.0 \u2014 April 26, 2026",
     "v2.1.1 \u2014 April 17, 2026",

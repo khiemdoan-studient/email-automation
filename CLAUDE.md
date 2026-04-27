@@ -12,7 +12,9 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.2.0**: Added end-of-year `4/27: Last Week of Motivention` template covering FastMath +200 bonus reminder, May 8 store close, May 26 raffle, and AIM Launches Weeks 8-11. Total templates: 13. Per source intent, this template OMITS the standard "Your Actions This Week" / "Weekly Challenge" / "Reflection Prompt" sections — it's a 3-update + one-line-focus format.
 
-**v2.3.0 (current)**: Audit-driven hardening release. **4/27 template now also omits `buildTrendAlert`** (end-of-year context made coaching message out of place). **Default template** changed from Week 6 to 4/27. **`lookupByName`** last-name fallback tightened (requires first-letter match) to prevent cross-teacher data leak. **LockService** guard added to `generateDraftsForCurrentUser` to prevent duplicate drafts on double-click. **`TEMPLATE_NAMES` now auto-derived** from `TEMPLATES` (`Object.keys`) — drift impossible. Plus 8+ defensive fixes (null guards, error truncation, file-count caps, dead code removal, diagnostic cap bumps).
+**v2.3.0**: Audit-driven hardening release. **4/27 template now also omits `buildTrendAlert`** (end-of-year context made coaching message out of place). **Default template** changed from Week 6 to 4/27. **`lookupByName`** last-name fallback tightened (requires first-letter match) to prevent cross-teacher data leak. **LockService** guard added to `generateDraftsForCurrentUser` to prevent duplicate drafts on double-click. **`TEMPLATE_NAMES` now auto-derived** from `TEMPLATES` (`Object.keys`) — drift impossible. Plus 8+ defensive fixes (null guards, error truncation, file-count caps, dead code removal, diagnostic cap bumps).
+
+**v2.3.1 (current)**: Tightening + perf. **`lookupByName`** smart-prefix match closes the v2.3.0 narrow edge (`Liam` vs `Lisa` no longer collides). **School folder caching** across validation + per-teacher loops eliminates ~50% of redundant Drive API calls. **Parent repo `CLAUDE.md` Cross-project dependencies row** corrected (was stale — listed wrong column names; now matches the actual 12-col `All Teacher Metrics` schema).
 
 ## Architecture
 
