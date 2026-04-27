@@ -281,6 +281,12 @@ function generateDraftsForCurrentUser() {
   }
 
   try {
+  // v2.5.1: reset run_id cache so Error Log entries from this invocation are
+  // grouped under a fresh run_id. Apps Script V8 isolates can persist module
+  // globals across consecutive runs in the same warm process, which would
+  // otherwise share one run_id across two distinct user invocations.
+  _runIdCache = null;
+
   var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
@@ -323,12 +329,21 @@ function generateDraftsForCurrentUser() {
   // (with spaces) first means most lookups exact-match in one Drive call and avoid the
   // failure surface entirely. folderName is kept as a backstop for any sheet rows that
   // only have it populated.
+  // v2.5.1: cache keyed by BOTH displayName AND folderName for robust lookups.
+  // Reads use teacher.campus (which equals displayName by construction in
+  // getTeachersForSchools), but dual-keying prevents silent cache misses if
+  // any future caller passes the folderName form instead.
   var schoolFolderCache = {};
   for (var sIdx = 0; sIdx < mySchools.length; sIdx++) {
     var sch = mySchools[sIdx];
     var folder = sch.displayName ? findFolderByName(sch.displayName, rootFolder) : null;
     if (!folder && sch.folderName) folder = findFolderByName(sch.folderName, rootFolder);
-    if (folder) schoolFolderCache[sch.displayName] = folder;
+    if (folder) {
+      if (sch.displayName) schoolFolderCache[sch.displayName] = folder;
+      if (sch.folderName && sch.folderName !== sch.displayName) {
+        schoolFolderCache[sch.folderName] = folder;
+      }
+    }
   }
 
   var driveFolderExists = checkDriveFolderExists(rootFolder, mySchools, dateRange, schoolFolderCache);
@@ -830,7 +845,8 @@ function withDriveRetry(fn) {
 
 var ERROR_LOG_TAB = 'Error Log';
 var ERROR_LOG_HEADERS = ['timestamp', 'run_id', 'severity', 'function', 'teacher', 'message', 'stack'];
-var ERROR_LOG_MAX_ROWS = 500;
+var ERROR_LOG_MAX_ROWS = 500;       // Target row count after a trim
+var ERROR_LOG_TRIM_TRIGGER = 600;   // v2.5.1: only trigger trim when count exceeds this (hysteresis to avoid O(n) deleteRows on every call past 500)
 var _runIdCache = null;
 
 /**
@@ -882,9 +898,15 @@ function logError(severity, fnName, teacherObj, message, stack) {
       String(stack || '').substring(0, 500)
     ]);
 
-    // Trim if over max — keep the most-recent ERROR_LOG_MAX_ROWS entries.
+    // v2.5.1: Trim with hysteresis. Old (v2.5.0) behavior triggered deleteRows
+    // on EVERY call past 500 — an O(n) Sheet operation that rewrites all
+    // subsequent rows. End-of-year runs that log 50+ errors per execution
+    // would cascade into 50 expensive deletes mid-loop. New: only trigger
+    // trim when count exceeds ERROR_LOG_TRIM_TRIGGER (600), then trim down
+    // to ERROR_LOG_MAX_ROWS (500). Trims ~once every 100 errors instead of
+    // on every call.
     var lastRow = sheet.getLastRow();
-    if (lastRow > ERROR_LOG_MAX_ROWS + 1) {
+    if (lastRow > ERROR_LOG_TRIM_TRIGGER + 1) {
       sheet.deleteRows(2, lastRow - ERROR_LOG_MAX_ROWS - 1);
     }
   } catch (logErr) {
@@ -969,9 +991,86 @@ function buildPdfCandidateFilenames(teacher, dateRange) {
 }
 
 /**
- * v2.5.0 PRIMARY PDF LOOKUP. Uses Drive's search API to find a teacher's
- * weekly PDF by exact filename — works for shared-with-me users (unlike
- * folder iteration). Returns the File or null.
+ * v2.5.1 PURE HELPER: do these two school folders match?
+ *   - If `expectedId` is provided, exact ID equality wins (cheap + authoritative).
+ *   - Else if `expectedName` is provided, normalized name equality (case/underscore-tolerant).
+ *   - Else: caller didn't give us anything to match — return false (vacuously
+ *     not-equal). The caller (`_verifyFileInSchool`) handles the "no expected
+ *     info" policy decision before calling here.
+ *
+ * Pure function — testable without Drive mocks.
+ */
+function _schoolFolderMatches(actualId, actualName, expectedId, expectedName) {
+  if (expectedId) return actualId === expectedId;
+  if (expectedName && actualName) {
+    return normalizeFolderName(actualName) === normalizeFolderName(expectedName);
+  }
+  return false;
+}
+
+/**
+ * v2.5.1: Verify a Drive file lives inside the teacher's expected school
+ * folder. Defends against cross-school filename collisions (two "John Smith"
+ * teachers in different schools).
+ *
+ * Walk up the parent chain: file → teacher folder → school folder. Compare
+ * the school folder to the cache entry for `teacher.campus`. Returns true on
+ * match, false on mismatch or `getParents()` failure (FAIL-CLOSED).
+ *
+ * Note: in `findTeacherPdfBySearch` we ONLY call this helper when there are
+ * 2+ search hits for the same filename (collision detected). Single-hit
+ * results are accepted without verification, so this helper's FAIL-CLOSED
+ * behavior cannot regress the common case (which v2.5.0 already handled).
+ */
+function _verifyFileInSchool(file, schoolFolderCache, teacher) {
+  var expectedFolder = (schoolFolderCache && teacher) ? schoolFolderCache[teacher.campus] : null;
+  var expectedId = null;
+  if (expectedFolder) {
+    try { expectedId = expectedFolder.getId(); } catch (e) { /* stale cache; expectedId stays null */ }
+  }
+  var expectedName = teacher ? teacher.campus : null;
+
+  // Without ANY expected info, can't verify — caller shouldn't have called us.
+  if (!expectedId && !expectedName) return false;
+
+  try {
+    var parentIter = file.getParents();
+    if (!parentIter.hasNext()) return false; // file at root — suspicious
+    var teacherFolder = parentIter.next();
+
+    var grandIter = teacherFolder.getParents();
+    if (!grandIter.hasNext()) return false;
+    var schoolFolder = grandIter.next();
+
+    var actualId, actualName;
+    try { actualId = schoolFolder.getId(); } catch (e) { actualId = null; }
+    try { actualName = schoolFolder.getName(); } catch (e) { actualName = null; }
+
+    return _schoolFolderMatches(actualId, actualName, expectedId, expectedName);
+  } catch (e) {
+    logError('WARN', '_verifyFileInSchool', teacher,
+      'getParents() chain failed: ' + (e.message || e), '');
+    // FAIL-CLOSED on permission errors — better to skip a possibly-correct
+    // file than risk attaching a wrong-school PDF.
+    return false;
+  }
+}
+
+/**
+ * v2.5.0/v2.5.1 PRIMARY PDF LOOKUP. Uses Drive's search API to find a
+ * teacher's weekly PDF by exact filename — works for shared-with-me users
+ * (unlike folder iteration). Returns the File or null.
+ *
+ * v2.5.0: introduced search-API path.
+ * v2.5.1: cross-school collision defense. If the search returns:
+ *   - 0 PDFs: try next candidate filename
+ *   - 1 PDF:  accept without parent verification (no ambiguity → no regression
+ *             risk vs v2.5.0; verification could fail for shared-with-me users
+ *             whose getParents() also throws "Service error: Drive")
+ *   - 2+ PDFs: walk file→teacherFolder→schoolFolder for each, accept the one
+ *             whose school folder ID matches `schoolFolderCache[teacher.campus]`
+ *             (or normalized name match as fallback). Skip mismatches; if all
+ *             mismatch, log + try next candidate.
  *
  * Why this works: `DriveApp.getFilesByName(name)` queries Drive's search
  * index for files visible to the caller, regardless of parent-folder
@@ -980,11 +1079,12 @@ function buildPdfCandidateFilenames(teacher, dateRange) {
  * This is the same mechanism that makes `getFoldersByName` work for
  * shared-with-me users in v2.4.2's school-folder cache.
  */
-function findTeacherPdfBySearch(teacher, dateRange) {
+function findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache) {
   if (!teacher || !dateRange) return null;
   var candidates = buildPdfCandidateFilenames(teacher, dateRange);
   for (var c = 0; c < candidates.length; c++) {
     var fname = candidates[c];
+    var pdfMatches = [];
     try {
       var iter = DriveApp.getFilesByName(fname);
       while (true) {
@@ -1003,12 +1103,12 @@ function findTeacherPdfBySearch(teacher, dateRange) {
             'iter.next() failed for "' + fname + '": ' + (e.message || e), '');
           break;
         }
-        // Verify it's actually a PDF (defensive — the search returns by name
-        // exactly, but a non-PDF file with the same name could theoretically
-        // exist).
+        // Filter to actual PDFs (defensive — search returns by name; a non-PDF
+        // with the same name could theoretically exist).
         try {
-          var actualName = file.getName();
-          if (actualName.toUpperCase().indexOf('.PDF') !== -1) return file;
+          if (file.getName().toUpperCase().indexOf('.PDF') !== -1) {
+            pdfMatches.push(file);
+          }
         } catch (e) {
           logError('WARN', 'findTeacherPdfBySearch', teacher,
             'file.getName() failed: ' + (e.message || e), '');
@@ -1018,8 +1118,23 @@ function findTeacherPdfBySearch(teacher, dateRange) {
       logError('WARN', 'findTeacherPdfBySearch', teacher,
         'DriveApp.getFilesByName("' + fname + '") threw: ' + (e.message || e),
         e.stack || '');
-      // continue to next candidate filename
+      continue; // next candidate
     }
+
+    if (pdfMatches.length === 0) continue;
+
+    // 1 match: no ambiguity, accept without verification (v2.5.0 behavior preserved).
+    if (pdfMatches.length === 1) return pdfMatches[0];
+
+    // 2+ matches: collision detected, verify parent chain to disambiguate.
+    for (var p = 0; p < pdfMatches.length; p++) {
+      if (_verifyFileInSchool(pdfMatches[p], schoolFolderCache, teacher)) {
+        return pdfMatches[p];
+      }
+    }
+    logError('WARN', 'findTeacherPdfBySearch', teacher,
+      pdfMatches.length + ' matches for "' + fname + '" but none verified to school "'
+      + (teacher.campus || '?') + '" — trying next candidate.', '');
   }
   return null;
 }
@@ -1092,15 +1207,42 @@ function findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderM
       }
     }
     // Backward compat: old structure (date subfolder + 00_SUMMARY.PDF).
-    var dateFolder = findFolderByName(dateRange, teacherFolder);
+    // v2.5.1: every iterator step wrapped (same pattern as the new-format
+    // iteration above). Pre-v2.5.1 these were unwrapped — same class of bug
+    // the v2.4.x series spent 4 attempts on, but in this rarely-exercised
+    // legacy path. Audit found by post-v2.5.0 review.
+    var dateFolder = null;
+    try { dateFolder = findFolderByName(dateRange, teacherFolder); }
+    catch (e) {
+      logError('WARN', 'findTeacherPdfByTraversal', teacher,
+        'backward-compat dateFolder lookup failed: ' + (e.message || e), '');
+    }
     if (dateFolder) {
-      var oldFiles = dateFolder.getFiles();
-      while (oldFiles.hasNext()) {
-        var f = oldFiles.next();
-        var name = f.getName().toUpperCase();
-        if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.endsWith('.PDF')) {
-          return f;
+      try {
+        var oldFiles = dateFolder.getFiles();
+        while (true) {
+          var oldHasMore;
+          try { oldHasMore = oldFiles.hasNext(); }
+          catch (e) {
+            logError('WARN', 'findTeacherPdfByTraversal', teacher,
+              'oldFiles.hasNext() failed (backward-compat): ' + (e.message || e), '');
+            break;
+          }
+          if (!oldHasMore) break;
+          try {
+            var f = oldFiles.next();
+            var name = f.getName().toUpperCase();
+            if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.endsWith('.PDF')) {
+              return f;
+            }
+          } catch (e) {
+            logError('WARN', 'findTeacherPdfByTraversal', teacher,
+              'oldFiles iteration step failed: ' + (e.message || e), '');
+          }
         }
+      } catch (e) {
+        logError('WARN', 'findTeacherPdfByTraversal', teacher,
+          'dateFolder.getFiles() failed: ' + (e.message || e), '');
       }
     }
   } catch (e) {
@@ -1187,6 +1329,30 @@ function runUnitTests() {
   _testAssertEq(results, 'candidates: empty teacher returns empty list',
     buildPdfCandidateFilenames({}, '2026-04-20_to_2026-04-26'), []);
 
+  // --- v2.5.1: apostrophe handling in candidates ---
+  var teacherApos = { name: "Dan O'Brien", firstName: 'Dan', lastName: "O'Brien", folderName: "Dan_O'Brien" };
+  var aposCands = buildPdfCandidateFilenames(teacherApos, '2026-04-20_to_2026-04-26');
+  _testAssertEq(results, 'candidates: apostrophe preserved in name form',
+    aposCands.indexOf("Dan O'Brien - 2026-04-20 - 2026-04-26.pdf") !== -1, true);
+  _testAssertEq(results, 'candidates: apostrophe preserved in folderName form',
+    aposCands.indexOf("Dan_O'Brien - 2026-04-20 - 2026-04-26.pdf") !== -1, true);
+  _testAssertEq(results, 'candidates: apostrophe count is at least 1',
+    aposCands.length >= 1, true);
+
+  // --- v2.5.1: _schoolFolderMatches (parent verification helper) ---
+  _testAssertEq(results, 'schoolMatches: id match returns true',
+    _schoolFolderMatches('id123', 'School Name', 'id123', 'Different Name'), true);
+  _testAssertEq(results, 'schoolMatches: id mismatch returns false',
+    _schoolFolderMatches('idA', 'Same Name', 'idB', 'Same Name'), false);
+  _testAssertEq(results, 'schoolMatches: name fallback when no expected id',
+    _schoolFolderMatches('idA', 'School Name', null, 'school_name'), true);
+  _testAssertEq(results, 'schoolMatches: name mismatch when no expected id',
+    _schoolFolderMatches('idA', 'School A', null, 'School B'), false);
+  _testAssertEq(results, 'schoolMatches: nothing to verify returns false',
+    _schoolFolderMatches('idA', 'School', null, null), false);
+  _testAssertEq(results, 'schoolMatches: name normalize underscore=space',
+    _schoolFolderMatches(null, 'JRES_-_Ridgeland Elementary', null, 'JRES - Ridgeland Elementary'), true);
+
   // Render
   var pass = 0, fail = 0;
   var lines = [];
@@ -1219,7 +1385,9 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
   // failures to the Error Log tab; a clean miss returns a structured error.
   var summaryPdf = null;
   try {
-    summaryPdf = findTeacherPdfBySearch(teacher, dateRange);
+    // v2.5.1: pass schoolFolderCache so collision-detection can verify parent
+    // chain when 2+ search hits exist (cross-school name collision defense).
+    summaryPdf = findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache);
   } catch (e) {
     logError('WARN', 'createDraftForTeacher', teacher,
       'search-API path threw: ' + (e.message || e), e.stack || '');

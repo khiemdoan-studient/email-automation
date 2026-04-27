@@ -2,6 +2,107 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.5.1] - 2026-04-27
+
+### Audit-driven hardening (post-v2.5.0 production bake)
+
+After v2.5.0 shipped this morning and tested working for one school, an audit pass surfaced 13 findings ranked Critical → Nice-to-have. v2.5.1 lands the 5 highest-priority fixes (3 Critical + 2 Important); the remaining 8 are deferred to post-program (see "Deferred" section below).
+
+### Critical fixes
+
+#### Fix C-1: Cross-school PDF mix-up — `findTeacherPdfBySearch` now verifies parent chain when 2+ matches exist
+
+**Bug**: v2.5.0's `findTeacherPdfBySearch` returned the first `.pdf` match without verifying parentage. If two schools had a teacher named "John Smith" both with PDFs in the same week, the first hit won — wrong PDF attached silently. Drive search returns ALL matching files visible to the user; an IM managing both schools would see both files in search results.
+
+**Fix**: changed search loop to collect ALL matching PDFs first, then:
+- **0 matches**: try next candidate filename
+- **1 match**: accept without verification (no ambiguity → no regression risk vs v2.5.0; verification could fail for shared-with-me users whose `getParents()` also throws "Service error: Drive")
+- **2+ matches**: walk `file → teacherFolder → schoolFolder` for each, accept the one whose school folder ID matches `schoolFolderCache[teacher.campus]` (fallback: normalized name match)
+
+**Why "1 match → accept without verification"**: this is the common path for ~99% of teachers. Forcing verification here would risk regression for shared-with-me users (whose `getParents()` may throw the same "Service error: Drive" we just fixed). FAIL-CLOSED on verification ONLY in the multi-match case.
+
+**New helpers**:
+- `_schoolFolderMatches(actualId, actualName, expectedId, expectedName)` — pure decision logic (testable without Drive mocks)
+- `_verifyFileInSchool(file, schoolFolderCache, teacher)` — Drive plumbing (parent chain + comparison + FAIL-CLOSED on `getParents()` error)
+
+#### Fix C-2: Cache key unification — `schoolFolderCache` now keyed by both displayName AND folderName
+
+**Latent bug**: cache was written keyed by `sch.displayName` (line 327) but read by `teacher.campus`. By construction in `getTeachersForSchools`, these ARE always equal (since teachers are filtered by displayName), but the conceptual coupling is fragile — a future refactor of either function could silently break the cache and double Drive calls per teacher.
+
+**Fix**: cache build now writes BOTH `sch.displayName` AND `sch.folderName` keys (when they differ). Reads via either key now hit the cache.
+
+#### Fix C-3: Error Log trim hysteresis — no more O(n) `deleteRows` on every error past 500
+
+**Perf bug**: v2.5.0's `logError` called `sheet.deleteRows(2, n)` on EVERY call past 500 entries — an O(n) Sheet operation that rewrites all subsequent rows. End-of-year runs that log 50+ errors per execution would cascade into 50 expensive deletes mid-loop, potentially hitting Apps Script's 6-min execution timeout.
+
+**Fix**: hysteresis pattern.
+- Old: `if (lastRow > 500 + 1) deleteRows(2, lastRow - 500 - 1)` — fires on every call past 500
+- New: `if (lastRow > 600 + 1) deleteRows(2, lastRow - 500 - 1)` — fires once every ~100 errors
+
+New constant: `ERROR_LOG_TRIM_TRIGGER = 600`.
+
+### Important fixes
+
+#### Fix I-5: `_runIdCache` reset per invocation
+
+**Latent bug**: Apps Script V8 isolates can persist module globals across consecutive runs in the same warm process. v2.5.0's `_runIdCache` was set on first call and never explicitly reset, so two consecutive `generateDraftsForCurrentUser` runs in a warm isolate would share one `run_id` — breaking the Error Log's per-run filtering.
+
+**Fix**: explicitly `_runIdCache = null` at the top of `generateDraftsForCurrentUser`'s try block.
+
+#### Fix I-8: Wrap backward-compat iterators in `findTeacherPdfByTraversal`
+
+**Latent bug**: v2.5.0's traversal fallback wrapped the new-format iteration but missed the legacy `dateFolder + 00_SUMMARY.PDF` path. Same class of bug v2.4.x spent 4 attempts on; would crash if any legacy teacher folder existed AND search-API miss forced the fallback path.
+
+**Fix**: every iterator step (`findFolderByName`, `dateFolder.getFiles`, `oldFiles.hasNext`, `oldFiles.next`, `f.getName`) now in try/catch with `logError('WARN', ...)` on failure.
+
+### Test additions
+
+`runUnitTests` grew from 17 → **26 test cases**:
+- 3 new tests for apostrophe handling in `buildPdfCandidateFilenames` (e.g., "Dan O'Brien")
+- 6 new tests for `_schoolFolderMatches` (id match, id mismatch, name fallback, name mismatch, no-info → false, normalize underscore=space)
+
+All 26 pass via `test_runner.js` (Node harness with mocked Apps Script globals).
+
+### Deferred (8 lower-priority findings)
+
+Investigated and explicitly deferred to post-program:
+- #4: more test coverage for createDraftForTeacher integration (would need Drive mocks)
+- #6: per-teacher PDF preflight in confirm dialog (Medium effort; would add ~30s for 50-teacher run, optional UX)
+- #7: multi-grade teacher comment (no functional regression — current code handles via metrics array)
+- #9: `lookupByName` middle-name false positive (documented v2.3.1 limitation; cross-leak guard already in place)
+- #10: Reading Community constant extraction (cosmetic)
+- #11: `clasp` setup for Apps Script version control (Medium effort; manual paste workflow is fine for now)
+- #12: apostrophe NORMALIZATION in candidates (preservation already tested; normalization variants only matter if Drive search-API has apostrophe-quoting issues — TBD)
+- #13: regenerate single teacher menu item (Medium effort; bulk re-run with LockService is acceptable workaround)
+
+### Files modified
+
+- `Code.gs` — 7 surgical edits (~+90 LOC, ~-10 LOC):
+  1. `ERROR_LOG_TRIM_TRIGGER = 600` constant
+  2. `logError` trim logic (hysteresis)
+  3. `generateDraftsForCurrentUser` reset `_runIdCache`
+  4. `schoolFolderCache` build (dual-keying)
+  5. `findTeacherPdfBySearch` rewrite + `_schoolFolderMatches` + `_verifyFileInSchool` helpers
+  6. `findTeacherPdfByTraversal` backward-compat wrap
+  7. `createDraftForTeacher` passes `schoolFolderCache` to `findTeacherPdfBySearch`
+- `runUnitTests` — +9 test cases (17 → 26 total)
+- `CHANGELOG.md` — this entry
+- `CLAUDE.md` — v2.5.1 history line
+- `write_doc.py` — user-facing v2.5.1 summary
+
+### Verified
+
+- ✓ `node --check Code.gs` (after copy to .js): SYNTAX OK
+- ✓ `node test_runner.js`: 26 passed, 0 failed
+- ✓ All 5 target findings (C-1, C-2, C-3, I-5, I-8) addressed
+- ✓ Deferred findings explicitly listed above
+
+### Action required after deploy
+
+1. Paste latest `Code.gs` into Apps Script editor → Save → reload spreadsheet tab
+2. Run **Email Tools → Run Unit Tests** — should report **26 passed, 0 failed**
+3. Run **Email Tools → Generate My Email Drafts** for any school — behavior should match v2.5.0 (same drafts created, same Error Log structure). The Critical fixes are defensive (no observable change in the happy path) but block the wrong-PDF risk if a name collision ever exists.
+
 ## [v2.5.0] - 2026-04-27
 
 ### Architectural pivot — PDF lookup via Drive search API (eliminates "Service error: Drive" root cause)
