@@ -97,9 +97,13 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Email Tools')
     .addItem('Generate My Email Drafts', 'generateDraftsForCurrentUser')
+    .addSeparator()
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
     .addItem('Debug: Drive Access', 'debugDriveAccess')
     .addItem('Debug: Drive Auth (run if "Service error: Drive")', 'diagnoseDriveAuth')
+    .addItem('View Error Log', 'viewErrorLog')
+    .addItem('Clear Error Log', 'clearErrorLog')
+    .addItem('Run Unit Tests', 'runUnitTests')
     .addSeparator()
     .addItem('Set Date Range', 'setDateRange')
     .addItem('Set Template', 'setTemplate')
@@ -810,14 +814,226 @@ function withDriveRetry(fn) {
   }
 }
 
-function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache) {
-  var schoolFolderName = schoolFolderMap[teacher.campus] || '';
+// ============================================
+// v2.5.0 — STRUCTURED ERROR LOGGING + SEARCH-API PDF LOOKUP
+// ============================================
+//
+// PIVOT FROM v2.4.x: instead of iterating Drive folders to find each teacher's
+// weekly PDF (which throws "Service error: Drive" for shared-with-me users
+// because Drive's children-list API requires explicit parent-folder Editor
+// membership), we use Drive's **search API** (`getFilesByName`) — which works
+// for any file the user can SEE, regardless of parent-folder permissions.
+// This eliminates the entire "Service error: Drive" failure surface from the
+// happy path. The folder-iteration logic is kept as a safety-net fallback for
+// filename anomalies, but if iteration ALSO fails for permission reasons, we
+// log + skip (no crash, no blocking the whole run).
 
-  // v2.4.1: Cache lookup with stale-reference detection. A cached Folder
-  // reference can go stale if the folder was moved/renamed/deleted between
-  // pre-resolution and per-teacher use. A cheap getId() probe validates the
-  // reference; on failure we drop the cache entry and fall through to a
-  // fresh lookup. Closes the "Service error: Drive" path from stale cache.
+var ERROR_LOG_TAB = 'Error Log';
+var ERROR_LOG_HEADERS = ['timestamp', 'run_id', 'severity', 'function', 'teacher', 'message', 'stack'];
+var ERROR_LOG_MAX_ROWS = 500;
+var _runIdCache = null;
+
+/**
+ * Returns a stable run-id string used to group all log entries from the
+ * current execution. Cached at module scope so all log calls within one
+ * run share the same id; reset when the script reloads.
+ */
+function _getRunId() {
+  if (!_runIdCache) {
+    _runIdCache = 'run-' + new Date().getTime() + '-' + Math.floor(Math.random() * 1000);
+  }
+  return _runIdCache;
+}
+
+/**
+ * Append a structured row to the "Error Log" tab. Best-effort — failures in
+ * logging itself fall back to console.log (never crash the caller).
+ *
+ * @param {string} severity   'INFO' | 'WARN' | 'ERROR'
+ * @param {string} fnName     calling function name (for filtering)
+ * @param {object|null} teacherObj  teacher dict (name, email) or null
+ * @param {string} message    one-line error description
+ * @param {string} stack      optional full stack/trace for debugging
+ */
+function logError(severity, fnName, teacherObj, message, stack) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(ERROR_LOG_TAB);
+    if (!sheet) {
+      sheet = ss.insertSheet(ERROR_LOG_TAB);
+      sheet.appendRow(ERROR_LOG_HEADERS);
+      sheet.setFrozenRows(1);
+      sheet.getRange(1, 1, 1, ERROR_LOG_HEADERS.length)
+        .setFontWeight('bold')
+        .setBackground('#f3f3f3');
+    }
+    var teacherStr = '';
+    if (teacherObj) {
+      teacherStr = String(teacherObj.name || '');
+      if (teacherObj.email) teacherStr += ' <' + teacherObj.email + '>';
+    }
+    sheet.appendRow([
+      new Date().toISOString(),
+      _getRunId(),
+      severity,
+      fnName,
+      teacherStr,
+      String(message || '').substring(0, 500),
+      String(stack || '').substring(0, 500)
+    ]);
+
+    // Trim if over max — keep the most-recent ERROR_LOG_MAX_ROWS entries.
+    var lastRow = sheet.getLastRow();
+    if (lastRow > ERROR_LOG_MAX_ROWS + 1) {
+      sheet.deleteRows(2, lastRow - ERROR_LOG_MAX_ROWS - 1);
+    }
+  } catch (logErr) {
+    console.log('logError itself failed: ' + (logErr.message || logErr));
+    console.log('Original log: [' + severity + '] ' + fnName + ': ' + message);
+  }
+}
+
+/**
+ * Activate the "Error Log" tab so the user can scan recent failures.
+ * Triggered from the Email Tools menu.
+ */
+function viewErrorLog() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(ERROR_LOG_TAB);
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert(
+      'No error log yet',
+      'Run "Generate My Email Drafts" first — the log is created on the first error.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+  ss.setActiveSheet(sheet);
+  sheet.setActiveRange(sheet.getRange(1, 1));
+}
+
+/**
+ * Wipe the Error Log tab (keeps the header row). Triggered from the Email
+ * Tools menu — useful before a fresh run when you want to see only this
+ * run's errors.
+ */
+function clearErrorLog() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(ERROR_LOG_TAB);
+  if (!sheet) {
+    ui.alert('Nothing to clear', 'No Error Log tab exists yet.', ui.ButtonSet.OK);
+    return;
+  }
+  var resp = ui.alert(
+    'Clear Error Log?',
+    'Delete all entries from the Error Log tab? (Header row is preserved.)',
+    ui.ButtonSet.YES_NO
+  );
+  if (resp !== ui.Button.YES) return;
+  sheet.clear();
+  sheet.appendRow(ERROR_LOG_HEADERS);
+  sheet.setFrozenRows(1);
+  sheet.getRange(1, 1, 1, ERROR_LOG_HEADERS.length)
+    .setFontWeight('bold')
+    .setBackground('#f3f3f3');
+}
+
+/**
+ * Build the list of candidate exact filenames a teacher's weekly PDF could
+ * be saved as. The PDF naming convention has settled on
+ *   "{Teacher Name} - {YYYY-MM-DD} - {YYYY-MM-DD}.pdf"
+ * but the "Teacher Name" portion can vary slightly across school folders
+ * (with-space, underscored, or first+last spelled differently). We try the
+ * common variations exactly, then dedupe.
+ *
+ * @param {object} teacher    teacher dict with name, firstName, lastName, folderName
+ * @param {string} dateRange  Config Date Range, e.g. "2026-04-20_to_2026-04-26"
+ * @return {string[]} unique candidate exact filenames
+ */
+function buildPdfCandidateFilenames(teacher, dateRange) {
+  var pdfPattern = dateRangeToPdfPattern(dateRange); // "2026-04-20 - 2026-04-26"
+  var raw = [];
+  if (teacher.name) raw.push(teacher.name + ' - ' + pdfPattern + '.pdf');
+  if (teacher.firstName && teacher.lastName) {
+    raw.push(teacher.firstName + ' ' + teacher.lastName + ' - ' + pdfPattern + '.pdf');
+  }
+  if (teacher.folderName) raw.push(teacher.folderName + ' - ' + pdfPattern + '.pdf');
+  // Dedupe (preserve order)
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    if (!seen[raw[i]]) { seen[raw[i]] = true; out.push(raw[i]); }
+  }
+  return out;
+}
+
+/**
+ * v2.5.0 PRIMARY PDF LOOKUP. Uses Drive's search API to find a teacher's
+ * weekly PDF by exact filename — works for shared-with-me users (unlike
+ * folder iteration). Returns the File or null.
+ *
+ * Why this works: `DriveApp.getFilesByName(name)` queries Drive's search
+ * index for files visible to the caller, regardless of parent-folder
+ * permissions. Shared-with-me users CAN see files they have direct access
+ * to via search, even when they cannot list the parent folder's children.
+ * This is the same mechanism that makes `getFoldersByName` work for
+ * shared-with-me users in v2.4.2's school-folder cache.
+ */
+function findTeacherPdfBySearch(teacher, dateRange) {
+  if (!teacher || !dateRange) return null;
+  var candidates = buildPdfCandidateFilenames(teacher, dateRange);
+  for (var c = 0; c < candidates.length; c++) {
+    var fname = candidates[c];
+    try {
+      var iter = DriveApp.getFilesByName(fname);
+      while (true) {
+        var hasMore;
+        try { hasMore = iter.hasNext(); }
+        catch (e) {
+          logError('WARN', 'findTeacherPdfBySearch', teacher,
+            'iter.hasNext() failed for "' + fname + '": ' + (e.message || e), '');
+          break;
+        }
+        if (!hasMore) break;
+        var file;
+        try { file = iter.next(); }
+        catch (e) {
+          logError('WARN', 'findTeacherPdfBySearch', teacher,
+            'iter.next() failed for "' + fname + '": ' + (e.message || e), '');
+          break;
+        }
+        // Verify it's actually a PDF (defensive — the search returns by name
+        // exactly, but a non-PDF file with the same name could theoretically
+        // exist).
+        try {
+          var actualName = file.getName();
+          if (actualName.toUpperCase().indexOf('.PDF') !== -1) return file;
+        } catch (e) {
+          logError('WARN', 'findTeacherPdfBySearch', teacher,
+            'file.getName() failed: ' + (e.message || e), '');
+        }
+      }
+    } catch (e) {
+      logError('WARN', 'findTeacherPdfBySearch', teacher,
+        'DriveApp.getFilesByName("' + fname + '") threw: ' + (e.message || e),
+        e.stack || '');
+      // continue to next candidate filename
+    }
+  }
+  return null;
+}
+
+/**
+ * v2.5.0 FALLBACK PDF LOOKUP. The pre-v2.5 folder-iteration logic, kept as
+ * a safety net for filename anomalies that the search API can't match by
+ * exact name. Returns the File or null. If iteration fails for permission
+ * reasons (shared-with-me parent), log + return null instead of throwing.
+ */
+function findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache) {
+  var schoolFolderName = (schoolFolderMap && schoolFolderMap[teacher.campus]) || '';
+
+  // School folder lookup with cache + stale check.
   var schoolFolder = null;
   if (schoolFolderCache && schoolFolderCache[teacher.campus]) {
     try {
@@ -832,55 +1048,202 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
       schoolFolder = findFolderByName(schoolFolderName, rootFolder);
       if (!schoolFolder) schoolFolder = findFolderByName(teacher.campus, rootFolder);
     } catch (e) {
-      return { success: false, error: 'school folder lookup failed for "' + schoolFolderName + '" / "' + teacher.campus + '": ' + (e.message || e) };
+      logError('WARN', 'findTeacherPdfByTraversal', teacher,
+        'school folder lookup failed: ' + (e.message || e), '');
+      return null;
     }
   }
-  if (!schoolFolder) return { success: false, error: 'School folder not found: tried "' + schoolFolderName + '" and "' + teacher.campus + '"' };
+  if (!schoolFolder) return null;
 
-  // Try teacher.folderName first (FirstName_LastName), then "FirstName LastName" (space)
+  // Teacher folder lookup.
   var teacherFolder = null;
   try {
     teacherFolder = findFolderByName(teacher.folderName, schoolFolder);
     if (!teacherFolder) teacherFolder = findFolderByName(teacher.name, schoolFolder);
   } catch (e) {
-    return { success: false, error: 'teacher folder lookup failed for "' + teacher.folderName + '" / "' + teacher.name + '": ' + (e.message || e) };
+    logError('WARN', 'findTeacherPdfByTraversal', teacher,
+      'teacher folder lookup failed: ' + (e.message || e), '');
+    return null;
   }
-  if (!teacherFolder) return { success: false, error: 'Teacher folder not found: tried "' + teacher.folderName + '" and "' + teacher.name + '"' };
+  if (!teacherFolder) return null;
 
-  // NEW FORMAT: PDFs sit directly in teacher folder, named like
-  //   "Rebecca Reynolds - 2026-04-06 - 2026-04-12.pdf"
-  // Match by date-range pattern "YYYY-MM-DD - YYYY-MM-DD" within filename.
+  // PDF iteration inside teacher folder. Wrap every iterator step.
   var pdfPattern = dateRangeToPdfPattern(dateRange);
-  var summaryPdf = null;
   try {
     var files = teacherFolder.getFiles();
-    while (files.hasNext()) {
-      var file = files.next();
-      var fileName = file.getName();
-      if (fileName.indexOf(pdfPattern) !== -1 && fileName.toUpperCase().indexOf('.PDF') !== -1) {
-        summaryPdf = file; break;
+    while (true) {
+      var hasMore;
+      try { hasMore = files.hasNext(); }
+      catch (e) {
+        logError('WARN', 'findTeacherPdfByTraversal', teacher,
+          'files.hasNext() failed: ' + (e.message || e), '');
+        break;
+      }
+      if (!hasMore) break;
+      try {
+        var file = files.next();
+        var fileName = file.getName();
+        if (fileName.indexOf(pdfPattern) !== -1 && fileName.toUpperCase().indexOf('.PDF') !== -1) {
+          return file;
+        }
+      } catch (e) {
+        logError('WARN', 'findTeacherPdfByTraversal', teacher,
+          'file iteration step failed: ' + (e.message || e), '');
       }
     }
-
-    // Backward compat: old structure (date subfolder + 00_SUMMARY.PDF)
-    if (!summaryPdf) {
-      var dateFolder = findFolderByName(dateRange, teacherFolder);
-      if (dateFolder) {
-        var oldFiles = dateFolder.getFiles();
-        while (oldFiles.hasNext()) {
-          var f = oldFiles.next();
-          var name = f.getName().toUpperCase();
-          if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.endsWith('.PDF')) {
-            summaryPdf = f; break;
-          }
+    // Backward compat: old structure (date subfolder + 00_SUMMARY.PDF).
+    var dateFolder = findFolderByName(dateRange, teacherFolder);
+    if (dateFolder) {
+      var oldFiles = dateFolder.getFiles();
+      while (oldFiles.hasNext()) {
+        var f = oldFiles.next();
+        var name = f.getName().toUpperCase();
+        if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.endsWith('.PDF')) {
+          return f;
         }
       }
     }
   } catch (e) {
-    return { success: false, error: 'PDF lookup failed for ' + teacher.name + ': ' + (e.message || e) };
+    logError('WARN', 'findTeacherPdfByTraversal', teacher,
+      'PDF iteration failed: ' + (e.message || e), '');
+  }
+  return null;
+}
+
+// ============================================
+// v2.5.0 — UNIT TEST HARNESS
+// ============================================
+//
+// Run via Email Tools > Run Unit Tests. Tests pure functions (lookupByName,
+// normalizeFolderName, dateRangeToPdfPattern, buildPdfCandidateFilenames).
+// These are the functions most likely to silently regress on edits, and the
+// only ones safe to test without Drive/Sheets I/O.
+
+function _testAssertEq(results, name, actual, expected) {
+  var actualJson = JSON.stringify(actual);
+  var expectedJson = JSON.stringify(expected);
+  if (actualJson === expectedJson) {
+    results.push({ pass: true, name: name });
+  } else {
+    results.push({ pass: false, name: name, actual: actualJson, expected: expectedJson });
+  }
+}
+
+function runUnitTests() {
+  var results = [];
+
+  // --- lookupByName ---
+  var teachers = { 'avlen edwards': 'EDWARDS', 'jane doe': 'JANE' };
+  _testAssertEq(results, 'lookupByName: exact match',
+    lookupByName(teachers, 'Avlen', 'Edwards', 'Avlen Edwards'), 'EDWARDS');
+  _testAssertEq(results, 'lookupByName: no match returns null',
+    lookupByName(teachers, 'John', 'Smith', 'John Smith'), null);
+  _testAssertEq(results, 'lookupByName: null fullName returns null',
+    lookupByName(teachers, 'Avlen', 'Edwards', null), null);
+  _testAssertEq(results, 'lookupByName: empty obj returns null',
+    lookupByName({}, 'A', 'B', 'A B'), null);
+  _testAssertEq(results, 'lookupByName: null obj returns null',
+    lookupByName(null, 'A', 'B', 'A B'), null);
+
+  // Last-name fallback: must NOT cross-leak between teachers sharing a last name
+  var lastNameTest = { 'liam smith': 'LIAM', 'lisa smith': 'LISA' };
+  _testAssertEq(results, 'lookupByName: last-name same-first finds match',
+    lookupByName(lastNameTest, 'Lisa', 'Smith', 'Lisa Smith'), 'LISA');
+  _testAssertEq(results, 'lookupByName: last-name different-first returns null',
+    lookupByName(lastNameTest, 'Larry', 'Smith', 'Larry Smith'), null);
+
+  // --- normalizeFolderName ---
+  _testAssertEq(results, 'normalizeFolderName: underscores -> spaces',
+    normalizeFolderName('JRES_-_Ridgeland'), 'jres - ridgeland');
+  _testAssertEq(results, 'normalizeFolderName: curly apostrophe -> straight',
+    normalizeFolderName('Bruna and Mark\u2019s'), "bruna and mark's");
+  _testAssertEq(results, 'normalizeFolderName: trim + collapse whitespace',
+    normalizeFolderName('  Foo   Bar  '), 'foo bar');
+  _testAssertEq(results, 'normalizeFolderName: null safe',
+    normalizeFolderName(null), '');
+
+  // --- dateRangeToPdfPattern ---
+  _testAssertEq(results, 'dateRangeToPdfPattern: valid range',
+    dateRangeToPdfPattern('2026-04-20_to_2026-04-26'), '2026-04-20 - 2026-04-26');
+  _testAssertEq(results, 'dateRangeToPdfPattern: malformed passthrough',
+    dateRangeToPdfPattern('not_a_range'), 'not_a_range');
+
+  // --- buildPdfCandidateFilenames ---
+  var teacher = { name: 'Avlen Edwards', firstName: 'Avlen', lastName: 'Edwards', folderName: 'Avlen_Edwards' };
+  var candidates = buildPdfCandidateFilenames(teacher, '2026-04-20_to_2026-04-26');
+  _testAssertEq(results, 'candidates: contains spaced name',
+    candidates.indexOf('Avlen Edwards - 2026-04-20 - 2026-04-26.pdf') !== -1, true);
+  _testAssertEq(results, 'candidates: contains underscored folderName',
+    candidates.indexOf('Avlen_Edwards - 2026-04-20 - 2026-04-26.pdf') !== -1, true);
+  // Dedup check
+  var seen = {};
+  var dups = 0;
+  for (var c = 0; c < candidates.length; c++) {
+    if (seen[candidates[c]]) dups++;
+    seen[candidates[c]] = true;
+  }
+  _testAssertEq(results, 'candidates: no duplicates', dups, 0);
+  // Empty teacher
+  _testAssertEq(results, 'candidates: empty teacher returns empty list',
+    buildPdfCandidateFilenames({}, '2026-04-20_to_2026-04-26'), []);
+
+  // Render
+  var pass = 0, fail = 0;
+  var lines = [];
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    if (r.pass) {
+      pass++;
+      lines.push('<div style="color:#2e7d32;">&#10003; ' + r.name + '</div>');
+    } else {
+      fail++;
+      lines.push('<div style="color:#c62828;"><b>&#10007; ' + r.name + '</b><br>'
+        + '&nbsp;&nbsp;&nbsp;got: <code>' + r.actual + '</code><br>'
+        + '&nbsp;&nbsp;&nbsp;expected: <code>' + r.expected + '</code></div>');
+    }
+  }
+  var summary = '<h2>Unit Tests</h2><p><b>'
+    + pass + ' passed, ' + fail + ' failed</b> (total: ' + results.length + ')</p>';
+  var html = summary + '<div style="font-family:monospace;font-size:13px;line-height:1.5;">'
+    + lines.join('') + '</div>';
+  SpreadsheetApp.getUi().showModalDialog(
+    HtmlService.createHtmlOutput(html).setWidth(700).setHeight(600),
+    'Unit Test Results'
+  );
+}
+
+function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache) {
+  // v2.5.0 PIVOT: PDF lookup now tries Drive's search API FIRST (works for
+  // shared-with-me users; bypasses parent-folder permission gap entirely).
+  // Falls back to folder traversal for filename anomalies. Both paths log
+  // failures to the Error Log tab; a clean miss returns a structured error.
+  var summaryPdf = null;
+  try {
+    summaryPdf = findTeacherPdfBySearch(teacher, dateRange);
+  } catch (e) {
+    logError('WARN', 'createDraftForTeacher', teacher,
+      'search-API path threw: ' + (e.message || e), e.stack || '');
   }
 
-  if (!summaryPdf) return { success: false, error: 'PDF not found for "' + pdfPattern + '" in ' + teacher.name + ' folder' };
+  // FALLBACK: existing folder traversal — handles cases where the PDF filename
+  // doesn't exactly match our candidate list (e.g., trailing whitespace, an
+  // unexpected name format). Failures here log + return null instead of crashing.
+  if (!summaryPdf) {
+    try {
+      summaryPdf = findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache);
+    } catch (e) {
+      logError('WARN', 'createDraftForTeacher', teacher,
+        'traversal fallback threw: ' + (e.message || e), e.stack || '');
+    }
+  }
+
+  if (!summaryPdf) {
+    var pdfPatternForErr = dateRangeToPdfPattern(dateRange);
+    var msg = 'PDF not found for "' + teacher.name + '" week "' + pdfPatternForErr
+      + '". Tried search-API + folder traversal.';
+    logError('ERROR', 'createDraftForTeacher', teacher, msg, '');
+    return { success: false, error: msg };
+  }
 
   // v2.4.1: Pass the File directly to createDraft (no getAs() — it's already a PDF;
   // getAs(MimeType.PDF) was a no-op coercion that added a Drive call AND a failure

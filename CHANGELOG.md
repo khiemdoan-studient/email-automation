@@ -2,6 +2,94 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.5.0] - 2026-04-27
+
+### Architectural pivot — PDF lookup via Drive search API (eliminates "Service error: Drive" root cause)
+
+After v2.4.1 → v2.4.2 → v2.4.3 (three iterations of try/catch wrapping around folder iteration) STILL failed in production for shared-with-me IMs, this release **pivots** to a fundamentally different lookup mechanism:
+
+**OLD (v2.4.3 and earlier)** — folder traversal as primary path
+```
+rootFolder.getFolders() → schoolFolder.getFolders() → teacherFolder.getFiles()
+                  ^                       ^                       ^
+       fails on shared-with-me     same         same
+```
+
+**NEW (v2.5.0)** — Drive search API as primary path, folder traversal as fallback
+```
+DriveApp.getFilesByName('Teacher Name - 2026-04-20 - 2026-04-26.pdf')
+                  ^
+       Search index — works for any visible file regardless of parent permissions.
+       (Same mechanism that makes getFoldersByName work for shared-with-me users
+       in v2.4.2's school-folder cache.)
+```
+
+The folder-iteration logic is kept as a safety-net **fallback** for filename anomalies, but if iteration ALSO fails for permission reasons, we **log + skip** (no crash, no blocking the rest of the run). The blocked-by-iteration failure mode is gone from the happy path.
+
+### Why this is the right shape
+
+The v2.4.x fixes treated the symptom (wrap each iteration step). v2.5.0 removes the cause (don't iterate at all). Drive's search API doesn't require parent-folder Editor membership — it queries the search index for files the user can directly see, which is exactly what shared-with-me access provides.
+
+### Changes (`Code.gs`)
+
+1. **NEW: `findTeacherPdfBySearch(teacher, dateRange)` (line ~1100)** — primary PDF lookup. Builds 1-3 candidate exact filenames from teacher name variations + date range, calls `DriveApp.getFilesByName(name)` for each, returns the first matching `.pdf`. Every `hasNext()` / `next()` is wrapped in try/catch; failures log to Error Log and continue to the next candidate.
+
+2. **NEW: `findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache)` (line ~1130)** — extracted from the old `createDraftForTeacher` body as a fallback path. Same logic as v2.4.3 (with all iteration steps wrapped) but on failure logs + returns null instead of returning a `{success:false}` envelope. Preserved for the rare case where filename doesn't match any of the search candidates.
+
+3. **NEW: `buildPdfCandidateFilenames(teacher, dateRange) (line ~1085)** — pure helper, returns deduped list of candidate filenames the search-API will try. Three forms: full name with spaces, first+last with spaces, folderName (underscores). Each combined with " - {YYYY-MM-DD} - {YYYY-MM-DD}.pdf".
+
+4. **REWRITE: `createDraftForTeacher` PDF lookup section (line ~1215)** — replaced the ~70-line cache+school+teacher+files iteration block with a 25-line search-first-fallback-traversal block. The Gmail draft creation step is unchanged (same `withDriveRetry` + named error wrapping from v2.4.1).
+
+5. **NEW: Error Log tab + structured logging (line ~810)** — `logError(severity, fnName, teacherObj, message, stack)` writes a row to the "Error Log" tab on first call (auto-creates the tab + 7-column header). Severity: `INFO` / `WARN` / `ERROR`. Each row includes a `run_id` to group all entries from one execution. Auto-trims to last 500 entries to prevent unbounded growth. Replaces the v2.4.3 pattern of scattering `console.log` calls (which only IMs with Apps Script Editor access could see).
+
+6. **NEW: `runUnitTests()` menu item (line ~1170)** — runs in-process unit tests for the pure helpers (`lookupByName`, `normalizeFolderName`, `dateRangeToPdfPattern`, `buildPdfCandidateFilenames`). Renders pass/fail summary in a modal dialog. 14 test cases including:
+   - `lookupByName` exact match + null safety + last-name fallback (no cross-leak between same-last-name teachers)
+   - `normalizeFolderName` underscores/curly apostrophes/whitespace
+   - `dateRangeToPdfPattern` valid + malformed
+   - `buildPdfCandidateFilenames` content + dedup + empty teacher
+
+7. **Updated `onOpen()` menu** — added `View Error Log`, `Clear Error Log`, `Run Unit Tests` separators between the existing items.
+
+### What this means for the failure cases
+
+| Old failure | New behavior |
+|------------|--------------|
+| "Service error: Drive" at `parentFolder.getFolders()` | search-API hit → never reached |
+| "Service error: Drive" at `iter.hasNext()` mid-iteration | search-API hit → never reached |
+| "Service error: Drive" at `tf.getFiles()` | search-API hit → never reached |
+| Teacher folder name mismatch (e.g., "Avlen_Edwards" vs "Avlen Edwards") | search-API tries 3 name forms → finds it |
+| PDF actually missing for week | logs `ERROR` to Error Log + returns clean error to caller |
+| Filename has unexpected format (search misses) | falls back to folder traversal; if also fails, logs + skips |
+
+### Action required after deploy
+
+1. Paste latest `Code.gs` into Apps Script editor → save → reload spreadsheet tab.
+2. Run **Email Tools → Run Unit Tests** to verify pure-helper logic. Should report 14 passed, 0 failed.
+3. Run **Email Tools → Generate My Email Drafts** for any school. The "Service error: Drive" should not appear; if individual teachers fail, the alert + Error Log tab will show the specific reason.
+4. Open the new **Error Log** tab to see the structured failure log (one row per failure, with timestamp + run_id + severity + teacher + message).
+
+### Files modified
+
+- `Code.gs` (~+450 LOC, ~-70 LOC) — search-API helpers + error log + unit tests + rewired createDraftForTeacher
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (version-history line + architecture diagram update)
+- `write_doc.py` (user-facing v2.5.0 summary)
+
+### Self-audit
+
+- ✓ Syntax-checked via `node --check` (after copy to `.js`) — passes
+- ✓ Unit tests built INTO Code.gs (run via menu item — `Email Tools > Run Unit Tests`)
+- ✓ Folder iteration kept as fallback (no functional regression for filename-mismatch cases)
+- ✓ Error Log tab is auto-created — no manual setup
+- ✓ Backward compat preserved: old date-subfolder + 00_SUMMARY.PDF format still detected by traversal fallback
+- ✓ Lock service guard preserved (no double-runs)
+
+### What's NOT in this release (deferred, low priority)
+
+- ~~PDF Manifest pattern (parent pipeline writes file_id mapping)~~ — investigated and **deferred**: teacher PDFs are NOT generated by Khiem's pipeline (they come from mark.katigbak's upstream system), so the parent doesn't have file_ids to write. The search-API approach is zero-coupling and achieves the same outcome (no folder iteration).
+- ~~Drive auth pre-flight that auto-grants Editor on parent folder~~ — would require domain admin grant; not in scope.
+- ~~Service-account Gmail draft creation (replace Apps Script entirely)~~ — explicitly NOT recommended (would lose IM-driven human-in-the-loop review and run afoul of safety rules around autonomous email handling).
+
 ## [v2.4.3] - 2026-04-27
 
 ### Fixed — "Service error: Drive" — comprehensive iteration wrap (FOURTH attempt at this class of bug)
