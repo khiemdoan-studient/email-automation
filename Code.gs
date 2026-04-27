@@ -99,11 +99,77 @@ function onOpen() {
     .addItem('Generate My Email Drafts', 'generateDraftsForCurrentUser')
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
     .addItem('Debug: Drive Access', 'debugDriveAccess')
+    .addItem('Debug: Drive Auth (run if "Service error: Drive")', 'diagnoseDriveAuth')
     .addSeparator()
     .addItem('Set Date Range', 'setDateRange')
     .addItem('Set Template', 'setTemplate')
     .addItem('Refresh Template Dropdown', 'setupTemplateDropdown')
     .addToUi();
+}
+
+/**
+ * v2.4.2: Minimal Drive auth probe. Run this FIRST when "Service error: Drive"
+ * appears. Tests three Drive operations in isolation with named try/catch:
+ *   1. getRootFolder() — your default Drive root (lightweight)
+ *   2. getFolderById(ROOT_FOLDER_ID) — direct ID access (works even for shared-with-me)
+ *   3. parentFolder.getFolders() — child folder iteration (fails for shared-with-me users
+ *      who lack explicit parent-folder membership)
+ *
+ * If #1 + #2 succeed but #3 fails: this is the "shared with me" Drive permission
+ * pattern. Fix: have the folder owner add you as an explicit Editor on the
+ * parent folder ("Bruna and Mark's Schools - Weekly Report"). Once added, child
+ * iteration works. Until then, v2.4.2's try/catch wrapping prevents crashes but
+ * cannot list folders that getFolders() can't see.
+ */
+function diagnoseDriveAuth() {
+  var ui = SpreadsheetApp.getUi();
+  var lines = [];
+  lines.push('<h2>Drive Auth Diagnostic (v2.4.2)</h2>');
+  lines.push('<p><b>User:</b> ' + Session.getActiveUser().getEmail() + '</p>');
+
+  // 1. DriveApp.getRootFolder()
+  try {
+    var myRoot = DriveApp.getRootFolder();
+    lines.push('<p style="color:green;">✓ DriveApp.getRootFolder() works (your "My Drive" is reachable)</p>');
+  } catch (e) {
+    lines.push('<p style="color:red;">✗ DriveApp.getRootFolder() failed: ' + (e.message || e) + '</p>');
+    lines.push('<p><b>This means the script does NOT have Drive scope authorized for your account.</b></p>');
+    lines.push('<p><u>Fix:</u> Open <b>Extensions → Apps Script</b> → Run any function (e.g. <code>onOpen</code>) → click <b>Review Permissions</b> → choose your account → click <b>Allow</b>.</p>');
+    var html1 = HtmlService.createHtmlOutput(lines.join('')).setWidth(700).setHeight(450);
+    ui.showModalDialog(html1, 'Drive Auth Diagnostic');
+    return;
+  }
+
+  // 2. getFolderById on the project's root
+  try {
+    var byId = DriveApp.getFolderById(CONFIG.ROOT_FOLDER_ID);
+    lines.push('<p style="color:green;">✓ DriveApp.getFolderById("' + CONFIG.ROOT_FOLDER_ID + '") works → name: <b>' + byId.getName() + '</b></p>');
+  } catch (e) {
+    lines.push('<p style="color:red;">✗ DriveApp.getFolderById failed: ' + (e.message || e) + '</p>');
+    lines.push('<p><b>This means the project root folder ID is invalid or you have no access at all.</b></p>');
+    lines.push('<p><u>Fix:</u> Ensure the root folder is shared with your account (any access level), then re-run this diagnostic.</p>');
+    var html2 = HtmlService.createHtmlOutput(lines.join('')).setWidth(700).setHeight(450);
+    ui.showModalDialog(html2, 'Drive Auth Diagnostic');
+    return;
+  }
+
+  // 3. parentFolder.getFolders() — the smoking gun
+  try {
+    var rootFolder = DriveApp.getFolderById(CONFIG.ROOT_FOLDER_ID);
+    var iter = rootFolder.getFolders();
+    var count = 0;
+    while (iter.hasNext() && count < 5) { iter.next(); count++; }
+    lines.push('<p style="color:green;">✓ rootFolder.getFolders() works (listed ' + count + '+ child folders) — full Drive permissions confirmed.</p>');
+    lines.push('<p>If "Generate My Email Drafts" still fails, the cause is per-teacher (specific PDF / quota / rate limit). Run <b>Debug: Drive Access</b> for per-teacher detail.</p>');
+  } catch (e) {
+    lines.push('<p style="color:red;">✗ rootFolder.getFolders() failed: ' + (e.message || e) + '</p>');
+    lines.push('<p><b>ROOT CAUSE FOUND.</b> You have <i>direct access</i> to the root folder (via "Shared with me") but NOT explicit list permission. Drive\'s child-listing API (<code>getFolders</code>) requires you to be an explicit Editor/Viewer on the parent — not just a recipient of a share link.</p>');
+    lines.push('<p><u>Fix:</u> Have the folder OWNER (likely <code>mark.katigbak</code>) add you as <b>Editor</b> directly on "<b>Bruna and Mark\'s Schools - Weekly Report</b>". Once added, child iteration works. v2.4.2\'s try/catch wrapping prevents crashes but does NOT grant permissions you lack — only the owner can do that.</p>');
+    lines.push('<p><u>Workaround:</u> Until permissions are fixed, the script will use exact-name search (<code>getFoldersByName</code>) which works for shared-with-me users. The School-IM Mapping must use the EXACT folder name (with spaces, e.g. "JRES - Ridgeland Elementary School") in the displayName column for this to find the folder in one call.</p>');
+  }
+
+  var html = HtmlService.createHtmlOutput(lines.join('')).setWidth(800).setHeight(550);
+  ui.showModalDialog(html, 'Drive Auth Diagnostic');
 }
 
 /**
@@ -244,14 +310,20 @@ function generateDraftsForCurrentUser() {
   if (!rootFolder) return ui.alert('Error', 'Could not find root folder: tried ID "' + CONFIG.ROOT_FOLDER_ID + '" and name "' + CONFIG.ROOT_FOLDER_NAME + '". Run Email Tools > Debug: Drive Access to diagnose.', ui.ButtonSet.OK);
 
   // Pre-resolve school folders ONCE, keyed by displayName.
-  // Eliminates ~1 redundant Drive API call per teacher in the per-teacher loop below.
-  // checkDriveFolderExists + createDraftForTeacher both consume this cache; they fall
-  // back to fresh lookup defensively on cache miss so behavior is preserved.
+  // v2.4.2: try displayName FIRST. School-IM Mapping col A historically uses underscores
+  // (`JRES_-_Ridgeland_Elementary_School`) but actual Drive folder names use spaces.
+  // The exact-match path (getFoldersByName) misses on underscored names, forcing the
+  // slow normalized iteration via parentFolder.getFolders() — which threw
+  // "Service error: Drive" for at least one user account (likely a Drive list-permission
+  // gap on the parent that doesn't affect direct child-folder access). Trying displayName
+  // (with spaces) first means most lookups exact-match in one Drive call and avoid the
+  // failure surface entirely. folderName is kept as a backstop for any sheet rows that
+  // only have it populated.
   var schoolFolderCache = {};
   for (var sIdx = 0; sIdx < mySchools.length; sIdx++) {
     var sch = mySchools[sIdx];
-    var folder = findFolderByName(sch.folderName, rootFolder);
-    if (!folder && sch.displayName) folder = findFolderByName(sch.displayName, rootFolder);
+    var folder = sch.displayName ? findFolderByName(sch.displayName, rootFolder) : null;
+    if (!folder && sch.folderName) folder = findFolderByName(sch.folderName, rootFolder);
     if (folder) schoolFolderCache[sch.displayName] = folder;
   }
 
@@ -602,18 +674,40 @@ function getStudentWinners() {
 function findFolderByName(folderName, parentFolder) {
   if (!folderName) return null;
 
+  // v2.4.2: wrap every Drive call in this function to prevent "Service error: Drive"
+  // from propagating up the stack. Failures here mean the calling code can't find
+  // the folder — but the caller (cache build, checkDriveFolderExists, createDraftForTeacher)
+  // has its own fallback / error path. Returning null here lets those run instead of
+  // crashing the whole orchestrator.
+
   // 1. Try exact match first (fast path)
-  var folders = parentFolder ? parentFolder.getFoldersByName(folderName) : DriveApp.getFoldersByName(folderName);
-  if (folders.hasNext()) return folders.next();
+  try {
+    var folders = parentFolder ? parentFolder.getFoldersByName(folderName) : DriveApp.getFoldersByName(folderName);
+    if (folders.hasNext()) return folders.next();
+  } catch (e) {
+    // Drive transient error or permission gap on parent's getFoldersByName.
+    // Don't propagate — fall through to normalized fallback (which may also fail; both wrapped).
+    console.log('findFolderByName: getFoldersByName("' + folderName + '") failed: ' + (e.message || e));
+  }
 
   // 2. Fallback: normalize and iterate (only works inside a parent)
   if (!parentFolder) return null;
 
-  var target = normalizeFolderName(folderName);
-  var it = parentFolder.getFolders();
-  while (it.hasNext()) {
-    var f = it.next();
-    if (normalizeFolderName(f.getName()) === target) return f;
+  // v2.4.2: this iteration was the failure surface in the stack trace user reported
+  // (Code:614 -> "Service error: Drive"). Likely cause: Khiem's account has direct-
+  // link access to specific child folders but NOT explicit list permission on the
+  // parent — so getFolders() throws while individual folder access works fine.
+  // Wrapping prevents the crash; the caller will see null and emit a clean error.
+  try {
+    var target = normalizeFolderName(folderName);
+    var it = parentFolder.getFolders();
+    while (it.hasNext()) {
+      var f = it.next();
+      if (normalizeFolderName(f.getName()) === target) return f;
+    }
+  } catch (e) {
+    console.log('findFolderByName: getFolders() iteration for "' + folderName + '" failed: ' + (e.message || e));
+    // Returning null here is the SAFE behavior — the caller handles the missing folder gracefully.
   }
   return null;
 }
@@ -1579,15 +1673,25 @@ function debugDriveAccess() {
   }
 
   // 2. List all school folders
-  report += '<h3>2. School Folders in Root</h3><ul>';
-  var schoolFolders = rootFolder.getFolders();
+  // v2.4.2: wrap getFolders() — for shared-with-me users this throws "Service error: Drive"
+  // even though direct child-folder access works. Surface the limitation explicitly so
+  // the diagnostic produces useful output instead of crashing.
+  report += '<h3>2. School Folders in Root</h3>';
   var schoolNames = [];
-  while (schoolFolders.hasNext()) {
-    var sf = schoolFolders.next();
-    schoolNames.push({ name: sf.getName(), id: sf.getId() });
-    report += '<li>' + sf.getName() + ' <i>(id=' + sf.getId() + ')</i></li>';
+  try {
+    var schoolFolders = rootFolder.getFolders();
+    report += '<ul>';
+    while (schoolFolders.hasNext()) {
+      var sf = schoolFolders.next();
+      schoolNames.push({ name: sf.getName(), id: sf.getId() });
+      report += '<li>' + sf.getName() + ' <i>(id=' + sf.getId() + ')</i></li>';
+    }
+    report += '</ul>';
+  } catch (e) {
+    report += '<p style="color:red;">rootFolder.getFolders() FAILED: ' + (e.message || e) + '</p>';
+    report += '<p>This is the "Service error: Drive" pattern from your earlier run. You have direct access to the root via Shared-with-me but lack <i>list children</i> permission. Run <b>Email Tools &gt; Debug: Drive Auth</b> for the full diagnosis + fix path.</p>';
+    report += '<p>Continuing with per-school checks below \u2014 they use exact-name search which works for shared-with-me users.</p>';
   }
-  report += '</ul>';
 
   // 3. For current user's schools, check teacher folders + PDFs
   var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
@@ -1606,17 +1710,24 @@ function debugDriveAccess() {
     report += '<h4>' + sch.displayName + '</h4>';
     report += '<p>Looking for folder named: "' + sch.folderName + '" or "' + sch.displayName + '"</p>';
 
-    var schoolFolder = findFolderByName(sch.folderName, rootFolder);
-    if (!schoolFolder) schoolFolder = findFolderByName(sch.displayName, rootFolder);
+    // v2.4.2: try displayName FIRST (exact-match via getFoldersByName works for shared-with-me)
+    var schoolFolder = sch.displayName ? findFolderByName(sch.displayName, rootFolder) : null;
+    if (!schoolFolder) schoolFolder = findFolderByName(sch.folderName, rootFolder);
     if (!schoolFolder) {
-      report += '<p style="color:red;">NOT FOUND in Drive. Available folders listed above.</p>';
+      report += '<p style="color:red;">NOT FOUND in Drive. Tried both displayName and folderName. Possible cause: name mismatch in School-IM Mapping vs actual Drive folder.</p>';
       continue;
     }
     report += '<p style="color:green;">Found: <b>' + schoolFolder.getName() + '</b></p>';
 
-    // List teacher folders (cap matches checkDriveFolderExists for consistency)
+    // List teacher folders (v2.4.2: wrap getFolders — same shared-with-me failure surface)
     report += '<ul>';
-    var tfs = schoolFolder.getFolders();
+    var tfs;
+    try {
+      tfs = schoolFolder.getFolders();
+    } catch (e) {
+      report += '<li style="color:red;">getFolders() FAILED on this school folder: ' + (e.message || e) + '. (Same shared-with-me limitation as the root.)</li></ul>';
+      continue;
+    }
     var count = 0;
     while (tfs.hasNext() && count < 50) {
       var tf = tfs.next();

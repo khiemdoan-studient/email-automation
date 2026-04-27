@@ -25,12 +25,22 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.4.1)\n"
+    "User Guide & Documentation (v2.4.2)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.4.2\n"
+    "Root cause for 'Service error: Drive' identified and fixed. The error happens "
+    "when your Drive access is via 'Shared with me' (not explicit folder membership) "
+    "\u2014 Drive's children-list API blocks shared-with-me users even when individual "
+    "folder access works. Three fixes: the code now tries the exact-name search "
+    "first (works for shared-with-me users), wraps the failure surface in try/catch "
+    "so it returns gracefully instead of crashing, and adds a new 'Debug: Drive Auth' "
+    "menu item that diagnoses your specific Drive permission state and prints the "
+    "exact fix. Run that diagnostic FIRST when 'Service error: Drive' appears.\n"
     "\n"
     "What\u2019s New in v2.4.1\n"
     "Drive error hardening. Some IMs hit a generic 'Exception: Service error: Drive' "
@@ -251,6 +261,11 @@ text = (
     "\n"
     "Version History\n"
     "\n"
+    "v2.4.2 \u2014 April 27, 2026\n"
+    "\u2022 Root cause fix for 'Service error: Drive' (shared-with-me parent permission gap)\n"
+    "\u2022 displayName lookup now FIRST (exact-match search avoids the failing children-list call)\n"
+    "\u2022 New 'Debug: Drive Auth' menu item with actionable diagnostic\n"
+    "\n"
     "v2.4.1 \u2014 April 27, 2026\n"
     "\u2022 Drive error hardening: named errors + stale-cache detection + retry-once + drop redundant PDF coercion\n"
     "\u2022 Pairs with parent repo v3.33.0 (raw_data now includes ALL 5 connector apps)\n"
@@ -342,7 +357,7 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation (v2.4.1)")
+sub_end = sub_start + len("User Guide & Documentation (v2.4.2)")
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -355,6 +370,7 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    "What\u2019s New in v2.4.2",
     "What\u2019s New in v2.4.1",
     "What\u2019s New in v2.4.0",
     "What\u2019s New in v2.3.1",
@@ -441,6 +457,7 @@ for tab in [
         )
 
 for ver in [
+    "v2.4.2 \u2014 April 27, 2026",
     "v2.4.1 \u2014 April 27, 2026",
     "v2.4.0 \u2014 April 27, 2026",
     "v2.3.1 \u2014 April 27, 2026",

@@ -2,6 +2,68 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.4.2] - 2026-04-27
+
+### Fixed — "Service error: Drive" root cause: shared-with-me parent permission gap
+
+User Khiem reported v2.4.1 didn't fix the bare `Exception: Service error: Drive` error. Apps Script Executions stack trace pinpointed the failure:
+
+```
+Exception: Service error: Drive
+    at findFolderByName(Code:614:13)        <-- parentFolder.getFolders() iteration
+    at generateDraftsForCurrentUser(Code:253:18)   <-- schoolFolderCache build
+```
+
+Plus a screenshot showing folders accessed via "**Shared with me > Bruna and Mark's Schoo...**" — owner is `mark.katigbak`, NOT the running user. Diagnosis:
+
+**Drive permission gap pattern:**
+- `parentFolder.getFoldersByName(name)` (search API) — works for shared-with-me users ✓
+- `parentFolder.getFolders()` (children-list API) — **fails** for shared-with-me users ✗
+
+Drive's child-listing requires explicit Editor/Viewer membership on the parent folder. Direct-share recipients ("Shared with me") get individual folder access but NOT parent-list permission. Frank (the IM whose runs work) is presumably an explicit Editor of the parent. Khiem's account is only a direct-share recipient.
+
+The exact failure path was the **normalized-name fallback** in `findFolderByName`. It hits when the School-IM Mapping's column A uses underscores (`JRES_-_Ridgeland_Elementary_School`) but actual Drive folder names use spaces. `getFoldersByName('JRES_-_...')` (search) returns empty → falls through to `parentFolder.getFolders()` (list) → throws.
+
+### Fixes (`Code.gs`)
+
+1. **`findFolderByName` (line ~602)** — both Drive calls now wrapped in named try/catch. On failure, returns `null` and emits a console.log line; does NOT propagate the exception. Calling code's existing null-handling kicks in instead of crashing the whole orchestrator.
+
+2. **schoolFolderCache build (line ~250)** — try `displayName` (with spaces) FIRST, fall back to `folderName` (underscores) only if displayName fails. The space-version exact-matches via `getFoldersByName` (search API which DOES work for shared-with-me users), avoiding the failing `getFolders()` iteration entirely. **This alone resolves the symptom for shared-with-me users**, provided the displayName column is populated correctly.
+
+3. **`debugDriveAccess` (lines ~1675, ~1700, ~1713)** — every `getFolders()` call now wrapped. The diagnostic now produces partial output even if one section fails, with a clear pointer to the new auth diagnostic.
+
+4. **NEW: `diagnoseDriveAuth()` menu item** — minimal Drive auth probe that tests three operations in isolation:
+   - `DriveApp.getRootFolder()` (your "My Drive" reachable?)
+   - `DriveApp.getFolderById(ROOT_FOLDER_ID)` (project root reachable by ID?)
+   - `rootFolder.getFolders()` (can list children?)
+
+   When any test fails, it produces a CLEAR explanation + actionable fix (e.g., "Have the folder OWNER add you as Editor on 'Bruna and Mark's Schools - Weekly Report'. Once added, child iteration works."). Run this FIRST when "Service error: Drive" appears.
+
+### Why v2.4.1's fix wasn't enough
+
+v2.4.1 wrapped `createDraftForTeacher` (per-teacher loop) but the failure was in the **pre-flight `schoolFolderCache` build** that runs BEFORE the per-teacher loop. Pre-flight code paths weren't wrapped — bare exceptions propagated up as `Exception: Service error: Drive`.
+
+### Action required after deploy
+
+1. **Paste latest Code.gs into Apps Script editor → save → reload spreadsheet tab**
+2. **Run `Email Tools > Debug: Drive Auth (run if "Service error: Drive")` first** — confirms whether your account hits the shared-with-me limitation
+3. If diagnosis shows the limitation: have **mark.katigbak** add you as **Editor** directly on "Bruna and Mark's Schools - Weekly Report" parent folder (NOT just the children). One-click in Drive sharing settings.
+4. Re-run "Generate My Email Drafts" — should succeed now.
+
+### Why this works without admin permission grant (workaround)
+
+Even WITHOUT being added to the parent, v2.4.2 will now:
+- Use `getFoldersByName('JRES - Ridgeland Elementary School', rootFolder)` (exact-match search) — succeeds for shared-with-me users
+- Cache the resolved folder
+- Per-teacher loop uses the cached Folder object directly (no further `getFolders` iteration on the parent)
+- The teacher folders themselves (children of the school folder) ARE listable via `getFolders()` if the SCHOOL folder is fully accessible (which it is — Khiem confirmed all 12+ JRES teacher folders open fine)
+
+So the immediate symptom resolves with just the v2.4.2 deploy. The proper long-term fix is the parent-folder permission grant.
+
+### Known carry-forward
+
+- If a teacher folder is shared-with-me but NOT under explicit listing permission, `tf.getFiles()` for finding the PDF could still fail in rare cases. Not observed in user's reports. v2.4.1's named try/catch already wraps that surface.
+
 ## [v2.4.1] - 2026-04-27
 
 ### Fixed — "Exception: Service error: Drive" during email generation

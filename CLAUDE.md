@@ -18,7 +18,9 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.4.0**: Improved "No data available" message. Was ambiguous one-liner; now a yellow callout that distinguishes upstream-data-gap (most common) vs roster-mismatch vs pipeline-not-yet-run. Pairs with parent repo's v3.32.0 fix that aligns email's `Avg Minutes` with WPD's displayed value (FastMath-inclusive aggregation).
 
-**v2.4.1 (current)**: Drive error hardening + diagnostic improvements. Wraps every Drive surface call in `createDraftForTeacher` with named try/catch (now any "Service error: Drive" identifies the specific phase + file + size). Stale-Folder-cache detection via `getId()` probe drops cache entries that became invalid mid-run. Dropped `getAs(MimeType.PDF)` coercion (was a no-op that added a Drive call + failure surface). New `withDriveRetry(fn)` helper retries once after 2s on transient 5xx / rate-limit blips. Pairs with parent repo v3.33.0 which extends raw_data injection to all 5 connector apps (MA, Lalilo, Zearn, Freckle, MobyMax).
+**v2.4.1**: Drive error hardening + diagnostic improvements. Wraps every Drive surface call in `createDraftForTeacher` with named try/catch (now any "Service error: Drive" identifies the specific phase + file + size). Stale-Folder-cache detection via `getId()` probe drops cache entries that became invalid mid-run. Dropped `getAs(MimeType.PDF)` coercion (was a no-op that added a Drive call + failure surface). New `withDriveRetry(fn)` helper retries once after 2s on transient 5xx / rate-limit blips. Pairs with parent repo v3.33.0 which extends raw_data injection to all 5 connector apps (MA, Lalilo, Zearn, Freckle, MobyMax).
+
+**v2.4.2 (current)**: ROOT CAUSE fix for "Service error: Drive". Stack trace pinpointed `findFolderByName` line 614 (the `parentFolder.getFolders()` iteration). User screenshot confirmed the cause: account has Drive folders via "Shared with me" only, no explicit parent-folder membership. Drive's `getFoldersByName` (search) works for shared-with-me users, but `getFolders` (children-list) does NOT — it requires explicit Editor/Viewer on the parent. Three fixes: (1) wrap both Drive calls in `findFolderByName` with try/catch returning null on failure (prevents crash); (2) try `displayName` FIRST in schoolFolderCache build to exact-match via search API (skips the failing iteration entirely); (3) new `diagnoseDriveAuth()` menu item that isolates the failure to one of 3 specific Drive operations and outputs an actionable fix. Symptom now resolves without admin permission grant; the long-term fix is owner adds the user as Editor on the parent folder.
 
 ## Architecture
 
@@ -195,6 +197,7 @@ Use this first when "Drive folders NOT FOUND" appears.
 | Set Date Range | `setDateRange` | Manual override for Config Date Range |
 | Set Template | `setTemplate` | Manual override for Config Template |
 | Refresh Template Dropdown | `setupTemplateDropdown` | Rebuilds the Config Template data validation from `TEMPLATE_NAMES`. Run after adding/removing templates in Code.gs. |
+| Debug: Drive Auth | `diagnoseDriveAuth` | **Run FIRST when "Service error: Drive" appears.** Tests 3 Drive ops in isolation; outputs actionable fix (e.g., "have folder owner add you as Editor on parent"). v2.4.2+. |
 
 ## Color Thresholds
 
