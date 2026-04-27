@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.4.3] - 2026-04-27
+
+### Fixed — "Service error: Drive" — comprehensive iteration wrap (FOURTH attempt at this class of bug)
+
+User reported same error returning at JHMS:
+```
+Exception: Service error: Drive
+    at checkDriveFolderExists(Code:538:20)        <-- inside files.hasNext() iteration
+    at generateDraftsForCurrentUser(Code:330:27)
+```
+
+v2.4.1 wrapped `createDraftForTeacher`. v2.4.2 wrapped `findFolderByName` + `schoolFolderCache` build + `debugDriveAccess`. **But `checkDriveFolderExists` and `checkTeacherFolders` still had unwrapped iterators** — those threw exactly the same error in different code paths.
+
+The shared-with-me Drive permission gap throws "Service error: Drive" on:
+- `parentFolder.getFolders()` (initial call) — covered in v2.4.2
+- `iter.hasNext()` (mid-iteration) — **NEW failure surface in v2.4.3**
+- `iter.next()` (mid-iteration) — **NEW failure surface**
+- `tf.getFiles()` (initial) — covered in v2.4.1's createDraftForTeacher only
+- `files.hasNext()` (mid-iteration) — **NEW failure surface (this is line 538 from user's stack trace)**
+
+### Changes (`Code.gs`)
+
+1. **`checkDriveFolderExists` (lines ~510-590)** — completely rewritten with try/catch on EVERY iteration step (school folder lookup, getFolders, hasNext, next, getFiles, files.hasNext, files.next). Each failure logs to `console.log` for triage and continues with the next iteration item OR fails-open.
+
+2. **FAIL-OPEN by design** — when iteration crashes, return `true` (assume PDFs exist) instead of `false` (block generation). Rationale: createDraftForTeacher (v2.4.1+) wraps every per-teacher Drive call with named errors. The pre-flight "no PDFs at all" check is now best-effort; per-teacher errors surface specific failures clearly. **Blocking the whole run because one Drive call fails was making the symptom worse.**
+
+3. **`checkTeacherFolders` (lines ~1665-1700)** — same comprehensive wrapping. School lookup tries `displayName` FIRST (search-API fast path), wraps every iteration step.
+
+4. **`debugDriveAccess` per-teacher PDF iteration (lines ~1810-1845)** — wrapped every step (`tfs.hasNext`, `tfs.next`, `tf.getFiles`, `files.hasNext`, `files.next`). Diagnostic now produces partial output even on partial Drive failure.
+
+### Why this finally fixes it
+
+The class of bug was wrapping ONE callsite at a time and missing siblings. v2.4.3 audits ALL `getFolders()` and `getFiles()` calls in Code.gs (10 of them) and confirms each is now inside a try/catch, AND that the iterator's `hasNext()` / `next()` methods are also inside try/catch. Every Drive iteration in the codebase is now defensible.
+
+### Investigation: Hamid + Edwards specifically not generating
+
+Confirmed via BQ probe — both ARE in the `All Teacher Metrics` tab and roster:
+- `Muntasir Hamid` (JHMS, grade 7, 106 students, 88.21 mins)
+- `Avlen Edwards` (JHMS, grade 8, 25 students, 75.43 mins)
+
+Their teacher folders DO exist in Drive (per user screenshot). After v2.4.3 deploys, run "Generate My Email Drafts" again — the per-teacher errors will now surface CLEAN messages identifying any specific PDF / folder issue if one exists. If they still don't generate after deploy, the new error string in the alert will identify exactly why.
+
+### Action required after deploy
+
+1. Paste latest Code.gs into Apps Script editor → save → reload spreadsheet tab
+2. Run "Email Tools → Generate My Email Drafts" for JHMS
+3. The pre-flight Drive iteration will no longer crash. If individual teachers fail (e.g., missing PDF for that week), each will be listed with the specific reason in the completion alert.
+4. If Hamid/Edwards still don't appear: paste the new alert text — the error message now identifies the specific failure phase (school folder / teacher folder / PDF / createDraft) + the specific file/path.
+
 ## [v2.4.2] - 2026-04-27
 
 ### Fixed — "Service error: Drive" root cause: shared-with-me parent permission gap

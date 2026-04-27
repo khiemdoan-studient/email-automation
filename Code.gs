@@ -511,35 +511,96 @@ function dateRangeToPdfPattern(dateRange) {
  * named like "Teacher Name - 2026-04-06 - 2026-04-12.pdf" (no date subfolder).
  */
 function checkDriveFolderExists(rootFolder, schools, dateRange, schoolFolderCache) {
+  // v2.4.3: This function used to throw "Service error: Drive" mid-iteration when
+  // run as a shared-with-me user (stack trace pinpointed `files.hasNext()` at line 538).
+  // Drive iterators (`getFolders`, `getFiles`, and `iter.hasNext()`) require explicit
+  // list permission on the parent — direct-link sharing only grants per-folder access.
+  //
+  // FAIL-OPEN by design: if iteration throws, return TRUE (assume PDFs exist) and let
+  // the per-teacher createDraftForTeacher path surface specific failures with named
+  // errors. The pre-flight "no PDFs at all" check is now best-effort, not blocking.
+  // This is correct because:
+  //   1. createDraftForTeacher (v2.4.1+) wraps every Drive call with named errors
+  //   2. Per-teacher errors clearly identify which PDF / folder is missing
+  //   3. Blocking the entire run because one Drive iteration call fails is worse UX
+  //      than letting per-teacher failures bubble up individually.
   var pdfPattern = dateRangeToPdfPattern(dateRange); // "2026-04-06 - 2026-04-12"
 
   for (var i = 0; i < schools.length; i++) {
-    // Use pre-resolved cache (built once in generateDraftsForCurrentUser); fall back to
-    // fresh lookup defensively. schoolFolderCache is optional for backward-compat callers.
     var schoolFolder = (schoolFolderCache && schoolFolderCache[schools[i].displayName]) || null;
     if (!schoolFolder) {
-      schoolFolder = findFolderByName(schools[i].folderName, rootFolder);
-      if (!schoolFolder && schools[i].displayName) {
-        schoolFolder = findFolderByName(schools[i].displayName, rootFolder);
+      try {
+        schoolFolder = findFolderByName(schools[i].folderName, rootFolder);
+        if (!schoolFolder && schools[i].displayName) {
+          schoolFolder = findFolderByName(schools[i].displayName, rootFolder);
+        }
+      } catch (e) {
+        console.log('checkDriveFolderExists: school folder lookup failed for ' + (schools[i].displayName || schools[i].folderName) + ': ' + (e.message || e));
+        continue;
       }
     }
     if (!schoolFolder) continue;
 
-    // Check if any teacher folder has a PDF matching the date range
-    var teacherFolders = schoolFolder.getFolders();
+    // Iterate teacher folders → files. Each iterator hop is wrapped — Drive can throw
+    // "Service error: Drive" at hasNext()/next() for shared-with-me users. Treat any
+    // failure as "iteration not possible" and FAIL-OPEN.
+    var teacherFolders;
+    try {
+      teacherFolders = schoolFolder.getFolders();
+    } catch (e) {
+      console.log('checkDriveFolderExists: schoolFolder.getFolders() FAILED: ' + (e.message || e) + ' — fail-open (returning true).');
+      return true;
+    }
+
     var teacherCount = 0;
     var maxTeachersToCheck = 50;
-    var maxFilesPerTeacher = 50;  // safety cap on inner loop in case a teacher folder has thousands of files
-    while (teacherFolders.hasNext() && teacherCount < maxTeachersToCheck) {
-      var tf = teacherFolders.next();
+    var maxFilesPerTeacher = 50;
+    while (teacherCount < maxTeachersToCheck) {
+      var tfHasNext;
+      try {
+        tfHasNext = teacherFolders.hasNext();
+      } catch (e) {
+        console.log('checkDriveFolderExists: teacherFolders.hasNext() FAILED: ' + (e.message || e) + ' — fail-open.');
+        return true;
+      }
+      if (!tfHasNext) break;
+
+      var tf;
+      try {
+        tf = teacherFolders.next();
+      } catch (e) {
+        console.log('checkDriveFolderExists: teacherFolders.next() FAILED: ' + (e.message || e) + ' — skipping.');
+        teacherCount++;
+        continue;
+      }
       teacherCount++;
-      var files = tf.getFiles();
+
+      var files;
+      try {
+        files = tf.getFiles();
+      } catch (e) {
+        console.log('checkDriveFolderExists: tf.getFiles() FAILED for teacher: ' + (e.message || e));
+        continue;
+      }
       var fileCount = 0;
-      while (files.hasNext() && fileCount < maxFilesPerTeacher) {
-        var fn = files.next().getName();
-        fileCount++;
-        if (fn.indexOf(pdfPattern) !== -1 && fn.toUpperCase().indexOf('.PDF') !== -1) {
+      while (fileCount < maxFilesPerTeacher) {
+        var fHasNext;
+        try {
+          fHasNext = files.hasNext();
+        } catch (e) {
+          console.log('checkDriveFolderExists: files.hasNext() FAILED: ' + (e.message || e) + ' — fail-open.');
           return true;
+        }
+        if (!fHasNext) break;
+        try {
+          var fn = files.next().getName();
+          fileCount++;
+          if (fn.indexOf(pdfPattern) !== -1 && fn.toUpperCase().indexOf('.PDF') !== -1) {
+            return true;
+          }
+        } catch (e) {
+          console.log('checkDriveFolderExists: file iteration step failed: ' + (e.message || e));
+          fileCount++;
         }
       }
     }
@@ -1605,17 +1666,31 @@ function checkTeacherFolders() {
   for (var s = 0; s < mySchools.length; s++) {
     var school = mySchools[s];
     report += '<h3>' + school.displayName + '</h3>';
-    var schoolFolder = findFolderByName(school.folderName, rootFolder);
+    // v2.4.3: try displayName first (search API works for shared-with-me), fall back to folderName
+    var schoolFolder = school.displayName ? findFolderByName(school.displayName, rootFolder) : null;
+    if (!schoolFolder) schoolFolder = findFolderByName(school.folderName, rootFolder);
 
     if (!schoolFolder) {
-      report += '<p style="color:red;">School folder not found in Drive: <b>' + school.folderName + '</b></p>';
+      report += '<p style="color:red;">School folder not found in Drive: tried <b>' + school.displayName + '</b> and <b>' + school.folderName + '</b></p>';
       continue;
     }
 
-    var driveFolders = schoolFolder.getFolders();
-    var driveFolderNameSet = {};  // O(1) lookup instead of O(N) array.indexOf
-    while (driveFolders.hasNext()) {
-      driveFolderNameSet[driveFolders.next().getName().toLowerCase()] = true;
+    // v2.4.3: wrap getFolders + iteration. Shared-with-me users hit "Service error: Drive"
+    // here. Fail-soft: report the limitation and skip this school's teacher folder check.
+    var driveFolderNameSet = {};
+    try {
+      var driveFolders = schoolFolder.getFolders();
+      while (driveFolders.hasNext()) {
+        try {
+          driveFolderNameSet[driveFolders.next().getName().toLowerCase()] = true;
+        } catch (eInner) {
+          // skip a single broken iteration step but keep iterating
+          continue;
+        }
+      }
+    } catch (e) {
+      report += '<p style="color:red;">getFolders() FAILED on this school: ' + (e.message || e) + ' \u2014 likely shared-with-me list permission gap. Run <b>Email Tools &gt; Debug: Drive Auth</b>.</p>';
+      continue;
     }
 
     var schoolTeachers = teachers.filter(function(t) { return t.campus === school.displayName; });
@@ -1719,7 +1794,7 @@ function debugDriveAccess() {
     }
     report += '<p style="color:green;">Found: <b>' + schoolFolder.getName() + '</b></p>';
 
-    // List teacher folders (v2.4.2: wrap getFolders — same shared-with-me failure surface)
+    // List teacher folders (v2.4.2/v2.4.3: wrap every iteration step)
     report += '<ul>';
     var tfs;
     try {
@@ -1729,19 +1804,44 @@ function debugDriveAccess() {
       continue;
     }
     var count = 0;
-    while (tfs.hasNext() && count < 50) {
-      var tf = tfs.next();
+    var loopBroke = false;
+    while (count < 50 && !loopBroke) {
+      var tfHasNext;
+      try { tfHasNext = tfs.hasNext(); }
+      catch (e) {
+        report += '<li style="color:red;">tfs.hasNext() FAILED: ' + (e.message || e) + '</li>';
+        loopBroke = true; break;
+      }
+      if (!tfHasNext) break;
+      var tf;
+      try { tf = tfs.next(); }
+      catch (e) { report += '<li style="color:red;">tfs.next() FAILED: ' + (e.message || e) + '</li>'; count++; continue; }
       count++;
       // Count PDFs matching the date pattern
       var pdfMatches = [];
-      var files = tf.getFiles();
+      var files;
+      try { files = tf.getFiles(); }
+      catch (e) {
+        report += '<li>' + tf.getName() + ' <span style="color:red;">- tf.getFiles() FAILED: ' + (e.message || e) + '</span></li>';
+        continue;
+      }
       var fileCount = 0;
-      while (files.hasNext() && fileCount < 20) {
-        var f = files.next();
-        fileCount++;
-        var fn = f.getName();
-        if (fn.indexOf(pdfPattern) !== -1 && fn.toUpperCase().indexOf('.PDF') !== -1) {
-          pdfMatches.push(fn);
+      var fileLoopBroke = false;
+      while (fileCount < 20 && !fileLoopBroke) {
+        var fHasNext;
+        try { fHasNext = files.hasNext(); }
+        catch (e) { fileLoopBroke = true; break; }
+        if (!fHasNext) break;
+        try {
+          var f = files.next();
+          fileCount++;
+          var fn = f.getName();
+          if (fn.indexOf(pdfPattern) !== -1 && fn.toUpperCase().indexOf('.PDF') !== -1) {
+            pdfMatches.push(fn);
+          }
+        } catch (e) {
+          // skip a single broken file iteration step
+          fileCount++;
         }
       }
       var pdfInfo = pdfMatches.length > 0
