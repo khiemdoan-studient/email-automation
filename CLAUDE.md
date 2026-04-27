@@ -16,7 +16,9 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.3.1**: Tightening + perf. **`lookupByName`** smart-prefix match closes the v2.3.0 narrow edge (`Liam` vs `Lisa` no longer collides). **School folder caching** across validation + per-teacher loops eliminates ~50% of redundant Drive API calls. **Parent repo `CLAUDE.md` Cross-project dependencies row** corrected (was stale — listed wrong column names; now matches the actual 12-col `All Teacher Metrics` schema).
 
-**v2.4.0 (current)**: Improved "No data available" message. Was ambiguous one-liner; now a yellow callout that distinguishes upstream-data-gap (most common) vs roster-mismatch vs pipeline-not-yet-run. Pairs with parent repo's v3.32.0 fix that aligns email's `Avg Minutes` with WPD's displayed value (FastMath-inclusive aggregation).
+**v2.4.0**: Improved "No data available" message. Was ambiguous one-liner; now a yellow callout that distinguishes upstream-data-gap (most common) vs roster-mismatch vs pipeline-not-yet-run. Pairs with parent repo's v3.32.0 fix that aligns email's `Avg Minutes` with WPD's displayed value (FastMath-inclusive aggregation).
+
+**v2.4.1 (current)**: Drive error hardening + diagnostic improvements. Wraps every Drive surface call in `createDraftForTeacher` with named try/catch (now any "Service error: Drive" identifies the specific phase + file + size). Stale-Folder-cache detection via `getId()` probe drops cache entries that became invalid mid-run. Dropped `getAs(MimeType.PDF)` coercion (was a no-op that added a Drive call + failure surface). New `withDriveRetry(fn)` helper retries once after 2s on transient 5xx / rate-limit blips. Pairs with parent repo v3.33.0 which extends raw_data injection to all 5 connector apps (MA, Lalilo, Zearn, Freckle, MobyMax).
 
 ## Architecture
 

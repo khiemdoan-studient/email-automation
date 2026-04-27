@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.4.1] - 2026-04-27
+
+### Fixed — "Exception: Service error: Drive" during email generation
+
+Production user reported the bare error message "Exception: Service error: Drive" while running `Email Tools > Generate My Email Drafts` on the v2.4.0 deploy. The error message had no teacher / file context, making it impossible to triage.
+
+Investigation (parallel Sonnet agent) identified 3 likely causes:
+1. **Stale cached Folder reference** — `schoolFolderCache` from v2.3.1 stores `Folder` objects across the run; if a folder is moved/renamed/deleted mid-run, subsequent calls on the cached reference throw "Service error: Drive". The defensive fallback only fired on falsy cache values, not on stale `Folder` objects.
+2. **`getAs(MimeType.PDF)` coercion failure** — calling `getAs(MimeType.PDF)` on an already-PDF File is normally a no-op, but adds a Drive API call AND a failure surface. The PDF generator (parent repo v3.31.0+) produces files that occasionally trip this if the size or encoding shifts.
+3. **Drive rate limit** — the per-user budget is 1000 reads / 100 sec. With 30+ teachers and 4 Drive calls per teacher worst-case, the budget can exhaust mid-run, surfacing as transient "Service error: Drive".
+
+### Changes (`Code.gs`)
+
+1. **`createDraftForTeacher`** — every Drive surface call (school folder lookup, teacher folder lookup, PDF iteration, createDraft) now wrapped in a named try/catch. Any "Service error: Drive" now identifies the specific phase + file + size in the per-teacher error string. Closes the diagnostic gap.
+
+2. **Stale-Folder-cache detection** — cache hit is now validated via a cheap `getId()` probe; on throw, the cache entry is dropped and a fresh lookup runs. Fixes cause #1.
+
+3. **Drop the `getAs(MimeType.PDF)` coercion** — pass the `File` object directly to `createDraft`. `GmailApp.createDraft` accepts a File without explicit MIME coercion. One fewer Drive call AND eliminates the cause #2 failure surface.
+
+4. **`withDriveRetry(fn)` helper** — wraps the `GmailApp.createDraft` call in a one-retry-after-2s helper that catches transient errors matching `/Service error|Rate Limit|Internal error|Backend Error|temporarily/i`. Real failures still propagate. Closes cause #3 for transient blips.
+
+### Pairs with parent repo v3.33.0
+
+The parent repo (`Studient Excel Automation`) ships v3.33.0 simultaneously, which extends v3.32.0's FastMath-only raw_data injection to ALL 5 connector apps (MA, Lalilo, Zearn, Freckle, MobyMax). When the next pipeline cron runs, the email's "All Teacher Metrics" tab will reflect all 5 apps' minutes — same as the WPD's `Avg Minutes` column. **Most teachers (~80%) will see their email Avg Minutes jump significantly** (mean +32.6 mins, max +112.3 in week 2026-04-20 quantification).
+
+### Action required after deploy
+
+1. Paste latest `Code.gs` into Apps Script editor → save → reload spreadsheet tab
+2. Re-test "Email Tools > Generate My Email Drafts" on the same week that previously errored
+3. If the error returns, the new error string will identify the specific phase + file (e.g., "createDraft failed for 'Shanatae Taylor - 2026-04-20 - 2026-04-26.pdf' (XXXX bytes): <real error>")
+4. Wait for next parent-repo pipeline run for full v3.33.0 effect on metrics values
+
+### Known limitations
+
+- The diagnostic improvements catch errors at named boundaries but don't fix RATE LIMIT exhaustion — for very large IM rosters (40+ teachers), the Drive 1000-reads/100-sec budget can still trigger transient "Service error: Drive". The retry-once helper handles single 5xx blips; persistent rate-limit errors still surface but with more context. Future work: pre-resolve teacher folders + PDFs before the per-teacher loop (mirrors v2.3.1 schoolFolderCache) to halve Drive call count.
+
 ## [v2.4.0] - 2026-04-27
 
 ### Changed — Improved "No data available" message (`Code.gs:~703`)

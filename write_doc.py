@@ -25,12 +25,23 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.4.0)\n"
+    "User Guide & Documentation (v2.4.1)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.4.1\n"
+    "Drive error hardening. Some IMs hit a generic 'Exception: Service error: Drive' "
+    "during draft generation. The new code wraps every Drive call with named errors "
+    "(you'll now see the exact PDF + size if any single draft fails), detects stale "
+    "folder references (auto-recovers without breaking the run), retries once on "
+    "transient 5xx blips, and drops a redundant PDF coercion that was a failure "
+    "surface. Pairs with parent repo v3.33.0 which extends 'Avg Minutes' to include "
+    "Math Academy / Lalilo / Zearn / Freckle / MobyMax minutes (when those apps' "
+    "data has synced) \u2014 most teachers' Avg Minutes will jump significantly after "
+    "the next pipeline run (mean +32 mins per teacher in our test week).\n"
     "\n"
     "What\u2019s New in v2.4.0\n"
     "Two production bugs fixed. First, when a teacher had no metrics for the selected "
@@ -240,6 +251,10 @@ text = (
     "\n"
     "Version History\n"
     "\n"
+    "v2.4.1 \u2014 April 27, 2026\n"
+    "\u2022 Drive error hardening: named errors + stale-cache detection + retry-once + drop redundant PDF coercion\n"
+    "\u2022 Pairs with parent repo v3.33.0 (raw_data now includes ALL 5 connector apps)\n"
+    "\n"
     "v2.4.0 \u2014 April 27, 2026\n"
     "\u2022 Improved 'No data available' message (3 possible causes spelled out)\n"
     "\u2022 Pairs with parent repo v3.32.0: email Avg Minutes now matches WPD admin (FastMath-inclusive)\n"
@@ -327,7 +342,7 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation (v2.4.0)")
+sub_end = sub_start + len("User Guide & Documentation (v2.4.1)")
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -340,6 +355,7 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    "What\u2019s New in v2.4.1",
     "What\u2019s New in v2.4.0",
     "What\u2019s New in v2.3.1",
     "What\u2019s New in v2.3",
@@ -425,6 +441,7 @@ for tab in [
         )
 
 for ver in [
+    "v2.4.1 \u2014 April 27, 2026",
     "v2.4.0 \u2014 April 27, 2026",
     "v2.3.1 \u2014 April 27, 2026",
     "v2.3.0 \u2014 April 26, 2026",

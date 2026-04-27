@@ -636,55 +636,119 @@ function normalizeFolderName(name) {
     .trim();
 }
 
+/**
+ * v2.4.1: Wraps a Drive surface call with retry-once on transient errors.
+ * Apps Script's Drive API occasionally returns "Service error: Drive" on
+ * 5xx blips or rate-limit surges (1000 reads/100sec/user). One retry after
+ * a 2s sleep clears most transient cases without raising real failures.
+ */
+function withDriveRetry(fn) {
+  try {
+    return fn();
+  } catch (e) {
+    var msg = String(e && e.message || e);
+    if (/Service error|Rate Limit|Internal error|Backend Error|temporarily/i.test(msg)) {
+      Utilities.sleep(2000);
+      return fn();  // retry once; if this throws again, let it propagate
+    }
+    throw e;
+  }
+}
+
 function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache) {
   var schoolFolderName = schoolFolderMap[teacher.campus] || '';
-  // Try cache first (eliminates redundant Drive API call vs fresh lookup); fall back
-  // defensively if cache miss.
-  var schoolFolder = (schoolFolderCache && schoolFolderCache[teacher.campus]) || null;
+
+  // v2.4.1: Cache lookup with stale-reference detection. A cached Folder
+  // reference can go stale if the folder was moved/renamed/deleted between
+  // pre-resolution and per-teacher use. A cheap getId() probe validates the
+  // reference; on failure we drop the cache entry and fall through to a
+  // fresh lookup. Closes the "Service error: Drive" path from stale cache.
+  var schoolFolder = null;
+  if (schoolFolderCache && schoolFolderCache[teacher.campus]) {
+    try {
+      schoolFolderCache[teacher.campus].getId();
+      schoolFolder = schoolFolderCache[teacher.campus];
+    } catch (cacheErr) {
+      delete schoolFolderCache[teacher.campus];
+    }
+  }
   if (!schoolFolder) {
-    schoolFolder = findFolderByName(schoolFolderName, rootFolder);
-    if (!schoolFolder) schoolFolder = findFolderByName(teacher.campus, rootFolder);
+    try {
+      schoolFolder = findFolderByName(schoolFolderName, rootFolder);
+      if (!schoolFolder) schoolFolder = findFolderByName(teacher.campus, rootFolder);
+    } catch (e) {
+      return { success: false, error: 'school folder lookup failed for "' + schoolFolderName + '" / "' + teacher.campus + '": ' + (e.message || e) };
+    }
   }
   if (!schoolFolder) return { success: false, error: 'School folder not found: tried "' + schoolFolderName + '" and "' + teacher.campus + '"' };
 
   // Try teacher.folderName first (FirstName_LastName), then "FirstName LastName" (space)
-  var teacherFolder = findFolderByName(teacher.folderName, schoolFolder);
-  if (!teacherFolder) teacherFolder = findFolderByName(teacher.name, schoolFolder);
+  var teacherFolder = null;
+  try {
+    teacherFolder = findFolderByName(teacher.folderName, schoolFolder);
+    if (!teacherFolder) teacherFolder = findFolderByName(teacher.name, schoolFolder);
+  } catch (e) {
+    return { success: false, error: 'teacher folder lookup failed for "' + teacher.folderName + '" / "' + teacher.name + '": ' + (e.message || e) };
+  }
   if (!teacherFolder) return { success: false, error: 'Teacher folder not found: tried "' + teacher.folderName + '" and "' + teacher.name + '"' };
 
   // NEW FORMAT: PDFs sit directly in teacher folder, named like
   //   "Rebecca Reynolds - 2026-04-06 - 2026-04-12.pdf"
   // Match by date-range pattern "YYYY-MM-DD - YYYY-MM-DD" within filename.
   var pdfPattern = dateRangeToPdfPattern(dateRange);
-  var files = teacherFolder.getFiles();
   var summaryPdf = null;
-  while (files.hasNext()) {
-    var file = files.next();
-    var fileName = file.getName();
-    if (fileName.indexOf(pdfPattern) !== -1 && fileName.toUpperCase().indexOf('.PDF') !== -1) {
-      summaryPdf = file; break;
+  try {
+    var files = teacherFolder.getFiles();
+    while (files.hasNext()) {
+      var file = files.next();
+      var fileName = file.getName();
+      if (fileName.indexOf(pdfPattern) !== -1 && fileName.toUpperCase().indexOf('.PDF') !== -1) {
+        summaryPdf = file; break;
+      }
     }
-  }
 
-  // Backward compat: old structure (date subfolder + 00_SUMMARY.PDF)
-  if (!summaryPdf) {
-    var dateFolder = findFolderByName(dateRange, teacherFolder);
-    if (dateFolder) {
-      var oldFiles = dateFolder.getFiles();
-      while (oldFiles.hasNext()) {
-        var f = oldFiles.next();
-        var name = f.getName().toUpperCase();
-        if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.endsWith('.PDF')) {
-          summaryPdf = f; break;
+    // Backward compat: old structure (date subfolder + 00_SUMMARY.PDF)
+    if (!summaryPdf) {
+      var dateFolder = findFolderByName(dateRange, teacherFolder);
+      if (dateFolder) {
+        var oldFiles = dateFolder.getFiles();
+        while (oldFiles.hasNext()) {
+          var f = oldFiles.next();
+          var name = f.getName().toUpperCase();
+          if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.endsWith('.PDF')) {
+            summaryPdf = f; break;
+          }
         }
       }
     }
+  } catch (e) {
+    return { success: false, error: 'PDF lookup failed for ' + teacher.name + ': ' + (e.message || e) };
   }
 
   if (!summaryPdf) return { success: false, error: 'PDF not found for "' + pdfPattern + '" in ' + teacher.name + ' folder' };
 
+  // v2.4.1: Pass the File directly to createDraft (no getAs() — it's already a PDF;
+  // getAs(MimeType.PDF) was a no-op coercion that added a Drive call AND a failure
+  // surface). Wrap the call in a named try/catch so any "Service error: Drive" now
+  // identifies the specific PDF + size + Gmail/Drive operation that failed.
+  // withDriveRetry handles transient 5xx / rate-limit blips (one retry after 2s).
   var body = template.buildBody(teacher, metrics, winners);
-  GmailApp.createDraft(teacher.email, template.subject, '', { htmlBody: body, attachments: [summaryPdf.getAs(MimeType.PDF)] });
+  try {
+    withDriveRetry(function() {
+      GmailApp.createDraft(teacher.email, template.subject, '', {
+        htmlBody: body,
+        attachments: [summaryPdf]
+      });
+    });
+  } catch (e) {
+    var pdfName = '<unknown>';
+    var pdfSize = '<unknown>';
+    try { pdfName = summaryPdf.getName(); pdfSize = summaryPdf.getSize(); } catch (_) {}
+    return {
+      success: false,
+      error: 'createDraft failed for "' + pdfName + '" (' + pdfSize + ' bytes): ' + (e.message || e)
+    };
+  }
   return { success: true };
 }
 
