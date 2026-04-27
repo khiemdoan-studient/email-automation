@@ -2,6 +2,85 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.3.0] - 2026-04-26
+
+### Changed — 4/27 template omits trend alert
+
+`generateLastWeekFinishLineBody()` (`Code.gs:~1320`) no longer renders `buildTrendAlert(metricsArray)`. End-of-year context made the green/yellow/red coaching message feel out of place. All 12 other templates retain their trend alert. Verified via diff: only the 4/27 path changed.
+
+### Changed — Default template (Code.gs:~213)
+
+When Config Template is empty, default is now `'4/27: Last Week of Motivention'` (was `'Week 6: Culture & Shoutouts'`). End-of-year cycle handoff. Update at next cycle (or remove default in a future patch).
+
+### Changed — `lookupByName` last-name fallback (Code.gs:~325)
+
+Tightened: the single-last-name fallback now ALSO requires the first letter of the first name to match. Prevents cross-teacher data leak when two teachers share a last name and only one has metrics for the selected week.
+
+Edge case still possible: same-last-name + same-first-letter (e.g., Lisa vs Liam Smith) — narrow window but acknowledged in code comment.
+
+### Added — Concurrency guard (Code.gs:~200)
+
+`generateDraftsForCurrentUser()` now wraps its body in `LockService.getDocumentLock().tryLock(0)` + `try`/`finally`. If the menu fires twice (double-click, accidental re-run), the second invocation shows an "Already Running" alert instead of creating duplicate Gmail drafts. Lock always released in finally.
+
+### Added — TEMPLATE_NAMES auto-derived (Code.gs:~86)
+
+`TEMPLATE_NAMES = Object.keys(TEMPLATES)` instead of a parallel hardcoded array. Eliminates the class of bug where the dropdown is missing a template that's actually registered (or vice versa). V8 preserves insertion order, so dropdown order matches `TEMPLATES` literal order.
+
+### Fixed — Defensive null guards in `lookupByName` (Code.gs:~315)
+
+If `firstName`, `lastName`, or `fullName` is empty/null/undefined, returns null instead of throwing on `.toLowerCase()`. Earlier the per-teacher try/catch caught these but they polluted the error report.
+
+### Fixed — `getTeacherMetricsForWeek` 'undefined' string (Code.gs:~465)
+
+Skips rows where the teacher cell is null. Previously `String(null).trim().toLowerCase()` produced the literal string `'undefined'` which polluted the metrics map (harmless but messy).
+
+### Fixed — Error message truncation (Code.gs:~298)
+
+The completion alert caps the error string at 1500 chars (was unbounded). For 50-teacher runs with many errors, prevents alert overflow past the 4096-char Apps Script limit. Full error list dumped to `console.log` for debugging.
+
+### Fixed — `endsWith('.PDF')` (Code.gs:~635)
+
+Old PDF format fallback now uses `name.endsWith('.PDF')` instead of `name.indexOf('.PDF') === name.length - 4`. Both work in practice but the new form is the conventional safe pattern.
+
+### Fixed — Inner file-count cap in `checkDriveFolderExists` (Code.gs:~430)
+
+The inner `getFiles()` loop now caps at 50 files per teacher folder. Defends against teacher folders with thousands of files (would have stalled the validation).
+
+### Fixed — `debugDriveAccess` teacher cap raised 15 → 50 (Code.gs:~1305)
+
+Matches `checkDriveFolderExists`. IMs with 5+ schools / 30+ teachers per school now see a complete diagnostic.
+
+### Fixed — `checkTeacherFolders` O(N×M) → O(N) (Code.gs:~1220)
+
+Drive folder names now live in a Set-style object literal (`{name: true}`) instead of an Array iterated with `indexOf`. Diagnostic-only, but cheaper.
+
+### Removed — Dead `CONFIG.TEACHER_DATA_SHEET_NAME` (Code.gs:~16)
+
+Was defined but never referenced. Deleted.
+
+### Docs
+
+- CLAUDE.md fixed 3 stale references: "10 templates / Week 0-8 + Wrap Up" → "13 templates including 4/20 + 4/27 templates"; "All 13 school folders" → unhardcoded count
+- write_doc.py bumped to v2.3.0 with version-history entry
+- Google Doc user guide pushed live
+
+### Audit Coverage
+
+This release was driven by a `/go_plan --push` audit. Three Sonnet subagents fired in parallel scanned: (a) Code.gs for bugs/perf/dead code/error handling/edge cases, (b) parent repo email_winners.py schema vs Code.gs column expectations, (c) doc consistency (CHANGELOG / CLAUDE.md / write_doc.py / Code.gs). Schema cross-check: aligned. Doc audit found 3 stale refs (now fixed). Code audit produced 19 findings (13 auto-fixed as behavior-preserving; 4 fixed with explicit user approval as behavior-changing; 2 deferred as larger refactors). Live Apps Script confirmed in sync with repo HEAD pre-fix.
+
+### Known limitations carried into v2.3.0
+
+- **Folder caching across validation + per-teacher loops** is duplicated work (~50% wasted Drive API calls). Worth a future refactor.
+- **`'Lisa' vs 'Liam' Smith` edge case** in lookupByName: same-last-name + same-first-letter still ambiguous. Documented in code; can be tightened further if a real conflict is observed.
+- **Default template** still hardcoded; a future patch could derive default from the most recent week_start in Available Weeks instead.
+
+### Action required after deploy
+
+After pasting Code.gs into Apps Script:
+1. Verify `Email Tools` menu still has all items (no syntax error broke `onOpen`)
+2. Run **Email Tools > Refresh Template Dropdown** (since TEMPLATE_NAMES is now auto-derived, this just confirms the dropdown matches; no functional change)
+3. Test draft generation on one teacher with the 4/27 template and verify the trend box is GONE while the data table + update note + 3 updates are still present
+
 ## [v2.2.0] - 2026-04-26
 
 ### Added — "4/27: Last Week of Motivention" template

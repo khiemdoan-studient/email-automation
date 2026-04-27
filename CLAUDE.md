@@ -4,13 +4,15 @@
 
 Google Apps Script email automation system that generates weekly Gmail drafts for teachers with performance metrics tables and PDF attachments. Built for non-technical Implementation Managers (IMs) to run via a custom menu in Google Sheets.
 
-**v2.0**: IMs can select any available week and any email template (Week 0-8 + Wrap Up) before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks.
+**v2.0**: IMs can select any available week and any email template before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks. (Originally launched with 10 templates: Week 0-8 + Wrap Up. Now 13 — see version history below.)
 
 **v2.0.3**: Bulletproof root folder lookup via folder ID + comprehensive Drive diagnostic. Drive structure verified against live production Drive (April 2026).
 
 **v2.1.0**: Added `Avg Lessons/Student` column to the shared teacher metrics table (cascades to every template). Added 2 new "Finishing Strong" templates (`4/20 Jasper` and `4/20 Math+ELA`) bringing the total to 12. Added `setupTemplateDropdown()` menu item to sync the Config Template dropdown with `TEMPLATE_NAMES` without manual sheet editing.
 
-**v2.2.0 (current)**: Added end-of-year `4/27: Last Week of Motivention` template covering FastMath +200 bonus reminder, May 8 store close, May 26 raffle, and AIM Launches Weeks 8-11. Total templates: 13. Per source intent, this template OMITS the standard "Your Actions This Week" / "Weekly Challenge" / "Reflection Prompt" sections — it's a 3-update + one-line-focus format.
+**v2.2.0**: Added end-of-year `4/27: Last Week of Motivention` template covering FastMath +200 bonus reminder, May 8 store close, May 26 raffle, and AIM Launches Weeks 8-11. Total templates: 13. Per source intent, this template OMITS the standard "Your Actions This Week" / "Weekly Challenge" / "Reflection Prompt" sections — it's a 3-update + one-line-focus format.
+
+**v2.3.0 (current)**: Audit-driven hardening release. **4/27 template now also omits `buildTrendAlert`** (end-of-year context made coaching message out of place). **Default template** changed from Week 6 to 4/27. **`lookupByName`** last-name fallback tightened (requires first-letter match) to prevent cross-teacher data leak. **LockService** guard added to `generateDraftsForCurrentUser` to prevent duplicate drafts on double-click. **`TEMPLATE_NAMES` now auto-derived** from `TEMPLATES` (`Object.keys`) — drift impossible. Plus 8+ defensive fixes (null guards, error truncation, file-count caps, dead code removal, diagnostic cap bumps).
 
 ## Architecture
 
@@ -41,7 +43,7 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
 1. **Config** (A1:B4)
    - `Date Range` - dropdown from Available Weeks tab (e.g., `2026-03-30_to_2026-04-05`)
    - `Root Folder Name` - informational only; code uses hardcoded constants
-   - `Template` - dropdown of 10 templates (Week 0-8 + Wrap Up)
+   - `Template` - dropdown of 13 templates (Week 0-8, Wrap Up, 4/20 Jasper, 4/20 Math+ELA, 4/27 Last Week of Motivention). Refresh via `Email Tools > Refresh Template Dropdown` after Code.gs changes.
 
 2. **School-IM Mapping** (A1:C11)
    - Column A: School Folder Name (legacy underscored form — kept for backward compat)
@@ -121,7 +123,7 @@ Bruna and Mark's Schools - Weekly Report/   <- ROOT_FOLDER_NAME / ROOT_FOLDER_ID
 | Wrap Up: Celebrate Wins | Celebrating your students' wins... | **Yes** (placeholder) |
 | 4/20 Jasper: Finishing Strong | Data drop: What's changing this week (and why it matters) | No |
 | 4/20 Math+ELA: Finishing Strong | Data drop: What's changing this week (and why it matters) | No |
-| 4/27: Last Week of Motivention | Data crunch & point calculation complete: (+ 3 non-boring updates...) | No |
+| 4/27: Last Week of Motivention | Data crunch & point calculation complete: (+ 3 non-boring updates...) | No (also omits **trend alert** as of v2.3.0) |
 
 ### Shared Components
 - `buildGreeting(teacher)` - "Hi {firstName},"
@@ -221,7 +223,7 @@ Use this first when "Drive folders NOT FOUND" appears.
 Run **Email Tools > Debug: Drive Access**. The report will show:
 - Whether `ROOT_FOLDER_ID` lookup succeeded
 - Whether `ROOT_FOLDER_NAME` lookup succeeded
-- All 13 school folders visible under root
+- All school folders visible under root (count varies; see Drive Folder Structure section above)
 - For each of your schools: teacher folders + PDF match status
 
 Most common causes:

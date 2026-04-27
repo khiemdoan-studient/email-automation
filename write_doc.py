@@ -25,12 +25,20 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.2.0)\n"
+    "User Guide & Documentation (v2.3.0)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.3\n"
+    "Audit-driven hardening release. The 4/27 template now also drops the green/yellow/red "
+    "trend alert box (felt out of place at end of year). The default template (when Config "
+    "is unset) is now 4/27 \u2014 update at the next cycle. Behind the scenes: a LockService "
+    "guard prevents duplicate Gmail drafts if you accidentally click Generate twice; the "
+    "name-matching logic is tighter so two teachers sharing a last name no longer risk "
+    "swapped data.\n"
     "\n"
     "What\u2019s New in v2.2\n"
     "Added the end-of-year Last Week of Motivention template (4/27). It covers the FastMath "
@@ -215,6 +223,14 @@ text = (
     "\n"
     "Version History\n"
     "\n"
+    "v2.3.0 \u2014 April 26, 2026\n"
+    "\u2022 4/27 template now omits the trend alert (context-appropriate)\n"
+    "\u2022 Default template changed to 4/27 Last Week of Motivention\n"
+    "\u2022 Tightened name-matching to prevent cross-teacher data swaps when last names match\n"
+    "\u2022 Added LockService double-click guard \u2014 second click shows \u201cAlready Running\u201d alert\n"
+    "\u2022 TEMPLATE_NAMES now auto-derived from TEMPLATES \u2014 dropdown can\u2019t drift out of sync\n"
+    "\u2022 Defensive null guards, error message truncation, dead code removal, diagnostic cap bumps\n"
+    "\n"
     "v2.2.0 \u2014 April 26, 2026\n"
     "\u2022 Added 4/27: Last Week of Motivention template \u2014 end-of-year format with FastMath bonus, store close, raffle drawing, and Weeks 8-11 AIM Launches\n"
     "\u2022 No Actions / Weekly Challenge / Reflection Prompt sections in this template by design \u2014 just the 3 updates and a one-line Persistence focus\n"
@@ -285,7 +301,7 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation (v2.2.0)")
+sub_end = sub_start + len("User Guide & Documentation (v2.3.0)")
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -298,6 +314,7 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    "What\u2019s New in v2.3",
     "What\u2019s New in v2.2",
     "What\u2019s New in v2.1",
     "What\u2019s New in v2.0",
@@ -380,6 +397,7 @@ for tab in [
         )
 
 for ver in [
+    "v2.3.0 \u2014 April 26, 2026",
     "v2.2.0 \u2014 April 26, 2026",
     "v2.1.1 \u2014 April 17, 2026",
     "v2.1.0 \u2014 April 17, 2026",

@@ -12,9 +12,6 @@ var CONFIG = {
   READING_TEACHERS_SHEET_NAME: "Reading Teachers",
   AVAILABLE_WEEKS_SHEET_NAME: "Available Weeks",
 
-  // Legacy single-week tab (backward compat)
-  TEACHER_DATA_SHEET_NAME: "Teacher Metrics",
-
   // Column indices in Teacher Emails sheet (0-indexed)
   CAMPUS_COL: 2,           // Column C: Campus
   TEACHER_FIRST_COL: 24,   // Column Y: Teacher 1 First Name
@@ -82,22 +79,11 @@ var TEMPLATES = {
   }
 };
 
-// Template names list for dropdown validation
-var TEMPLATE_NAMES = [
-  'Week 0: Data',
-  'Week 1: Goals & Monitoring',
-  'Week 2: Tech Hygiene',
-  'Week 3: Micro-Coaching',
-  'Week 4: Diagnosing Habits',
-  'Week 5: Re-Engagement',
-  'Week 6: Culture & Shoutouts',
-  'Week 7: I\'m Stuck Protocol',
-  'Week 8: Growth Mindset',
-  'Wrap Up: Celebrate Wins',
-  '4/20 Jasper: Finishing Strong',
-  '4/20 Math+ELA: Finishing Strong',
-  '4/27: Last Week of Motivention'
-];
+// Template names list for dropdown validation.
+// Derived from TEMPLATES so TEMPLATE_NAMES can never drift out of sync with the registry.
+// V8 Object.keys preserves insertion order for string keys, so the dropdown order matches
+// the order entries appear in the TEMPLATES literal above.
+var TEMPLATE_NAMES = Object.keys(TEMPLATES);
 
 // Manual aliases for teachers whose names differ between roster and metrics
 var NAME_ALIASES = {
@@ -213,6 +199,18 @@ function setTemplate() {
 // ============================================
 function generateDraftsForCurrentUser() {
   var ui = SpreadsheetApp.getUi();
+
+  // Re-entrancy guard: prevent duplicate Gmail drafts if the menu item fires twice
+  // (double-click, accidental re-run while a previous run is still going).
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    ui.alert('Already Running',
+      'Email generation is already in progress. Please wait for the current run to finish before starting another.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
   var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
@@ -220,7 +218,8 @@ function generateDraftsForCurrentUser() {
   var dateRange = getConfigValue('Date Range');
   if (!dateRange) return ui.alert('Error', 'Please set the Date Range first (Config tab or Email Tools menu).', ui.ButtonSet.OK);
 
-  var templateName = getConfigValue('Template') || 'Week 6: Culture & Shoutouts';
+  // Default template tracks the current end-of-year context. Update at each cycle handoff.
+  var templateName = getConfigValue('Template') || '4/27: Last Week of Motivention';
   if (!TEMPLATES[templateName]) {
     return ui.alert('Error', 'Unknown template: ' + templateName + '\n\nSet a valid template in Config or use Email Tools > Set Template.', ui.ButtonSet.OK);
   }
@@ -303,9 +302,21 @@ function generateDraftsForCurrentUser() {
   }
 
   var msg = 'Created ' + successCount + ' drafts. ' + errorCount + ' errors.';
-  if (errorCount > 0) { msg += ' | ERRORS: ' + errors.join(' | '); }
+  if (errorCount > 0) {
+    // Cap error string at ~1500 chars to stay well under Apps Script's 4096-char alert limit.
+    var errStr = errors.join(' | ');
+    if (errStr.length > 1500) {
+      errStr = errStr.substring(0, 1500) + '... (' + (errors.length) + ' total errors -- see logs for full list)';
+      console.log('Full error list:\n' + errors.join('\n'));
+    }
+    msg += ' | ERRORS: ' + errStr;
+  }
   msg += ' | Check your Gmail Drafts!';
   ui.alert('Complete', msg, ui.ButtonSet.OK);
+  } finally {
+    // Always release the lock, even if an unexpected exception bubbled up.
+    lock.releaseLock();
+  }
 }
 
 // ============================================
@@ -317,15 +328,21 @@ function generateDraftsForCurrentUser() {
  */
 function lookupByName(obj, firstName, lastName, fullName) {
   if (!obj) return null;
+  // Defensive null guards — malformed roster rows or edge cases shouldn't crash the per-teacher loop.
+  if (!fullName || !firstName || !lastName) return null;
   var full = fullName.toLowerCase().trim();
   if (obj[full]) return obj[full];
   var first = firstName.toLowerCase().trim().split(' ')[0];
   var last = lastName.toLowerCase().trim();
   var shortKey = first + ' ' + last;
   if (obj[shortKey]) return obj[shortKey];
+  // Last-name fallback: only accept a unique match if the first letter of the first
+  // name also matches. Prevents cross-teacher data leak when two teachers share a last
+  // name and only one is present in the metrics tab for this week.
+  var firstLetter = first.charAt(0);
   var lastMatches = [];
   for (var k in obj) {
-    if (k.endsWith(' ' + last)) lastMatches.push(k);
+    if (k.endsWith(' ' + last) && k.charAt(0) === firstLetter) lastMatches.push(k);
   }
   if (lastMatches.length === 1) return obj[lastMatches[0]];
   if (NAME_ALIASES[full] && obj[NAME_ALIASES[full]]) return obj[NAME_ALIASES[full]];
@@ -420,12 +437,15 @@ function checkDriveFolderExists(rootFolder, schools, dateRange) {
     var teacherFolders = schoolFolder.getFolders();
     var teacherCount = 0;
     var maxTeachersToCheck = 50;
+    var maxFilesPerTeacher = 50;  // safety cap on inner loop in case a teacher folder has thousands of files
     while (teacherFolders.hasNext() && teacherCount < maxTeachersToCheck) {
       var tf = teacherFolders.next();
       teacherCount++;
       var files = tf.getFiles();
-      while (files.hasNext()) {
+      var fileCount = 0;
+      while (files.hasNext() && fileCount < maxFilesPerTeacher) {
         var fn = files.next().getName();
+        fileCount++;
         if (fn.indexOf(pdfPattern) !== -1 && fn.toUpperCase().indexOf('.PDF') !== -1) {
           return true;
         }
@@ -460,9 +480,11 @@ function getTeacherMetricsForWeek(weekStart) {
     if (wsVal !== weekStart) continue;
 
     // Column B: Teacher, C: Grade, D-L: metrics
+    // Guard against null/undefined teacher cell (would otherwise become literal 'undefined' string).
+    if (data[i][1] == null) continue;
     var teacherName = String(data[i][1]).trim().toLowerCase();
     var grade = String(data[i][2]).trim();
-    if (!teacherName || teacherName === '') continue;
+    if (!teacherName || teacherName === '' || teacherName === 'undefined') continue;
 
     if (!metrics[teacherName]) metrics[teacherName] = [];
     metrics[teacherName].push({
@@ -627,7 +649,7 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
       while (oldFiles.hasNext()) {
         var f = oldFiles.next();
         var name = f.getName().toUpperCase();
-        if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.indexOf('.PDF') === name.length - 4) {
+        if (name.indexOf('00') === 0 && name.indexOf('SUMMARY') !== -1 && name.endsWith('.PDF')) {
           summaryPdf = f; break;
         }
       }
@@ -1311,11 +1333,12 @@ function generateLastWeekFinishLineBody(teacher, metricsArray, winnersArray) {
     buildGreeting(teacher),
 
     // Standard data block
+    // NOTE: 4/27 template intentionally omits buildTrendAlert per user request
+    // (end-of-year context — trend coaching out of place; data table + update note speak for themselves).
     '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
     buildMetricsTable(teacher, metricsArray),
     '<br>',
     buildColorLegend(),
-    buildTrendAlert(metricsArray),
 
     // Update note: minutes/lessons changed due to recent updates
     '<div style="background-color:#fff2cc;padding:12px;border-radius:6px;margin:12px 0;border:1px solid #ffe599;">',
@@ -1392,16 +1415,16 @@ function checkTeacherFolders() {
     }
 
     var driveFolders = schoolFolder.getFolders();
-    var driveFolderNames = [];
+    var driveFolderNameSet = {};  // O(1) lookup instead of O(N) array.indexOf
     while (driveFolders.hasNext()) {
-      driveFolderNames.push(driveFolders.next().getName().toLowerCase());
+      driveFolderNameSet[driveFolders.next().getName().toLowerCase()] = true;
     }
 
     var schoolTeachers = teachers.filter(function(t) { return t.campus === school.displayName; });
     report += '<ul>';
     for (var ti = 0; ti < schoolTeachers.length; ti++) {
       var t = schoolTeachers[ti];
-      if (driveFolderNames.indexOf(t.folderName.toLowerCase()) !== -1) {
+      if (driveFolderNameSet[t.folderName.toLowerCase()]) {
         report += '<li>Found folder for: ' + t.name + ' (<i>' + t.folderName + '</i>)</li>';
       } else {
         report += '<li style="color:red;"><b>MISSING</b> folder for: ' + t.name + ' (Expected: <b>' + t.folderName + '</b>)</li>';
@@ -1487,11 +1510,11 @@ function debugDriveAccess() {
     }
     report += '<p style="color:green;">Found: <b>' + schoolFolder.getName() + '</b></p>';
 
-    // List teacher folders
+    // List teacher folders (cap matches checkDriveFolderExists for consistency)
     report += '<ul>';
     var tfs = schoolFolder.getFolders();
     var count = 0;
-    while (tfs.hasNext() && count < 15) {
+    while (tfs.hasNext() && count < 50) {
       var tf = tfs.next();
       count++;
       // Count PDFs matching the date pattern
