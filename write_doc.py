@@ -25,12 +25,22 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.3.1)\n"
+    "User Guide & Documentation (v2.4.0)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.4.0\n"
+    "Two production bugs fixed. First, when a teacher had no metrics for the selected "
+    "week, the email used to show a vague 'No data available' line; now it explains "
+    "the three possible causes (upstream roster gap, name mismatch, pipeline not run) "
+    "so you know who to escalate to. Second, the data pipeline now matches the WPD "
+    "admin numbers: previously the email showed weekly_dashboard's base avg minutes "
+    "(35 for Shanatae Taylor week 4/20) while the admin WPD showed 123 (FastMath "
+    "connector minutes added). The pipeline now uses the SAME merged data, so the "
+    "numbers will be identical after the next pipeline run.\n"
     "\n"
     "What\u2019s New in v2.3.1\n"
     "Behind-the-scenes tightening release. The name-matching logic now correctly "
@@ -230,6 +240,10 @@ text = (
     "\n"
     "Version History\n"
     "\n"
+    "v2.4.0 \u2014 April 27, 2026\n"
+    "\u2022 Improved 'No data available' message (3 possible causes spelled out)\n"
+    "\u2022 Pairs with parent repo v3.32.0: email Avg Minutes now matches WPD admin (FastMath-inclusive)\n"
+    "\n"
     "v2.3.1 \u2014 April 27, 2026\n"
     "\u2022 Smart-prefix name matching (Liam vs Lisa Smith collision fixed)\n"
     "\u2022 School folder caching saves ~50% of Drive API calls per run\n"
@@ -313,7 +327,7 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation (v2.3.1)")
+sub_end = sub_start + len("User Guide & Documentation (v2.4.0)")
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -326,6 +340,7 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    "What\u2019s New in v2.4.0",
     "What\u2019s New in v2.3.1",
     "What\u2019s New in v2.3",
     "What\u2019s New in v2.2",
@@ -410,6 +425,7 @@ for tab in [
         )
 
 for ver in [
+    "v2.4.0 \u2014 April 27, 2026",
     "v2.3.1 \u2014 April 27, 2026",
     "v2.3.0 \u2014 April 26, 2026",
     "v2.2.0 \u2014 April 26, 2026",

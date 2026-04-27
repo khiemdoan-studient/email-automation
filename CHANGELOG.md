@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.4.0] - 2026-04-27
+
+### Changed — Improved "No data available" message (`Code.gs:~703`)
+
+When a teacher exists in the roster but has no row in "All Teacher Metrics" for the selected week, the email previously showed only:
+
+> *No data available for this week.*
+
+This was ambiguous — IMs couldn't tell whether the cause was (a) upstream SIS data gap, (b) name mismatch in roster vs BQ, or (c) pipeline hadn't run. Now the message renders as a yellow callout box with the 3 possible causes spelled out and a recommended diagnostic step (`Email Tools > Debug: Check Teacher Folders`).
+
+### Related — sibling repo fix shipping in parallel
+
+The "Shanatae Taylor showed 35 mins in email but 123 in admin" bug from production is fixed in the parent repo (`Studient Excel Automation` v3.32.0). The cause was that the email pipeline queried base `weekly_dashboard` directly while the admin/WPD displays values that include FastMath connector minutes injected during `_inject_fastmath_minutes()`. The parent repo now uses an in-memory aggregator over the already-merged `raw_data`, so the next time the pipeline runs (hourly cron `:07` or manual `./refresh_data.sh`), the email-automation "All Teacher Metrics" tab will show WPD-aligned values.
+
+No change to email-automation Code.gs's metric column count or schema — Apps Script consumes the same 12 columns; only the values inside `Avg Minutes` change.
+
+### Action required after deploy
+
+1. Paste latest Code.gs into Apps Script editor, save
+2. Reload spreadsheet tab
+3. Wait for next pipeline run (hourly `:07` or manual) to repopulate "All Teacher Metrics" with FastMath-included values
+4. Test draft for Shanatae Taylor (or any FastMath-active teacher) — should now show ~123 mins for week 2026-04-20 instead of 35
+
+### Known limitations
+
+- The improved "No data" message only fires if the teacher has ZERO rows for the selected week. If a teacher has SOME rows but the lookup fails (rare with v2.3.1 smart-prefix), the message won't show. That's the right behavior — those are different failure modes.
+- For Armi Laigue specifically: even after this release, she'll still show "No data available" because she's not in the upstream SIS at all. The new message guides IMs to the right team to escalate.
+
 ## [v2.3.1] - 2026-04-27
 
 ### Fixed — `lookupByName` last-name fallback (Code.gs:~339)

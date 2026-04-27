@@ -702,7 +702,22 @@ function buildGreeting(teacher) {
 
 function buildMetricsTable(teacher, metricsArray) {
   if (!metricsArray || metricsArray.length === 0) {
-    return '<p><em>No data available for this week.</em></p>';
+    // v2.4.0: clearer "no data" message — distinguishes upstream-data-gap from
+    // a name-mismatch issue. If a teacher exists in the roster but has no row
+    // in "All Teacher Metrics" for the selected week, the cause is one of:
+    //   (a) UPSTREAM: teacher not assigned as advisor in source SIS (e.g. JCSD
+    //       alpha_student.advisor) -- contact data team to update the SIS.
+    //   (b) ROSTER MISMATCH: teacher name spelled differently in roster vs
+    //       BigQuery -- usually fixed by adding a NAME_ALIASES entry in Code.gs.
+    //   (c) PIPELINE NOT RUN: data pipeline hasn't run yet for this week.
+    return '<div style="background-color:#fff3cd;padding:10px;border-radius:6px;border:1px solid #ffe699;margin:8px 0;">'
+      + '<p style="margin:0;"><em>No metrics rows found for this teacher for the selected week.</em></p>'
+      + '<p style="margin:4px 0 0 0;font-size:12px;color:#666;">'
+      + 'Possible causes: teacher missing from upstream roster (data team), name mismatch '
+      + 'between roster and BigQuery, or pipeline not yet run for this week. Run '
+      + '<strong>Email Tools &gt; Debug: Check Teacher Folders</strong> to confirm folder presence; '
+      + 'if folders exist but data is empty, the issue is upstream data, not email automation.'
+      + '</p></div>';
   }
   var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:640px;">';
   html += '<tr style="background-color:#f3f3f3;"><th style="padding:8px;">Teacher</th><th style="padding:8px;">Grade</th><th style="padding:8px;">Avg Active Days</th><th style="padding:8px;">Avg Minutes</th><th style="padding:8px;">Avg Lessons/Student</th></tr>';

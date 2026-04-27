@@ -14,7 +14,9 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.3.0**: Audit-driven hardening release. **4/27 template now also omits `buildTrendAlert`** (end-of-year context made coaching message out of place). **Default template** changed from Week 6 to 4/27. **`lookupByName`** last-name fallback tightened (requires first-letter match) to prevent cross-teacher data leak. **LockService** guard added to `generateDraftsForCurrentUser` to prevent duplicate drafts on double-click. **`TEMPLATE_NAMES` now auto-derived** from `TEMPLATES` (`Object.keys`) — drift impossible. Plus 8+ defensive fixes (null guards, error truncation, file-count caps, dead code removal, diagnostic cap bumps).
 
-**v2.3.1 (current)**: Tightening + perf. **`lookupByName`** smart-prefix match closes the v2.3.0 narrow edge (`Liam` vs `Lisa` no longer collides). **School folder caching** across validation + per-teacher loops eliminates ~50% of redundant Drive API calls. **Parent repo `CLAUDE.md` Cross-project dependencies row** corrected (was stale — listed wrong column names; now matches the actual 12-col `All Teacher Metrics` schema).
+**v2.3.1**: Tightening + perf. **`lookupByName`** smart-prefix match closes the v2.3.0 narrow edge (`Liam` vs `Lisa` no longer collides). **School folder caching** across validation + per-teacher loops eliminates ~50% of redundant Drive API calls. **Parent repo `CLAUDE.md` Cross-project dependencies row** corrected (was stale — listed wrong column names; now matches the actual 12-col `All Teacher Metrics` schema).
+
+**v2.4.0 (current)**: Improved "No data available" message. Was ambiguous one-liner; now a yellow callout that distinguishes upstream-data-gap (most common) vs roster-mismatch vs pipeline-not-yet-run. Pairs with parent repo's v3.32.0 fix that aligns email's `Avg Minutes` with WPD's displayed value (FastMath-inclusive aggregation).
 
 ## Architecture
 
