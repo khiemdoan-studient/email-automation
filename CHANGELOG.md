@@ -2,6 +2,103 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.5.2] - 2026-04-27
+
+### Post-mortem fix: AFMS production report (Aston Haughton + all-MISSING debug)
+
+An IM tested AFMS after v2.5.1 deployed and reported two issues. Investigation found BOTH were **PRE-EXISTING** bugs unrelated to v2.5.0/v2.5.1, but my verification process didn't catch them. v2.5.2 fixes both, plus adds tooling to prevent the class of bug.
+
+#### Issue 1 — Aston Haughton's email had no metrics table (yellow callout)
+
+**Root cause**: NAME MISMATCH between roster and BigQuery.
+- Roster (`Teacher Emails` tab + Drive folder + email address `haughtona@`): "Aston Haughton"
+- BigQuery / `All Teacher Metrics` tab: "**Anton** Haughton" (one-letter typo, present every week back to 2025-09-01)
+
+`lookupByName('Aston', 'Haughton', 'Aston Haughton')` correctly returned null per v2.3.1's cross-leak guard (refuses to match `'aston'` to `'anton'` even with shared last name). This bug has existed since the BQ data diverged — would have failed identically in v2.4.3 or any prior version. Surfaced now because AFMS wasn't tested earlier this morning.
+
+#### Issue 2 — `Debug: Check Teacher Folders` showed all 18 AFMS+Metro teachers as MISSING (red wall)
+
+**Root cause**: PRE-EXISTING bug in `checkTeacherFolders` (last touched v2.4.3, line 2231 of Code.gs).
+- Function searched for `t.folderName.toLowerCase()` → underscored form (e.g., `"aston_haughton"`)
+- Drive folders are SPACED (e.g., `"Aston Haughton"`, owner mark.katigbak)
+- Set lookup ALWAYS missed → every teacher reported MISSING
+
+This bug has existed since the new Drive folder structure rolled out (v2.0.3 era) but never surfaced because IMs primarily ran "Generate" (which uses search-API in v2.5.0+) rather than the diagnostic.
+
+### Comprehensive validation across ALL teachers
+
+New script `scripts/check_email_data.py` (Python port of Apps Script's `lookupByName` logic) validates the full roster ↔ metrics alignment. First run for week 2026-04-20:
+- **86 teachers in roster** (77 from `Teacher Emails`, 9 from `Reading Teachers`)
+- **75 unique names in metrics** for that week
+- **73 / 86 matched** — 85% baseline
+- **2 likely typos** (high confidence) → both added to NAME_ALIASES below
+- **10 true upstream gaps** — no token overlap with metrics, genuinely missing from BQ. Escalation list:
+  - JRES (Ridgeland Elementary): Akeisha Arnett, Aresiha Arnett, Armi Laigue, Egeria Bostick, Genesis Temonio, Kelly Ann Thornton, Kelly Thornton, Kumari Bolle, Linda Graves
+  - Reading Community: Kim Bell
+
+After applying the 2 aliases below, **75 / 86 matched (87%, +2)**. The remaining 11 (10 gaps + 1 garbage `#REF!` row) need data-team escalation.
+
+### Changes (`Code.gs`)
+
+1. **NAME_ALIASES additions (line 89)**:
+   - `'aston haughton': 'anton haughton'` — TEMPORARY until BQ data is corrected (AFMS)
+   - `'lakieshie jennings': 'lakieshie roberts-jennings'` — JHES, hyphenated last name
+   - Added comprehensive comment block explaining how to find new aliases (`scripts/check_email_data.py`)
+
+2. **`checkTeacherFolders` dual-name match (line ~2231)**: searches both `t.folderName.toLowerCase()` (underscored) AND `t.name.toLowerCase()` (spaced). Mirrors v2.4.2's school-folder-cache fix but for teacher subfolders.
+
+3. **NEW `checkTeacherNames()` function**: Apps Script port of the Python scanner. Iterates teachers, runs `lookupByName` against current week's metrics, shows matched count + unmatched table with token-overlap heuristic for each unmatched teacher. Run BEFORE generation when in doubt.
+
+4. **`onOpen()` menu**: added `Debug: Check Teacher Names (roster vs metrics)` as the first debug item (most actionable).
+
+5. **`buildMetricsTable` empty-state callout**: now directs IM to `Debug: Check Teacher Names` (the right tool for the metrics-gap class of issue), not `Debug: Check Teacher Folders` (which checks Drive, irrelevant here). The old wording was actively misleading.
+
+### New: `scripts/check_email_data.py` (~250 LOC)
+
+Standalone validator for pre-cycle alignment checks. Faithful Python port of `lookupByName` (including v2.3.1 cross-leak guard). Reports MATCHED / LIKELY-TYPO / POSSIBLE-TYPO / UPSTREAM-GAP and outputs a copy-paste-able NAME_ALIASES block. Usage:
+```
+python scripts/check_email_data.py --week 2026-04-20
+python scripts/check_email_data.py --week 2026-04-13 --strict   # exit 1 if mismatches
+```
+
+Replaces the post-mortem-only `verify_haughton.py` (deleted).
+
+### Test additions
+
+`runUnitTests` grew from 26 → **30 test cases**:
+- `aliases: Aston→Anton resolves via NAME_ALIASES`
+- `aliases: Lakieshie→Roberts-Jennings resolves via NAME_ALIASES`
+- `aliases: Lisa Kloesz→Kloetz still works`
+- `aliases: direct match wins over alias` (non-destructive verification)
+
+### Why my verification missed this (process retrospective)
+
+1. **Unit tests only covered pure functions**. Added 4 alias tests in v2.5.2 but more importantly added the **comprehensive Python scanner** that validates against REAL spreadsheet data (catches the data-shape regression that pure-function tests can't).
+2. **Manual test was N=1 school**. After v2.5.0 worked for "one school", I treated that as sufficient. Should have asked for 2-3 schools or run the scanner BEFORE shipping v2.5.1.
+3. **`checkTeacherFolders` debug tool itself had a bug** — its red-wall output amplified the perceived breakage. Fixed.
+4. **Process change going forward**: ALWAYS run `scripts/check_email_data.py` before shipping ANY v2.x change to email-automation. Add this to AI_INSTRUCTIONS.
+
+### Action required after deploy
+
+1. Paste latest `Code.gs` into Apps Script editor → Save → reload spreadsheet tab.
+2. Run **Email Tools → Run Unit Tests** — should report **30 passed, 0 failed**.
+3. Run **Email Tools → Debug: Check Teacher Names** — should show 75 / 86 matched, 11 unmatched (the upstream-gap teachers above).
+4. Run **Email Tools → Generate My Email Drafts** for AFMS — Haughton's email should now have his metrics table populated.
+
+### Files modified
+
+- `Code.gs` — 6 edits: NAME_ALIASES (+2 entries + comment block), onOpen menu (+1 item), `buildMetricsTable` callout text, `checkTeacherFolders` dual-name match, NEW `checkTeacherNames` function (~80 LOC), `runUnitTests` +4 cases
+- `scripts/check_email_data.py` — NEW (~250 LOC)
+- `CHANGELOG.md` — this entry
+- `CLAUDE.md` — v2.5.2 history line + lesson learned
+- `write_doc.py` — user-facing v2.5.2 summary
+
+### Verified
+
+- ✓ `node --check Code.gs`: SYNTAX OK
+- ✓ `node test_runner.js`: **30 / 30 passed**
+- ✓ `python scripts/check_email_data.py --week 2026-04-20` after aliases applied: **75 / 86 matched**
+
 ## [v2.5.1] - 2026-04-27
 
 ### Audit-driven hardening (post-v2.5.0 production bake)

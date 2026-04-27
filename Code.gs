@@ -85,9 +85,25 @@ var TEMPLATES = {
 // the order entries appear in the TEMPLATES literal above.
 var TEMPLATE_NAMES = Object.keys(TEMPLATES);
 
-// Manual aliases for teachers whose names differ between roster and metrics
+// Manual aliases for teachers whose names differ between roster and BigQuery metrics.
+// KEEP THIS LIST IN SYNC with scripts/check_email_data.py NAME_ALIASES.
+//
+// Each entry maps the LOWERCASED roster spelling to the LOWERCASED metrics-tab spelling.
+// Used by lookupByName() as a final fallback when direct match + last-name search fail.
+//
+// v2.5.2 additions:
+//   - 'aston haughton' → 'anton haughton': BQ data has a one-letter typo (Anton vs
+//     Aston) for the AFMS teacher. SIS source-of-truth uses Aston (matches Drive
+//     folder + email haughtona@). REMOVE THIS ENTRY once the SIS / BQ data is corrected.
+//   - 'lakieshie jennings' → 'lakieshie roberts-jennings': JHES teacher whose roster
+//     stores the un-hyphenated short name; metrics tab has the full hyphenated form.
+//     Permanent unless the roster is updated to match.
+//
+// To find new aliases needed: run `python scripts/check_email_data.py --week YYYY-MM-DD`.
 var NAME_ALIASES = {
-  'lisa kloesz': 'lisa kloetz'
+  'lisa kloesz': 'lisa kloetz',
+  'aston haughton': 'anton haughton',                  // v2.5.2: BQ typo (AFMS) — remove once fixed upstream
+  'lakieshie jennings': 'lakieshie roberts-jennings'   // v2.5.2: hyphenated last name (JHES)
 };
 
 // ============================================
@@ -98,6 +114,7 @@ function onOpen() {
     .createMenu('Email Tools')
     .addItem('Generate My Email Drafts', 'generateDraftsForCurrentUser')
     .addSeparator()
+    .addItem('Debug: Check Teacher Names (roster vs metrics)', 'checkTeacherNames')
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
     .addItem('Debug: Drive Access', 'debugDriveAccess')
     .addItem('Debug: Drive Auth (run if "Service error: Drive")', 'diagnoseDriveAuth')
@@ -1353,6 +1370,20 @@ function runUnitTests() {
   _testAssertEq(results, 'schoolMatches: name normalize underscore=space',
     _schoolFolderMatches(null, 'JRES_-_Ridgeland Elementary', null, 'JRES - Ridgeland Elementary'), true);
 
+  // --- v2.5.2: NAME_ALIASES resolution ---
+  // 'aston haughton' → 'anton haughton' (BQ typo, AFMS)
+  _testAssertEq(results, 'aliases: Aston→Anton resolves via NAME_ALIASES',
+    lookupByName({ 'anton haughton': 'ANTON_DATA' }, 'Aston', 'Haughton', 'Aston Haughton'), 'ANTON_DATA');
+  // 'lakieshie jennings' → 'lakieshie roberts-jennings' (hyphenated last name, JHES)
+  _testAssertEq(results, 'aliases: Lakieshie→Roberts-Jennings resolves via NAME_ALIASES',
+    lookupByName({ 'lakieshie roberts-jennings': 'LAKIESHIE_DATA' }, 'Lakieshie', 'Jennings', 'Lakieshie Jennings'), 'LAKIESHIE_DATA');
+  // 'lisa kloesz' → 'lisa kloetz' (long-standing alias)
+  _testAssertEq(results, 'aliases: Lisa Kloesz→Kloetz still works',
+    lookupByName({ 'lisa kloetz': 'KLOETZ_DATA' }, 'Lisa', 'Kloesz', 'Lisa Kloesz'), 'KLOETZ_DATA');
+  // Alias is non-destructive: direct match wins when both exist
+  _testAssertEq(results, 'aliases: direct match wins over alias',
+    lookupByName({ 'aston haughton': 'DIRECT', 'anton haughton': 'ALIAS' }, 'Aston', 'Haughton', 'Aston Haughton'), 'DIRECT');
+
   // Render
   var pass = 0, fail = 0;
   var lines = [];
@@ -1463,10 +1494,11 @@ function buildMetricsTable(teacher, metricsArray) {
     return '<div style="background-color:#fff3cd;padding:10px;border-radius:6px;border:1px solid #ffe699;margin:8px 0;">'
       + '<p style="margin:0;"><em>No metrics rows found for this teacher for the selected week.</em></p>'
       + '<p style="margin:4px 0 0 0;font-size:12px;color:#666;">'
-      + 'Possible causes: teacher missing from upstream roster (data team), name mismatch '
-      + 'between roster and BigQuery, or pipeline not yet run for this week. Run '
-      + '<strong>Email Tools &gt; Debug: Check Teacher Folders</strong> to confirm folder presence; '
-      + 'if folders exist but data is empty, the issue is upstream data, not email automation.'
+      + '<strong>Diagnostic:</strong> Run <strong>Email Tools &gt; Debug: Check Teacher Names</strong> '
+      + 'to compare this teacher\'s roster spelling against the metrics tab. '
+      + 'If the metrics tab has the teacher under a slightly different name (typo, hyphen, middle name), '
+      + 'ask Khiem to add a NAME_ALIASES entry in Code.gs. If the teacher is genuinely missing '
+      + 'from the metrics tab, they\'re missing from BigQuery for this week (escalate to data team).'
       + '</p></div>';
   }
   var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:640px;">';
@@ -2173,6 +2205,101 @@ function generateLastWeekFinishLineBody(teacher, metricsArray, winnersArray) {
 // ============================================
 // DIAGNOSTIC TOOL
 // ============================================
+/**
+ * v2.5.2: Pre-flight roster ↔ metrics name alignment check.
+ *
+ * Catches the Aston/Anton class of bug BEFORE the IM runs Generate My Email
+ * Drafts. Iterates teachers in the IM's assigned schools, runs the same
+ * `lookupByName` logic that Generate uses, reports matched vs unmatched. For
+ * each unmatched teacher, shows any metrics-tab name with first-name or
+ * last-name token overlap (heuristic for "is there a typo we can alias?").
+ *
+ * Use this BEFORE every weekly run, OR when the "No metrics rows found"
+ * callout appears in any draft. Apps Script port of `scripts/check_email_data.py`.
+ */
+function checkTeacherNames() {
+  var ui = SpreadsheetApp.getUi();
+  var dateRange = getConfigValue('Date Range');
+  if (!dateRange) {
+    ui.alert('Error', 'Please set Date Range first (Email Tools > Set Date Range or the Config tab).', ui.ButtonSet.OK);
+    return;
+  }
+  var weekStart = dateRange.split('_to_')[0];
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
+  var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
+  var mySchools = [];
+  for (var i = 1; i < mappingData.length; i++) {
+    if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
+      mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
+    }
+  }
+  if (mySchools.length === 0) {
+    ui.alert('Error', 'No schools assigned to your email.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var teachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
+  var metrics = getTeacherMetricsForWeek(weekStart);
+  var metricsKeys = Object.keys(metrics);
+
+  var matched = [], unmatched = [];
+  for (var t = 0; t < teachers.length; t++) {
+    var teacher = teachers[t];
+    var hit = lookupByName(metrics, teacher.firstName, teacher.lastName, teacher.name);
+    if (hit) matched.push(teacher);
+    else unmatched.push(teacher);
+  }
+
+  var html = '<h2>Teacher Name Diagnostic</h2>';
+  html += '<p><b>Week:</b> ' + weekStart + '</p>';
+  html += '<p><b>Schools:</b> ' + mySchools.map(function(s) { return s.displayName; }).join(', ') + '</p>';
+  html += '<p style="color:#2e7d32;">&#10003; <b>Matched:</b> ' + matched.length + ' of ' + teachers.length + ' teachers will get metrics in their email</p>';
+  if (unmatched.length === 0) {
+    html += '<p style="color:#2e7d32;font-weight:bold;">All teachers matched. No NAME_ALIASES additions needed.</p>';
+  } else {
+    html += '<p style="color:#c62828;">&#10071; <b>Unmatched:</b> ' + unmatched.length + ' teachers will get the "No metrics rows found" callout</p>';
+    html += '<h3>Unmatched teachers:</h3>';
+    html += '<table border="1" cellpadding="6" style="border-collapse:collapse;font-size:13px;width:100%;">';
+    html += '<tr style="background:#1a1a1a;color:#fff;"><th>Teacher</th><th>School</th><th>Possible match in metrics tab</th></tr>';
+    for (var u = 0; u < unmatched.length; u++) {
+      var unm = unmatched[u];
+      var fn = (unm.firstName || '').toLowerCase();
+      var ln = (unm.lastName || '').toLowerCase();
+      var overlaps = [];
+      for (var k = 0; k < metricsKeys.length; k++) {
+        var mk = metricsKeys[k];
+        var mkParts = mk.split(' ');
+        for (var mp = 0; mp < mkParts.length; mp++) {
+          var mpp = mkParts[mp].toLowerCase();
+          if (fn && (mpp === fn || mpp.indexOf(fn) !== -1 || fn.indexOf(mpp) !== -1)) {
+            if (overlaps.indexOf(mk) === -1) overlaps.push(mk);
+            break;
+          }
+          if (ln && (mpp === ln || mpp.indexOf(ln) !== -1 || ln.indexOf(mpp) !== -1)) {
+            if (overlaps.indexOf(mk) === -1) overlaps.push(mk);
+            break;
+          }
+        }
+      }
+      var overlapText = overlaps.length > 0
+        ? overlaps.slice(0, 3).join('<br>')
+        : '<i style="color:#888;">no overlap &mdash; likely missing from BigQuery</i>';
+      html += '<tr><td><b>' + unm.name + '</b></td><td>' + unm.campus + '</td><td>' + overlapText + '</td></tr>';
+    }
+    html += '</table>';
+    html += '<h3>What to do</h3>';
+    html += '<ul>';
+    html += '<li>If a metrics name above is a clear typo of the roster name (e.g. "Anton" &harr; "Aston", or a hyphenated last name), ask Khiem to add a NAME_ALIASES entry in Code.gs.</li>';
+    html += '<li>If "no overlap" is shown, the teacher is genuinely missing from the BigQuery data for this week. Escalate to the data team (likely a SIS roster sync gap).</li>';
+    html += '</ul>';
+  }
+
+  var output = HtmlService.createHtmlOutput(html).setWidth(800).setHeight(600);
+  ui.showModalDialog(output, 'Teacher Name Diagnostic');
+}
+
 function checkTeacherFolders() {
   var ui = SpreadsheetApp.getUi();
   var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
@@ -2228,10 +2355,18 @@ function checkTeacherFolders() {
     report += '<ul>';
     for (var ti = 0; ti < schoolTeachers.length; ti++) {
       var t = schoolTeachers[ti];
-      if (driveFolderNameSet[t.folderName.toLowerCase()]) {
-        report += '<li>Found folder for: ' + t.name + ' (<i>' + t.folderName + '</i>)</li>';
+      // v2.5.2: try BOTH spaced (t.name) AND underscored (t.folderName) forms.
+      // Drive folders may be named with spaces ("Aston Haughton") while the
+      // roster stores the underscored form ("Aston_Haughton"). Pre-v2.5.2 only
+      // checked underscored — caused all-MISSING red walls for shared-with-me
+      // users with spaced Drive folders (the actual production case).
+      var foundByUnderscored = !!driveFolderNameSet[t.folderName.toLowerCase()];
+      var foundBySpaced = !!driveFolderNameSet[t.name.toLowerCase()];
+      if (foundByUnderscored || foundBySpaced) {
+        var matchedAs = foundBySpaced ? t.name : t.folderName;
+        report += '<li>Found folder for: ' + t.name + ' (<i>' + matchedAs + '</i>)</li>';
       } else {
-        report += '<li style="color:red;"><b>MISSING</b> folder for: ' + t.name + ' (Expected: <b>' + t.folderName + '</b>)</li>';
+        report += '<li style="color:red;"><b>MISSING</b> folder for: ' + t.name + ' (Expected: <b>' + t.folderName + '</b> or <b>' + t.name + '</b>)</li>';
       }
     }
     report += '</ul><hr>';
