@@ -75,6 +75,10 @@ var TEMPLATES = {
   '4/20 Math+ELA: Finishing Strong': {
     subject: 'Data drop: What\'s changing this week (and why it matters)',
     buildBody: generateMathElaFinishingStrongBody
+  },
+  '4/27: Last Week of Motivention': {
+    subject: 'Data crunch & point calculation complete: (+ 3 non-boring updates to finish strong)',
+    buildBody: generateLastWeekFinishLineBody
   }
 };
 
@@ -91,7 +95,8 @@ var TEMPLATE_NAMES = [
   'Week 8: Growth Mindset',
   'Wrap Up: Celebrate Wins',
   '4/20 Jasper: Finishing Strong',
-  '4/20 Math+ELA: Finishing Strong'
+  '4/20 Math+ELA: Finishing Strong',
+  '4/27: Last Week of Motivention'
 ];
 
 // Manual aliases for teachers whose names differ between roster and metrics
@@ -1296,6 +1301,58 @@ function generateMathElaFinishingStrongBody(teacher, metricsArray, winnersArray)
       'Help every student navigate smoothly to their assigned reading + math lessons this week.',
       'Where will Math Academy + Fast Math make the biggest difference for your students heading into testing?'
     )
+  ]);
+}
+
+// --- 4/27: Last Week of Motivention -- To the Finish Line ---
+// No Actions / Weekly Challenge / Reflection Prompt sections per source content.
+function generateLastWeekFinishLineBody(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    // Standard data block
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray),
+
+    // Update note: minutes/lessons changed due to recent updates
+    '<div style="background-color:#fff2cc;padding:12px;border-radius:6px;margin:12px 0;border:1px solid #ffe599;">',
+    '<p style="margin:0;"><strong>Note:</strong> Minutes/lessons may look different due to recent updates.</p>',
+    '</div>',
+
+    // ---- Updates section: 3 non-boring updates ----
+    '<h2 style="color:#1a1a1a;">FastMath Points Update</h2>',
+    '<p>' + dotSpan('#FFD700') + '<strong>+200 BONUS POINTS for finishing ALL FastMath</strong> -- share today!</p>',
+    '<p>All weekly + mastery points are calculated for you in your attached data!</p>',
+
+    '<h2 style="color:#1a1a1a;">Final Days to Earn & Spend Points</h2>',
+    '<p>Remind students: <strong>this is the last chance to earn.</strong></p>',
+    '<p><strong>Store Closing Dates:</strong></p>',
+    '<p>' + dotSpan('#c62828') + 'Store closes <strong>MAY 8</strong></p>',
+    '<p>' + dotSpan('#DAA520') + '<strong>Points do NOT carry over to next year.</strong></p>',
+    '<p>' + dotSpan('#FFD700') + '<strong>Extra points = raffle entries.</strong> Skip small rewards -- go for big prizes.</p>',
+
+    '<h2 style="color:#1a1a1a;">End of Year Raffle Prize Drawing</h2>',
+    '<p><strong>Big prizes students actually want:</strong></p>',
+    '<p>' + dotSpan('#1565c0') + 'Beats Headphones &nbsp; ' + dotSpan('#2e7d32') + 'JBL Speakers &nbsp; ' + dotSpan('#ef6c00') + 'LEGO Sets + more</p>',
+    '<p>Display the <a href="https://canva.link/8yi8gcx0p3p6acg"><strong>prize slide</strong></a> this week to build urgency.</p>',
+    '<p>Students with leftover points are automatically eligible for the raffle. <strong>Raffle will be May 26.</strong></p>',
+
+    // ---- Weekly Focus (one-liner per source) ----
+    '<h2 style="color:#1a1a1a;">Weekly Focus -- Persistence</h2>',
+    '<p>Students stay focused and keep working through the final week.</p>',
+
+    // ---- Resources ----
+    buildResourcesSection([
+      '<strong>AIM Launches</strong> (Bonus for testing days):<br>'
+        + '<a href="https://www.canva.com/design/DAHEUib_nsU/uKxIbPC2qH5KKoXDUWXElQ/view?utm_content=DAHEUib_nsU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd496d310e1">Week 8 - Growth Mindset - Curiosity</a><br>'
+        + '<a href="https://www.canva.com/design/DAHEzkY6lYU/raJFlAdAxHyZfVrLf31oYw/view?utm_content=DAHEzkY6lYU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h499bdd75c8">Week 9 - Confidence - What Is Confidence?</a><br>'
+        + '<a href="https://www.canva.com/design/DAHFGgoRC5c/oDVz3mDlrpNOov7jVmSZCw/view?utm_content=DAHFGgoRC5c&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=he56325bd08">Week 10 - Confidence - What Is Self-Efficacy?</a><br>'
+        + '<a href="https://canva.link/motiventionweek11">Week 11 - Confidence - The Brain-Body Feedback Loop</a>'
+    ])
+    // No buildWeeklyChallenge per source
   ]);
 }
 

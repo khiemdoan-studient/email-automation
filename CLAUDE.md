@@ -8,7 +8,9 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.0.3**: Bulletproof root folder lookup via folder ID + comprehensive Drive diagnostic. Drive structure verified against live production Drive (April 2026).
 
-**v2.1.0 (current)**: Added `Avg Lessons/Student` column to the shared teacher metrics table (cascades to every template). Added 2 new "Finishing Strong" templates (`4/20 Jasper` and `4/20 Math+ELA`) bringing the total to 12. Added `setupTemplateDropdown()` menu item to sync the Config Template dropdown with `TEMPLATE_NAMES` without manual sheet editing.
+**v2.1.0**: Added `Avg Lessons/Student` column to the shared teacher metrics table (cascades to every template). Added 2 new "Finishing Strong" templates (`4/20 Jasper` and `4/20 Math+ELA`) bringing the total to 12. Added `setupTemplateDropdown()` menu item to sync the Config Template dropdown with `TEMPLATE_NAMES` without manual sheet editing.
+
+**v2.2.0 (current)**: Added end-of-year `4/27: Last Week of Motivention` template covering FastMath +200 bonus reminder, May 8 store close, May 26 raffle, and AIM Launches Weeks 8-11. Total templates: 13. Per source intent, this template OMITS the standard "Your Actions This Week" / "Weekly Challenge" / "Reflection Prompt" sections — it's a 3-update + one-line-focus format.
 
 ## Architecture
 
@@ -119,6 +121,7 @@ Bruna and Mark's Schools - Weekly Report/   <- ROOT_FOLDER_NAME / ROOT_FOLDER_ID
 | Wrap Up: Celebrate Wins | Celebrating your students' wins... | **Yes** (placeholder) |
 | 4/20 Jasper: Finishing Strong | Data drop: What's changing this week (and why it matters) | No |
 | 4/20 Math+ELA: Finishing Strong | Data drop: What's changing this week (and why it matters) | No |
+| 4/27: Last Week of Motivention | Data crunch & point calculation complete: (+ 3 non-boring updates...) | No |
 
 ### Shared Components
 - `buildGreeting(teacher)` - "Hi {firstName},"

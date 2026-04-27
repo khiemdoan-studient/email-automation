@@ -25,12 +25,17 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.1.0)\n"
+    "User Guide & Documentation (v2.2.0)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.2\n"
+    "Added the end-of-year Last Week of Motivention template (4/27). It covers the FastMath "
+    "+200 bonus reminder, May 8 store close, May 26 raffle drawing, and the Weeks 8-11 AIM "
+    "Launches as bonus content for testing days. Total templates: 13.\n"
     "\n"
     "What\u2019s New in v2.1\n"
     "Every email\u2019s data table now includes Avg Lessons/Student as a column so teachers "
@@ -54,7 +59,7 @@ text = (
     "Step 2: Pick your week and template in Config\n"
     "Open the spreadsheet. Go to the Config tab. Two dropdowns drive everything:\n"
     "\u2022 Date Range \u2014 pick from the list of available weeks (newest first)\n"
-    "\u2022 Template \u2014 pick Week 0 through Week 8, Wrap Up, or one of the Finishing Strong templates (12 total)\n"
+    "\u2022 Template \u2014 pick Week 0 through Week 8, Wrap Up, one of the Finishing Strong templates, or Last Week of Motivention (13 total)\n"
     "You can change either one without re-running the pipeline.\n"
     "\n"
     "Step 3: Generate the email drafts\n"
@@ -76,7 +81,7 @@ text = (
     "\n"
     "Template Library\n"
     "\n"
-    "12 templates covering the full semester arc plus end-of-year Finishing Strong:\n"
+    "13 templates covering the full semester arc plus end-of-year Finishing Strong + Last Week:\n"
     "\u2022 Week 0: Data \u2014 MAP baseline review\n"
     "\u2022 Week 1: Goals & Monitoring \u2014 setting targets, doorway greeting, walk the room\n"
     "\u2022 Week 2: Tech Hygiene \u2014 daily logins, Dash routines, restart routine\n"
@@ -89,6 +94,7 @@ text = (
     "\u2022 Wrap Up: Celebrate Wins \u2014 final celebration (content still in progress)\n"
     "\u2022 4/20 Jasper: Finishing Strong \u2014 Reading Focus, Personalized Reading (AlphaRead/Lalilo), Math Fluency via Fast Math, Incentivized Progress\n"
     "\u2022 4/20 Math+ELA: Finishing Strong \u2014 Same as Jasper plus Math Academy rollout for 4th grade+ students\n"
+    "\u2022 4/27: Last Week of Motivention \u2014 End-of-year template: FastMath +200 bonus, May 8 store close, May 26 raffle drawing, Weeks 8-11 AIM Launches\n"
     "\n"
     "Only Week 6 and Wrap Up include the Student Achievement Awards table. Other templates "
     "focus on the coaching theme for that week.\n"
@@ -209,6 +215,14 @@ text = (
     "\n"
     "Version History\n"
     "\n"
+    "v2.2.0 \u2014 April 26, 2026\n"
+    "\u2022 Added 4/27: Last Week of Motivention template \u2014 end-of-year format with FastMath bonus, store close, raffle drawing, and Weeks 8-11 AIM Launches\n"
+    "\u2022 No Actions / Weekly Challenge / Reflection Prompt sections in this template by design \u2014 just the 3 updates and a one-line Persistence focus\n"
+    "\u2022 Total templates: 13\n"
+    "\n"
+    "v2.1.1 \u2014 April 17, 2026\n"
+    "\u2022 Documentation: Added troubleshooting entry for stale Template dropdown (run Refresh Template Dropdown after adding templates)\n"
+    "\n"
     "v2.1.0 \u2014 April 17, 2026\n"
     "\u2022 Added Avg Lessons/Student column to the shared performance table (cascades to every template)\n"
     "\u2022 Added 4/20 Jasper: Finishing Strong template\n"
@@ -271,7 +285,7 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation (v2.1.0)")
+sub_end = sub_start + len("User Guide & Documentation (v2.2.0)")
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -284,6 +298,7 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    "What\u2019s New in v2.2",
     "What\u2019s New in v2.1",
     "What\u2019s New in v2.0",
     "How to Send Weekly Emails (3 Steps)",
@@ -365,6 +380,8 @@ for tab in [
         )
 
 for ver in [
+    "v2.2.0 \u2014 April 26, 2026",
+    "v2.1.1 \u2014 April 17, 2026",
     "v2.1.0 \u2014 April 17, 2026",
     "v2.0.3 \u2014 April 16, 2026",
     "v2.0.2 \u2014 April 15, 2026",

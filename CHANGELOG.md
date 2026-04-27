@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.2.0] - 2026-04-26
+
+### Added — "4/27: Last Week of Motivention" template
+
+End-of-year template covering the final Motivention week. Sections: FastMath +200 bonus reminder, store closing dates (May 8), end-of-year raffle drawing (May 26), AIM Launch links (Weeks 8-11). Subject: "Data crunch & point calculation complete: (+ 3 non-boring updates to finish strong)".
+
+- **`generateLastWeekFinishLineBody()`** (`Code.gs:1304`) — new template body. Uses standard section order (Greeting → Data Table → Color Legend → Trend Alert → Updates → Weekly Focus → Resources). Per source content, OMITS the standard "Your Actions This Week" / "Weekly Challenge" / "Reflection Prompt" sections — just the 3 updates + one-line Persistence focus + Resources.
+- **Registry**: `'4/27: Last Week of Motivention'` added to TEMPLATES + TEMPLATE_NAMES (now 13 entries).
+- **Update note**: Yellow callout box ("Minutes/lessons may look different due to recent updates") rendered between trend alert and updates section to acknowledge v2.1.0 metric column changes for IMs comparing week-over-week.
+- **AIM Launch links**: Week 8 (Curiosity), Week 9 (What Is Confidence), Week 10 (Self-Efficacy), Week 11 (Brain-Body Feedback Loop) — all 4 hyperlinked. Prize slide hyperlinked in raffle section.
+
+### Verification
+- Node syntax check passed
+- 13 TEMPLATES keys = 13 TEMPLATE_NAMES = 13 `generate*Body` definitions, all names match
+- 30/30 content assertions passed (subject, +200 bonus, FastMath, MAY 8 close, raffle prizes, May 26 raffle, prize slide hyperlink, all 4 AIM Launch URLs, no emoji, no Actions/Challenge per source, yellow callout for update note, standard section order)
+
+### Action required after deploy
+After pasting Code.gs into Apps Script, run **Email Tools > Refresh Template Dropdown** so the Config B4 dropdown picks up the new template.
+
 ## [v2.1.1] - 2026-04-17
 
 ### Docs — Troubleshooting entry for stale Template dropdown
