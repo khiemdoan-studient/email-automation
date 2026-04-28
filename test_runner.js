@@ -55,6 +55,41 @@ const code = fs.readFileSync(codeGsPath, 'utf8');
 const indirectEval = eval;
 indirectEval(code);
 
+// ── v2.5.3: NAME_ALIASES drift check ──
+// scripts/name_aliases.json is the single source of truth (read at runtime by
+// scripts/check_email_data.py). Code.gs hardcodes the same map at the top of
+// the file because Apps Script can't easily fetch JSON at runtime. This check
+// asserts they match — drift fails CI before the unit tests run.
+const aliasesJsonPath = path.join(__dirname, 'scripts', 'name_aliases.json');
+if (!fs.existsSync(aliasesJsonPath)) {
+  console.error('FATAL: scripts/name_aliases.json missing — single source of truth not found.');
+  process.exit(1);
+}
+const aliasesJson = JSON.parse(fs.readFileSync(aliasesJsonPath, 'utf8'));
+const codegsAliases = global.NAME_ALIASES || {};
+const jsonKeys = Object.keys(aliasesJson).sort();
+const gsKeys = Object.keys(codegsAliases).sort();
+let driftFail = false;
+if (JSON.stringify(jsonKeys) !== JSON.stringify(gsKeys)) {
+  console.error('NAME_ALIASES DRIFT: keys differ between Code.gs and scripts/name_aliases.json');
+  console.error('  Code.gs keys: ' + gsKeys.join(', '));
+  console.error('  JSON keys:    ' + jsonKeys.join(', '));
+  driftFail = true;
+}
+for (const k of jsonKeys) {
+  if (aliasesJson[k] !== codegsAliases[k]) {
+    console.error('NAME_ALIASES DRIFT on key "' + k + '":');
+    console.error('  Code.gs: ' + codegsAliases[k]);
+    console.error('  JSON:    ' + aliasesJson[k]);
+    driftFail = true;
+  }
+}
+if (driftFail) {
+  console.error('Update either Code.gs (var NAME_ALIASES = {...}) or scripts/name_aliases.json so they match.');
+  process.exit(1);
+}
+console.log('\u2713 NAME_ALIASES drift check: Code.gs matches scripts/name_aliases.json (' + jsonKeys.length + ' aliases)');
+
 // ── Override runUnitTests so we capture results instead of opening a dialog ──
 const originalAssert = global._testAssertEq;
 const allResults = [];

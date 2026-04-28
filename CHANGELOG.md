@@ -2,6 +2,96 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.5.3] - 2026-04-27
+
+### Full project audit (3 parallel agents, 23 findings, 16 fixes)
+
+Comprehensive audit triggered by user `/audit` after v2.5.2 shipped. Three parallel subagents scanned Code.gs (2523 LOC), Python tooling (write_doc.py + scripts/check_email_data.py + test_runner.js), and docs/cross-repo drift. **Cross-repo drift: NONE** — parent's `email_winners.py` writers byte-match Code.gs readers (12/2/7 columns).
+
+### Fixes shipped
+
+#### Templates with placeholder/blank content → `[DRAFT]` suffix
+Audit found 4 templates ship literal placeholder text or unfilled `_____` blanks if an IM picks them:
+- `Wrap Up: Celebrate Wins`: ships `[PLACEHOLDER: Wrap Up focus content -- paste from Google Doc]` in body
+- `Week 1: Goals & Monitoring`: 3 unfilled `_____` blanks
+- `Week 3: Micro-Coaching`: 2 unfilled `_____` blanks
+- `Week 4: Diagnosing Habits`: 2 unfilled `_____` blanks
+
+**Fix**: renamed each TEMPLATES key to add ` [DRAFT]` suffix (e.g., `'Wrap Up: Celebrate Wins [DRAFT]'`). Since `TEMPLATE_NAMES = Object.keys(TEMPLATES)` (per v2.3.0), the dropdown auto-shows the warning. **Action**: Khiem can fill the content later → remove `[DRAFT]` suffix once content is provided.
+
+#### `checkDriveFolderExists` removed (~100 LOC dead code)
+After v2.5.0 search-API pivot, the function failed-open on iteration errors (so never actually blocked anyone) AND the per-teacher path already surfaces specific PDF-missing errors via Error Log. The function + the call site + the dialog WARNING block were all removed. Use `Debug: Check Teacher Folders` for proactive folder inspection instead.
+
+#### `withDriveRetry` → `withGmailRetry` rename
+The function only wraps `GmailApp.createDraft` (one call site in createDraftForTeacher). The old name "Drive" was misleading after v2.5.0 made Drive lookups iterate-step-wrapped instead. Pure rename — no behavioral change.
+
+#### NAME_ALIASES single source of truth (`scripts/name_aliases.json`)
+Was duplicated between Code.gs (Apps Script can't easily fetch JSON at runtime) and `check_email_data.py` (Python). Risk: silent drift if one updated but not the other.
+
+**New architecture**:
+- `scripts/name_aliases.json` is the canonical source
+- `check_email_data.py` reads JSON at runtime
+- `test_runner.js` parses Code.gs's `var NAME_ALIASES = {...}` (via indirectEval populating `global.NAME_ALIASES`) and asserts match against the JSON. **Drift fails CI** before unit tests run.
+- Code.gs still hardcodes the map (Apps Script limitation), but the test gate catches drift.
+
+#### Build / dependency hardening
+- **`requirements.txt`** (NEW): pins `google-api-python-client>=2.100.0,<3.0.0`, `google-auth>=2.20.0,<3.0.0`, `google-auth-httplib2>=0.1.0,<1.0.0`. Was unpinned — silently broken if a Google API breaking minor shipped.
+- **`package.json`** (NEW): pins Node `>=18`, exposes `npm test` as `node test_runner.js`.
+- **`.gitignore`**: added `__pycache__/`, `*.pyc`, `*.egg-info/`, `.claude/`. Was missing — `git add .` would have committed Python bytecode.
+- **`STUDIENT_SA_KEY` env var**: both `write_doc.py` and `scripts/check_email_data.py` now read SA key path from env var with fallback to local Windows path. Lets the scripts run on EC2 / other dev machines / CI without code changes.
+
+#### `write_doc.py` user-guide formatting fixes
+- **Subtitle string** at line 431 was stale (`User Guide & Documentation (v2.4.2)`) — corrected to `(v2.5.3)`. Worked by accident before (same string length).
+- **Title HEADING_2 styling loop** (line 442) only iterated v2.4.2 down → v2.5.0/2.5.1/2.5.2/2.5.3 sections lost their `HEADING_2` styling in the user-facing Doc. Loop now includes all v2.5.x entries.
+
+#### Code health micro-fixes
+- **`getStudentWinners` null guard**: parity with `getTeacherMetricsForWeek` — `String(null)` returns `'null'` (not `''`), so the prior loop could silently key a row under literal `'null'`. Now skips explicitly.
+- **`parseInt` radix**: explicit `, 10` arguments at the 2 call sites in getStudentWinners. V8 default is fine; cosmetic for portability.
+- **`lookupByName` multi-token first-name limitation** (audit M-1): documented as a JSDoc comment. Edge case requires multi-token first name in roster + same-token-prefix collision in metrics; not currently exercised by any production teacher. If a real cross-leak appears, tighten the comparison to use full lowercased+trimmed firstName.
+
+#### Documentation alignment
+- CLAUDE.md "studient-dashboard-pipeline" → "Studient Excel Automation" (correct repo name).
+- CHANGELOG v2.5.2 step 3 (test count check) — already says 30; v2.5.3 adds drift check + `(for week 2026-04-20)` qualifier in user guide.
+- write_doc.py user-facing summary updated to describe v2.5.3.
+
+### Audit findings deferred to future cycles
+
+| # | Finding | Severity | Defer reason |
+|---|---------|----------|--------------|
+| | clasp deploy automation | HIGH | Auth uncertainty; manual paste workflow is acceptable for now |
+| | DriveAdapter integration tests | MEDIUM | Medium effort; pure-fn tests + scanner already catch most regressions |
+| | Regenerate single teacher menu item | MEDIUM | Medium effort; LockService + bulk re-run is acceptable workaround |
+| | Magic-number extraction (color thresholds, file caps) | LOW | Cosmetic; values are stable |
+| | Unicode normalization in lookupByName | LOW | No reported case |
+| | Helper function extraction (mapping loader, school cache builder) | LOW | DRY improvements; defer to clean-up cycle |
+
+### Files modified
+
+- `Code.gs` — 11 surgical edits (~+50 LOC, ~-110 LOC net): TEMPLATES key renames (×4), checkDriveFolderExists deletion + call-site removal, withDriveRetry → withGmailRetry (×2), getStudentWinners null guard + parseInt radix, lookupByName multi-token doc comment
+- `scripts/name_aliases.json` — NEW (single source of truth)
+- `scripts/check_email_data.py` — SA key env var + load NAME_ALIASES from JSON
+- `write_doc.py` — SA key env var + subtitle fix + title loop expansion
+- `test_runner.js` — NAME_ALIASES drift check before unit tests
+- `requirements.txt` — NEW
+- `package.json` — NEW
+- `.gitignore` — added `__pycache__/`, `*.pyc`, `*.egg-info/`, `.claude/`
+- `CHANGELOG.md` — this entry
+- `CLAUDE.md` — v2.5.3 history line + repo name fix
+
+### Verified
+
+- ✓ `node --check Code.gs`: SYNTAX OK
+- ✓ `node test_runner.js`: NAME_ALIASES drift check passes + 30/30 unit tests passed
+- ✓ `python scripts/check_email_data.py --week 2026-04-20`: still 75/86 matched (no regression — alias logic unchanged)
+
+### Action required after deploy
+
+1. Paste latest `Code.gs` into Apps Script editor → Save → reload spreadsheet tab.
+2. The Email Tools dropdown will now show 4 templates with `[DRAFT]` suffix — IMs should avoid these until content is provided.
+3. Run **Email Tools → Refresh Template Dropdown** to update the Config dropdown with the new template names. **If your Config tab's Template was previously set to one of the renamed templates** (`Wrap Up: Celebrate Wins`, `Week 1: Goals & Monitoring`, `Week 3: Micro-Coaching`, `Week 4: Diagnosing Habits`), re-pick from dropdown to use the `[DRAFT]` version.
+4. Run **Email Tools → Run Unit Tests** — should report **30 passed, 0 failed**.
+5. Run **Email Tools → Generate My Email Drafts** as usual. The `Drive folders: Found / NOT FOUND` line is gone from the confirmation dialog (per-teacher errors now surface in Error Log).
+
 ## [v2.5.2] - 2026-04-27
 
 ### Post-mortem fix: AFMS production report (Aston Haughton + all-MISSING debug)

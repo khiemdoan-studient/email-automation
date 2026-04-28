@@ -29,7 +29,9 @@ var TEMPLATES = {
     subject: 'Data Delivery: Try to Contain Your Excitement -- MAP Scores Are In!',
     buildBody: generateWeek0Body
   },
-  'Week 1: Goals & Monitoring': {
+  // v2.5.3: [DRAFT] suffix added — template body has unfilled `_____` blanks
+  // in the challenge/reflection prompts. IMs should avoid until content is filled.
+  'Week 1: Goals & Monitoring [DRAFT]': {
     subject: 'Your data is served (with a side order of goals and monitoring reminders!)',
     buildBody: generateWeek1Body
   },
@@ -37,11 +39,13 @@ var TEMPLATES = {
     subject: 'Attached: Your Data (+ 3 things you actually need to read about tech hygiene and student data ownership.)',
     buildBody: generateWeek2Body
   },
-  'Week 3: Micro-Coaching': {
+  // v2.5.3: [DRAFT] suffix — template body has unfilled `_____` blanks.
+  'Week 3: Micro-Coaching [DRAFT]': {
     subject: 'Your Motivention Data (+ 3 Micro-coaching moves to keep students moving.)',
     buildBody: generateWeek3Body
   },
-  'Week 4: Diagnosing Habits': {
+  // v2.5.3: [DRAFT] suffix — template body has unfilled `_____` blanks.
+  'Week 4: Diagnosing Habits [DRAFT]': {
     subject: 'Your weekly Motivention numbers (Now with data graphs to see at a glance)',
     buildBody: generateWeek4Body
   },
@@ -61,7 +65,9 @@ var TEMPLATES = {
     subject: 'Attached: Your Data (+ 3 things you actually need to read about Mindset Reframing)',
     buildBody: generateWeek8Body
   },
-  'Wrap Up: Celebrate Wins': {
+  // v2.5.3: [DRAFT] suffix — template body still contains literal "[PLACEHOLDER:
+  // Wrap Up focus content -- paste from Google Doc]" instead of real content.
+  'Wrap Up: Celebrate Wins [DRAFT]': {
     subject: 'Data drop: Celebrating your students\' wins and hard work',
     buildBody: generateWrapUpBody
   },
@@ -363,7 +369,11 @@ function generateDraftsForCurrentUser() {
     }
   }
 
-  var driveFolderExists = checkDriveFolderExists(rootFolder, mySchools, dateRange, schoolFolderCache);
+  // v2.5.3: pre-flight `checkDriveFolderExists` removed. After the v2.5.0
+  // search-API pivot, that pre-flight was wasted work — it failed-open on
+  // iteration errors (so never actually blocked anyone in practice), and
+  // missing PDFs already surface as per-teacher errors in the Error Log tab.
+  // To check folder structure proactively, IMs can run "Debug: Check Teacher Folders".
 
   // Validate metrics data exists for selected week
   var weekStart = dateRange.split('_to_')[0];
@@ -374,15 +384,7 @@ function generateDraftsForCurrentUser() {
     + 'Date Range: ' + dateRange + '\n'
     + 'Template: ' + templateName + '\n'
     + 'Teachers found: ' + teachers.length + '\n'
-    + 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n'
-    + 'Drive folders: ' + (driveFolderExists ? 'Found' : 'NOT FOUND') + '\n';
-
-  if (!driveFolderExists) {
-    dialogMsg += '\nWARNING: No Drive folders found for date range "' + dateRange + '".\n'
-      + 'PDFs cannot be attached. Generation is BLOCKED.\n'
-      + 'Please check that the date range matches your Drive folder names.';
-    return ui.alert('Cannot Generate', dialogMsg, ui.ButtonSet.OK);
-  }
+    + 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n';
 
   if (!metricsExist) {
     dialogMsg += '\nWARNING: No metrics data found for week ' + weekStart + '.\n'
@@ -445,6 +447,14 @@ function generateDraftsForCurrentUser() {
 
 /**
  * Looks up a teacher in a name-keyed object, trying multiple name formats.
+ *
+ * KNOWN LIMITATION (v2.5.3 audit M-1): the last-name fallback uses
+ * `firstName.split(' ')[0]` as the comparison token. For roster entries with
+ * multi-token first names (e.g. "Mary Lou"), this could in theory match a
+ * different teacher whose first name starts with the same token (e.g. metrics
+ * tab has "Mary Anderson Smith"). Not currently exercised by any teacher in
+ * the production roster. If a real cross-leak appears, tighten the comparison
+ * to use the full lowercased+trimmed firstName instead of the first token.
  */
 function lookupByName(obj, firstName, lastName, fullName) {
   if (!obj) return null;
@@ -541,108 +551,12 @@ function dateRangeToPdfPattern(dateRange) {
   return parts[0] + ' - ' + parts[1];
 }
 
-/**
- * Check if at least one school has a PDF matching the date range.
- * New Drive structure (Apr 2026): PDFs sit directly in teacher folders,
- * named like "Teacher Name - 2026-04-06 - 2026-04-12.pdf" (no date subfolder).
- */
-function checkDriveFolderExists(rootFolder, schools, dateRange, schoolFolderCache) {
-  // v2.4.3: This function used to throw "Service error: Drive" mid-iteration when
-  // run as a shared-with-me user (stack trace pinpointed `files.hasNext()` at line 538).
-  // Drive iterators (`getFolders`, `getFiles`, and `iter.hasNext()`) require explicit
-  // list permission on the parent — direct-link sharing only grants per-folder access.
-  //
-  // FAIL-OPEN by design: if iteration throws, return TRUE (assume PDFs exist) and let
-  // the per-teacher createDraftForTeacher path surface specific failures with named
-  // errors. The pre-flight "no PDFs at all" check is now best-effort, not blocking.
-  // This is correct because:
-  //   1. createDraftForTeacher (v2.4.1+) wraps every Drive call with named errors
-  //   2. Per-teacher errors clearly identify which PDF / folder is missing
-  //   3. Blocking the entire run because one Drive iteration call fails is worse UX
-  //      than letting per-teacher failures bubble up individually.
-  var pdfPattern = dateRangeToPdfPattern(dateRange); // "2026-04-06 - 2026-04-12"
-
-  for (var i = 0; i < schools.length; i++) {
-    var schoolFolder = (schoolFolderCache && schoolFolderCache[schools[i].displayName]) || null;
-    if (!schoolFolder) {
-      try {
-        schoolFolder = findFolderByName(schools[i].folderName, rootFolder);
-        if (!schoolFolder && schools[i].displayName) {
-          schoolFolder = findFolderByName(schools[i].displayName, rootFolder);
-        }
-      } catch (e) {
-        console.log('checkDriveFolderExists: school folder lookup failed for ' + (schools[i].displayName || schools[i].folderName) + ': ' + (e.message || e));
-        continue;
-      }
-    }
-    if (!schoolFolder) continue;
-
-    // Iterate teacher folders → files. Each iterator hop is wrapped — Drive can throw
-    // "Service error: Drive" at hasNext()/next() for shared-with-me users. Treat any
-    // failure as "iteration not possible" and FAIL-OPEN.
-    var teacherFolders;
-    try {
-      teacherFolders = schoolFolder.getFolders();
-    } catch (e) {
-      console.log('checkDriveFolderExists: schoolFolder.getFolders() FAILED: ' + (e.message || e) + ' — fail-open (returning true).');
-      return true;
-    }
-
-    var teacherCount = 0;
-    var maxTeachersToCheck = 50;
-    var maxFilesPerTeacher = 50;
-    while (teacherCount < maxTeachersToCheck) {
-      var tfHasNext;
-      try {
-        tfHasNext = teacherFolders.hasNext();
-      } catch (e) {
-        console.log('checkDriveFolderExists: teacherFolders.hasNext() FAILED: ' + (e.message || e) + ' — fail-open.');
-        return true;
-      }
-      if (!tfHasNext) break;
-
-      var tf;
-      try {
-        tf = teacherFolders.next();
-      } catch (e) {
-        console.log('checkDriveFolderExists: teacherFolders.next() FAILED: ' + (e.message || e) + ' — skipping.');
-        teacherCount++;
-        continue;
-      }
-      teacherCount++;
-
-      var files;
-      try {
-        files = tf.getFiles();
-      } catch (e) {
-        console.log('checkDriveFolderExists: tf.getFiles() FAILED for teacher: ' + (e.message || e));
-        continue;
-      }
-      var fileCount = 0;
-      while (fileCount < maxFilesPerTeacher) {
-        var fHasNext;
-        try {
-          fHasNext = files.hasNext();
-        } catch (e) {
-          console.log('checkDriveFolderExists: files.hasNext() FAILED: ' + (e.message || e) + ' — fail-open.');
-          return true;
-        }
-        if (!fHasNext) break;
-        try {
-          var fn = files.next().getName();
-          fileCount++;
-          if (fn.indexOf(pdfPattern) !== -1 && fn.toUpperCase().indexOf('.PDF') !== -1) {
-            return true;
-          }
-        } catch (e) {
-          console.log('checkDriveFolderExists: file iteration step failed: ' + (e.message || e));
-          fileCount++;
-        }
-      }
-    }
-  }
-  return false;
-}
+// v2.5.3: checkDriveFolderExists() removed. After the v2.5.0 search-API pivot
+// for PDF lookup, this pre-flight became wasted work — it failed-open on
+// iteration errors (so never blocked anyone in practice), and the per-teacher
+// path already surfaces specific PDF-missing errors via the Error Log tab.
+// Removed in audit v2.5.3 per user approval. Run "Debug: Check Teacher Folders"
+// for proactive folder-presence inspection (uses dual-name-match per v2.5.2).
 
 /**
  * Reads "All Teacher Metrics" tab and returns metrics for a specific week.
@@ -745,15 +659,19 @@ function getStudentWinners() {
   var winners = {};
 
   for (var i = 1; i < data.length; i++) {
+    // v2.5.3: null guard parity with getTeacherMetricsForWeek — String(null) returns
+    // 'null' (not ''), so the prior `String(...).trim()` would silently key a row
+    // under the literal string 'null'. Skip explicitly.
+    if (data[i][1] == null) continue;
     var teacherName = String(data[i][1]).trim().toLowerCase();
-    if (!teacherName) continue;
+    if (!teacherName || teacherName === 'null' || teacherName === 'undefined') continue;
     if (!winners[teacherName]) winners[teacherName] = [];
     winners[teacherName].push({
       category: String(data[i][2]).trim(),
-      sortOrder: parseInt(data[i][3]) || 0,
+      sortOrder: parseInt(data[i][3], 10) || 0,    // v2.5.3: explicit radix
       frequency: String(data[i][4]).trim(),
       studentNames: String(data[i][5]).trim(),
-      studentCount: parseInt(data[i][6]) || 0
+      studentCount: parseInt(data[i][6], 10) || 0  // v2.5.3: explicit radix
     });
   }
   return winners;
@@ -828,12 +746,17 @@ function normalizeFolderName(name) {
 }
 
 /**
- * v2.4.1: Wraps a Drive surface call with retry-once on transient errors.
- * Apps Script's Drive API occasionally returns "Service error: Drive" on
- * 5xx blips or rate-limit surges (1000 reads/100sec/user). One retry after
- * a 2s sleep clears most transient cases without raising real failures.
+ * v2.4.1 / v2.5.3: Wraps a Gmail call with retry-once on transient errors.
+ * Apps Script's Gmail API occasionally returns 5xx blips or rate-limit surges.
+ * One retry after a 2s sleep clears most transient cases without raising real
+ * failures.
+ *
+ * v2.5.3: renamed from `withDriveRetry` to reflect actual usage. The function
+ * is only invoked once in this codebase — wrapping `GmailApp.createDraft` in
+ * `createDraftForTeacher`. Drive lookup paths (search-API + traversal fallback)
+ * are wrapped at each iterator step instead, not via this helper.
  */
-function withDriveRetry(fn) {
+function withGmailRetry(fn) {
   try {
     return fn();
   } catch (e) {
@@ -1446,12 +1369,13 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
 
   // v2.4.1: Pass the File directly to createDraft (no getAs() — it's already a PDF;
   // getAs(MimeType.PDF) was a no-op coercion that added a Drive call AND a failure
-  // surface). Wrap the call in a named try/catch so any "Service error: Drive" now
-  // identifies the specific PDF + size + Gmail/Drive operation that failed.
-  // withDriveRetry handles transient 5xx / rate-limit blips (one retry after 2s).
+  // surface). Wrap the call in a named try/catch so any error identifies the
+  // specific PDF + size + Gmail operation that failed.
+  // v2.5.3: withGmailRetry (renamed from withDriveRetry) handles transient 5xx /
+  // rate-limit blips (one retry after 2s).
   var body = template.buildBody(teacher, metrics, winners);
   try {
-    withDriveRetry(function() {
+    withGmailRetry(function() {
       GmailApp.createDraft(teacher.email, template.subject, '', {
         htmlBody: body,
         attachments: [summaryPdf]

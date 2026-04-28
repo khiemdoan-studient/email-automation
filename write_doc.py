@@ -1,13 +1,19 @@
 """Write formatted documentation to the Email Automation Google Doc."""
 
+import os
 import sys
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-creds = service_account.Credentials.from_service_account_file(
+# v2.5.3: SA key path reads from STUDIENT_SA_KEY env var with fallback.
+_SA_KEY = os.environ.get(
+    "STUDIENT_SA_KEY",
     r"C:\Users\doank\Documents\Projects\Studient Excel Automation\service account key.json",
+)
+creds = service_account.Credentials.from_service_account_file(
+    _SA_KEY,
     scopes=["https://www.googleapis.com/auth/documents"],
 )
 docs = build("docs", "v1", credentials=creds)
@@ -25,12 +31,34 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.5.2)\n"
+    "User Guide & Documentation (v2.5.3)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What\u2019s New in v2.5.3\n"
+    "Full project audit \u2014 16 fixes from a 3-agent codebase scan.\n"
+    "\n"
+    "Most visible to IMs: 4 templates that have unfilled placeholders or blank "
+    "challenge prompts now show '[DRAFT]' in the dropdown name (Wrap Up, Week 1, "
+    "Week 3, Week 4). If your Config tab's Template was previously set to one of "
+    "these, re-pick from the refreshed dropdown to get the [DRAFT] version. Khiem "
+    "can fill the content later and remove the [DRAFT] marker.\n"
+    "\n"
+    "Behind the scenes: removed ~100 lines of dead Drive pre-flight code that "
+    "stopped serving any purpose after the v2.5.0 search-API pivot. Renamed "
+    "withDriveRetry to withGmailRetry (the function only wraps Gmail). Added a "
+    "single-source-of-truth file for NAME_ALIASES with an automated drift check "
+    "(test_runner.js fails if Code.gs doesn't match the JSON). Pinned Python "
+    "and Node dependencies. Fixed several small code-health issues (null guards, "
+    "parseInt radix, gitignore additions).\n"
+    "\n"
+    "If you previously had a problem with a [DRAFT] template, that's now visible "
+    "BEFORE you generate. The [DRAFT] tag means the template body has unfilled "
+    "content placeholders. Avoid these templates for production sends until "
+    "Khiem fills them.\n"
     "\n"
     "What\u2019s New in v2.5.2\n"
     "Post-mortem fix from a production report at AFMS \u2014 two pre-existing bugs that "
@@ -428,7 +456,9 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len("User Guide & Documentation (v2.4.2)")
+sub_end = sub_start + len(
+    "User Guide & Documentation (v2.5.3)"
+)  # v2.5.3: was stale "v2.4.2"
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -441,6 +471,11 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    "What\u2019s New in v2.5.3",
+    "What\u2019s New in v2.5.2",
+    "What\u2019s New in v2.5.1",
+    "What\u2019s New in v2.5.0",
+    "What\u2019s New in v2.4.3",
     "What\u2019s New in v2.4.2",
     "What\u2019s New in v2.4.1",
     "What\u2019s New in v2.4.0",

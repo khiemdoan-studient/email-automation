@@ -31,6 +31,8 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from difflib import get_close_matches
 
@@ -39,7 +41,12 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-SA_KEY = r"C:\Users\doank\Documents\Projects\Studient Excel Automation\service account key.json"
+# v2.5.3: SA key path reads from STUDIENT_SA_KEY env var with fallback to local
+# Windows path. Lets the script run on EC2 / other dev machines.
+SA_KEY = os.environ.get(
+    "STUDIENT_SA_KEY",
+    r"C:\Users\doank\Documents\Projects\Studient Excel Automation\service account key.json",
+)
 SPREADSHEET_ID = "1GKtoNumk363StPb2HZ1suiXNB3rHzA_wDLKgRiGj6f8"
 
 # Mirrors Code.gs CONFIG.* — column indices for Teacher Emails tab (0-indexed).
@@ -48,12 +55,25 @@ TEACHER_FIRST_COL = 24
 TEACHER_LAST_COL = 25
 TEACHER_EMAIL_COL = 26
 
-# Mirrors Code.gs NAME_ALIASES at module scope. Keep in sync.
-NAME_ALIASES = {
-    "lisa kloesz": "lisa kloetz",
-    "aston haughton": "anton haughton",  # v2.5.2: BQ typo (AFMS) — remove once fixed upstream
-    "lakieshie jennings": "lakieshie roberts-jennings",  # v2.5.2: hyphenated last name (JHES)
-}
+
+# v2.5.3: NAME_ALIASES loaded from scripts/name_aliases.json (single source of
+# truth). Code.gs still hardcodes the same map at the top of the file (Apps
+# Script can't easily fetch JSON at runtime), and test_runner.js verifies they
+# match by parsing Code.gs and comparing — drift fails CI.
+def _load_name_aliases():
+    json_path = os.path.join(os.path.dirname(__file__), "name_aliases.json")
+    if not os.path.isfile(json_path):
+        # Fallback for unusual setups (script run from non-standard cwd).
+        return {
+            "lisa kloesz": "lisa kloetz",
+            "aston haughton": "anton haughton",
+            "lakieshie jennings": "lakieshie roberts-jennings",
+        }
+    with open(json_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+NAME_ALIASES = _load_name_aliases()
 
 READING_DISPLAY_NAME = "Reading Community City School District"
 

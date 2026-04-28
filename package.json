@@ -1,0 +1,12 @@
+{
+  "name": "email-automation",
+  "version": "2.5.3",
+  "description": "Apps Script email automation for teacher weekly reports. Tests + scripts only; production deploy is via clasp push.",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test_runner.js"
+  }
+}
