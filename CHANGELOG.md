@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.4] - 2026-04-28
+
+### validateAllPdfs: respect Config Date Range (not "last 2 weeks")
+
+After v2.6.3 fixed the false-positive issue, user ran the validator with Config Date Range set to `2026-04-20_to_2026-04-26` and got two reports back: week 04-20 (100% match — correct) AND week 04-27 (0% match — confusing because mark.katigbak's upstream pipeline hasn't run yet for the upcoming week).
+
+User question: "Date range in config is set to 2026-04-20. So why doesn't it look for that?"
+
+### Root cause
+
+v2.6.2 hardcoded `getAvailableWeeks().slice(0, 2)` — it read the last 2 weeks from the Available Weeks helper tab, ignoring Config. Available Weeks is sorted week_start DESC, so the FIRST entry is always the upcoming week (which the upstream PDF generator may not have populated yet) and only the SECOND entry was the Config week. The validator was structurally guaranteed to flag the future week as MISSING for the entire roster every time.
+
+### Fix
+
+- Read Config Date Range via `getConfigValue('Date Range')`.
+- Validate ONLY that week (the week the bulk Generate run would actually use).
+- Error if Config has no Date Range set, with pointer to the Config tab dropdown / `Set Date Range` menu.
+- Updated header to show the Config range prominently with edit-pointer text.
+- Updated summary line + modal title to reflect single-week scope.
+- Renamed menu item: `Debug: Validate All PDFs (last 2 weeks)` → `Debug: Validate All PDFs (Config week)` so the scope is obvious from the menu.
+
+### Why this is correct
+
+The whole point of the validator is "if I run Generate right now, will any teacher fail because of a missing PDF?". The bulk Generate run uses the Config week. So the validator should answer that exact question for that exact week.
+
+If the IM wants to validate a different week, they change the Config dropdown first. That's a 2-second action and matches the existing workflow (Config Date Range is the single source of truth for everything else too).
+
+### Files modified
+
+- `Code.js` — `validateAllPdfs` reads Config (~10 LOC simplified), menu item label updated.
+- `package.json` — version bump 2.6.3 → 2.6.4.
+- `CHANGELOG.md` — this entry.
+- `CLAUDE.md` — v2.6.4 history line.
+
+### Verified
+
+- ✓ `node --check Code.js`: SYNTAX OK
+- ✓ `node test_runner.js`: 45 / 45 unit tests PASS (no regression — change is internal to validateAllPdfs)
+- ✓ `npm run deploy`: pushed to clasp
+
+### Action required
+
+1. Reload spreadsheet (close tab + reopen).
+2. Confirm Config Date Range is set to the week you want to validate.
+3. Run **Email Tools -> Debug: Validate All PDFs (Config week)**.
+4. Single-week report. Match rate should match the bulk-Generate reality. Any "MISSING" reported here is a true upstream gap.
+
 ## [v2.6.3] - 2026-04-28
 
 ### validateAllPdfs: add traversal fallback (mirror createDraftForTeacher)

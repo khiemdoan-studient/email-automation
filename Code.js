@@ -156,7 +156,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Debug: Check Teacher Names (roster vs metrics)', 'checkTeacherNames')
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
-    .addItem('Debug: Validate All PDFs (last 2 weeks)', 'validateAllPdfs')
+    .addItem('Debug: Validate All PDFs (Config week)', 'validateAllPdfs')
     .addItem('Debug: Drive Access', 'debugDriveAccess')
     .addItem('Debug: Drive Auth (run if "Service error: Drive")', 'diagnoseDriveAuth')
     .addItem('View Error Log', 'viewErrorLog')
@@ -2817,15 +2817,18 @@ function checkTeacherFolders() {
 // ============================================
 //
 // Iterates ALL teachers across ALL schools (every IM's roster, plus Reading
-// Teachers tab). For each of the last 2 weeks: looks up the teacher's metrics
-// using the SAME chain the bulk Generate run uses (lookupByName + NAME_ALIASES),
-// and if metrics exist, checks Drive for a PDF using findTeacherPdfBySearch.
+// Teachers tab). For the week selected in the Config Date Range: looks up the
+// teacher's metrics using the SAME chain the bulk Generate run uses
+// (lookupByName + NAME_ALIASES), and if metrics exist, checks Drive for a PDF
+// using findTeacherPdfBySearch with findTeacherPdfByTraversal as fallback.
 //
 // Reports MISSING (metrics but no PDF). Runs as the current user — works for
 // shared-with-me Drive folders that the service-account-side Python validator
 // (scripts/validate_pdfs.py) cannot see.
 //
-// This is the answer to "are there any teachers with data but no report?".
+// v2.6.4: respects Config Date Range (the week the IM is about to use), not
+// "last 2 weeks". Set Date Range first via the Config tab dropdown or
+// Email Tools -> Set Date Range.
 
 function validateAllPdfs() {
   var ui = SpreadsheetApp.getUi();
@@ -2839,12 +2842,20 @@ function validateAllPdfs() {
   try {
     _runIdCache = null;
 
-    var weeks = getAvailableWeeks();
-    if (weeks.length === 0) {
-      ui.alert('Error', 'No weeks found in Available Weeks tab.', ui.ButtonSet.OK);
+    // v2.6.4: validate the Config-selected week — that's what the bulk run
+    // would actually generate for. "Last 2 weeks" was confusing because the
+    // upcoming week's PDFs may not yet exist (mark.katigbak's pipeline runs
+    // late in the week), so they'd flag as MISSING even though the IM doesn't
+    // care about that week yet.
+    var configRange = getConfigValue('Date Range');
+    if (!configRange) {
+      ui.alert('Error',
+        'Set Config Date Range first (Config tab dropdown or Email Tools -> Set Date Range).\n\n' +
+        'The validator checks PDFs for whichever week the bulk Generate run would use.',
+        ui.ButtonSet.OK);
       return;
     }
-    var lastTwo = weeks.slice(0, 2);
+    var weeksToCheck = [configRange];
 
     var rootFolder = getRootFolder();
     if (!rootFolder) {
@@ -2878,14 +2889,15 @@ function validateAllPdfs() {
 
     var html = '<h2>PDF Validation Report</h2>';
     html += '<p><b>User:</b> ' + Session.getActiveUser().getEmail() + '</p>';
+    html += '<p><b>Config Date Range:</b> ' + configRange + ' &nbsp; <span style="color:#888;font-size:12px;">(change via Config tab or Email Tools -> Set Date Range)</span></p>';
     html += '<p><b>Schools scanned:</b> ' + allSchools.length + '</p>';
     html += '<p><b>Teachers in roster:</b> ' + allTeachers.length + '</p>';
-    html += '<p style="font-size:12px;color:#555;">For each week below, this checks every teacher with metrics in BigQuery against the Drive folder for a matching PDF, using the same lookup chain (lookupByName + NAME_ALIASES + search-API PDF lookup) as the bulk Generate run.</p>';
+    html += '<p style="font-size:12px;color:#555;">For the Config-selected week, this checks every teacher with metrics in BigQuery against the Drive folder for a matching PDF, using the same lookup chain (lookupByName + NAME_ALIASES + search-API + traversal-fallback) as the bulk Generate run.</p>';
 
     var grandMissing = 0, grandMatched = 0;
 
-    for (var w = 0; w < lastTwo.length; w++) {
-      var dateRange = lastTwo[w];
+    for (var w = 0; w < weeksToCheck.length; w++) {
+      var dateRange = weeksToCheck[w];
       var weekStart = dateRange.split('_to_')[0];
       var allMetrics = getTeacherMetricsForWeek(weekStart);
 
@@ -2963,15 +2975,15 @@ function validateAllPdfs() {
 
     // Summary
     html += '<hr><h3>Summary</h3>';
-    html += '<p><b>' + grandMissing + '</b> teacher-week(s) missing PDF, out of <b>' + (grandMatched + grandMissing) + '</b> teacher-week(s) with metrics across ' + lastTwo.length + ' week(s).</p>';
+    html += '<p><b>' + grandMissing + '</b> teacher(s) missing PDF, out of <b>' + (grandMatched + grandMissing) + '</b> teacher(s) with metrics for week ' + configRange + '.</p>';
     if (grandMissing > 0) {
-      html += '<p>Action: ping <code>mark.katigbak</code> with the MISSING list above so upstream PDF generation re-runs for those teachers. Until then, those teacher-weeks will produce errors in the Error Log when an IM runs Generate.</p>';
+      html += '<p>Action: ping <code>mark.katigbak</code> with the MISSING list above so upstream PDF generation re-runs for those teachers. Until then, those teachers will produce errors in the Error Log when an IM runs Generate.</p>';
     } else {
-      html += '<p style="color:#2e7d32;"><b>&#10003; Every teacher with metrics has a PDF. The bulk run should produce zero PDF-missing errors for these weeks.</b></p>';
+      html += '<p style="color:#2e7d32;"><b>&#10003; Every teacher with metrics has a PDF. The bulk run will produce zero PDF-missing errors for this week.</b></p>';
     }
 
     var output = HtmlService.createHtmlOutput(html).setWidth(900).setHeight(700);
-    ui.showModalDialog(output, 'PDF Validation (last ' + lastTwo.length + ' weeks)');
+    ui.showModalDialog(output, 'PDF Validation (' + configRange + ')');
   } finally {
     lock.releaseLock();
   }
