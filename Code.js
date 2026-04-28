@@ -156,6 +156,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Debug: Check Teacher Names (roster vs metrics)', 'checkTeacherNames')
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
+    .addItem('Debug: Validate All PDFs (last 2 weeks)', 'validateAllPdfs')
     .addItem('Debug: Drive Access', 'debugDriveAccess')
     .addItem('Debug: Drive Auth (run if "Service error: Drive")', 'diagnoseDriveAuth')
     .addItem('View Error Log', 'viewErrorLog')
@@ -2809,6 +2810,149 @@ function checkTeacherFolders() {
 
   var htmlOutput = HtmlService.createHtmlOutput(report).setWidth(600).setHeight(500);
   ui.showModalDialog(htmlOutput, 'Folder Diagnostic');
+}
+
+// ============================================
+// v2.6.2 — VALIDATE ALL PDFs (Drive PDF coverage check)
+// ============================================
+//
+// Iterates ALL teachers across ALL schools (every IM's roster, plus Reading
+// Teachers tab). For each of the last 2 weeks: looks up the teacher's metrics
+// using the SAME chain the bulk Generate run uses (lookupByName + NAME_ALIASES),
+// and if metrics exist, checks Drive for a PDF using findTeacherPdfBySearch.
+//
+// Reports MISSING (metrics but no PDF). Runs as the current user — works for
+// shared-with-me Drive folders that the service-account-side Python validator
+// (scripts/validate_pdfs.py) cannot see.
+//
+// This is the answer to "are there any teachers with data but no report?".
+
+function validateAllPdfs() {
+  var ui = SpreadsheetApp.getUi();
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    ui.alert('Already Running',
+      'Email generation or another validation is in progress. Wait for it to finish before validating.',
+      ui.ButtonSet.OK);
+    return;
+  }
+  try {
+    _runIdCache = null;
+
+    var weeks = getAvailableWeeks();
+    if (weeks.length === 0) {
+      ui.alert('Error', 'No weeks found in Available Weeks tab.', ui.ButtonSet.OK);
+      return;
+    }
+    var lastTwo = weeks.slice(0, 2);
+
+    var rootFolder = getRootFolder();
+    if (!rootFolder) {
+      ui.alert('Error', 'Could not find root folder. Run Debug: Drive Access first.', ui.ButtonSet.OK);
+      return;
+    }
+
+    // Get ALL schools across ALL IMs (NOT filtered by current user). Validation
+    // is system-wide, so every teacher anywhere in the roster is in scope.
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
+    var allSchools = [];
+    var seenDisplay = {};
+    for (var i = 1; i < mappingData.length; i++) {
+      var folderName = String(mappingData[i][0] || '').trim();
+      var displayName = String(mappingData[i][1] || '').trim() || folderName;
+      if (!displayName || seenDisplay[displayName]) continue;
+      seenDisplay[displayName] = true;
+      allSchools.push({ folderName: folderName, displayName: displayName });
+    }
+    var allDisplayNames = allSchools.map(function(s) { return s.displayName; });
+    var allTeachers = getTeachersForSchools(allDisplayNames);
+
+    // Build school folder cache once — reused across all weeks.
+    var schoolFolderCache = buildSchoolFolderCache(allSchools, rootFolder);
+
+    var html = '<h2>PDF Validation Report</h2>';
+    html += '<p><b>User:</b> ' + Session.getActiveUser().getEmail() + '</p>';
+    html += '<p><b>Schools scanned:</b> ' + allSchools.length + '</p>';
+    html += '<p><b>Teachers in roster:</b> ' + allTeachers.length + '</p>';
+    html += '<p style="font-size:12px;color:#555;">For each week below, this checks every teacher with metrics in BigQuery against the Drive folder for a matching PDF, using the same lookup chain (lookupByName + NAME_ALIASES + search-API PDF lookup) as the bulk Generate run.</p>';
+
+    var grandMissing = 0, grandMatched = 0;
+
+    for (var w = 0; w < lastTwo.length; w++) {
+      var dateRange = lastTwo[w];
+      var weekStart = dateRange.split('_to_')[0];
+      var allMetrics = getTeacherMetricsForWeek(weekStart);
+
+      html += '<h3>Week ' + dateRange + '</h3>';
+      if (Object.keys(allMetrics).length === 0) {
+        html += '<p style="color:#888;"><i>No metrics rows for this week.</i></p>';
+        continue;
+      }
+
+      var withMetrics = [];
+      for (var t = 0; t < allTeachers.length; t++) {
+        var teacher = allTeachers[t];
+        var metrics = lookupByName(allMetrics, teacher.firstName, teacher.lastName, teacher.name);
+        if (metrics) withMetrics.push(teacher);
+      }
+
+      var missing = [];
+      var found = 0;
+      for (var t2 = 0; t2 < withMetrics.length; t2++) {
+        var teacher2 = withMetrics[t2];
+        var pdf = null;
+        var note = '';
+        try {
+          pdf = findTeacherPdfBySearch(teacher2, dateRange, schoolFolderCache);
+        } catch (e) {
+          note = 'Drive lookup error: ' + (e.message || e);
+        }
+        if (pdf) found++;
+        else missing.push({ teacher: teacher2, error: note });
+      }
+
+      grandMatched += found;
+      grandMissing += missing.length;
+
+      var matchRate = withMetrics.length === 0 ? 0 : (found / withMetrics.length * 100);
+      html += '<p><b>Teachers with metrics:</b> ' + withMetrics.length + '</p>';
+      html += '<p><b>PDF match rate:</b> ' + matchRate.toFixed(1) + '% &nbsp; (' + found + ' / ' + withMetrics.length + ')</p>';
+
+      if (missing.length === 0) {
+        html += '<p style="color:#2e7d32;font-weight:bold;">&#10003; All teachers with metrics have PDFs.</p>';
+      } else {
+        html += '<p style="color:#c62828;"><b>&#10071; MISSING PDFs (' + missing.length + ' teacher(s)):</b></p>';
+        // Sort by school then name so IMs can scan their districts.
+        missing.sort(function(a, b) {
+          var ca = (a.teacher.campus || ''), cb = (b.teacher.campus || '');
+          if (ca !== cb) return ca < cb ? -1 : 1;
+          return (a.teacher.name || '') < (b.teacher.name || '') ? -1 : 1;
+        });
+        html += '<table border="1" cellpadding="6" style="border-collapse:collapse;font-size:13px;width:100%;">';
+        html += '<tr style="background:#1a1a1a;color:#fff;"><th>Teacher</th><th>Email</th><th>School</th><th>Note</th></tr>';
+        for (var m = 0; m < missing.length; m++) {
+          var ms = missing[m];
+          html += '<tr><td><b>' + ms.teacher.name + '</b></td><td>' + ms.teacher.email + '</td><td>' + ms.teacher.campus + '</td><td>' + (ms.error || 'No PDF found in Drive') + '</td></tr>';
+        }
+        html += '</table>';
+      }
+    }
+
+    // Summary
+    html += '<hr><h3>Summary</h3>';
+    html += '<p><b>' + grandMissing + '</b> teacher-week(s) missing PDF, out of <b>' + (grandMatched + grandMissing) + '</b> teacher-week(s) with metrics across ' + lastTwo.length + ' week(s).</p>';
+    if (grandMissing > 0) {
+      html += '<p>Action: ping <code>mark.katigbak</code> with the MISSING list above so upstream PDF generation re-runs for those teachers. Until then, those teacher-weeks will produce errors in the Error Log when an IM runs Generate.</p>';
+    } else {
+      html += '<p style="color:#2e7d32;"><b>&#10003; Every teacher with metrics has a PDF. The bulk run should produce zero PDF-missing errors for these weeks.</b></p>';
+    }
+
+    var output = HtmlService.createHtmlOutput(html).setWidth(900).setHeight(700);
+    ui.showModalDialog(output, 'PDF Validation (last ' + lastTwo.length + ' weeks)');
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**

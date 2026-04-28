@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.2] - 2026-04-28
+
+### Comprehensive PDF coverage validator (Apps Script side)
+
+After v2.6.1's smoke-test fix landed, user asked: "are there any other teachers who have ANY data from the last two weeks that do NOT have reports made for them?". The Python validator I wrote first (`scripts/validate_pdfs.py`) returned 0 PDFs because the service account `service-account@reading-dashboard-482106.iam.gserviceaccount.com` has no Drive access to the teacher PDF folders (those folders are owned by mark.katigbak's upstream system, not Khiem's pipeline).
+
+### Pivot
+
+Built the equivalent check INTO Apps Script as a menu item. Apps Script runs as the active user (the IM, or Khiem when validating), whose Drive auth has shared-with-me access to every teacher PDF folder.
+
+### What's new
+
+- **NEW menu item: `Email Tools -> Debug: Validate All PDFs (last 2 weeks)`** — runs `validateAllPdfs()`.
+- **NEW `validateAllPdfs()`** (~115 LOC, placed near other debug functions before `debugDriveAccess`):
+  1. LockService guard (won't run during a bulk Generate or another validation).
+  2. Reads last 2 weeks from Available Weeks tab.
+  3. Iterates ALL schools across ALL IMs (NOT filtered by current user — system-wide check).
+  4. Iterates ALL teachers across all schools (Teacher Emails + Reading Teachers tabs).
+  5. For each week, for each teacher: `lookupByName(metrics, ...)` to check has-metrics, then `findTeacherPdfBySearch(...)` to check has-PDF.
+  6. Reports MISSING (metrics but no PDF) in an HTML modal sorted by school + name. Includes match rate per week and a grand-total summary.
+
+### Why same chain matters
+
+This uses the EXACT same lookup chain as the bulk Generate run (`lookupByName` + `NAME_ALIASES` + search-API PDF lookup). So a "MISSING" here = guaranteed Error Log entry during the next bulk Generate. No false positives from divergent code paths.
+
+### Python script note
+
+Updated `scripts/validate_pdfs.py` docstring to call out the SA-permission limitation and recommend the Apps Script menu item as the authoritative check. The Python script remains useful if/when the SA is shared on the parent Drive folder (one-line CLI, scriptable for CI).
+
+### Files modified
+
+- `Code.js` — `validateAllPdfs()` function (+~115 LOC) before `debugDriveAccess`; menu item added under existing debug entries.
+- `scripts/validate_pdfs.py` — docstring header updated with SA-limitation note + Apps Script alternative pointer.
+- `package.json` — version bump 2.6.1 -> 2.6.2.
+- `CHANGELOG.md` — this entry.
+- `CLAUDE.md` — v2.6.2 history line.
+
+### Verified
+
+- ✓ `node --check Code.js`: SYNTAX OK
+- ✓ `node test_runner.js`: 45 / 45 unit tests PASS (no regression — function is additive)
+- ✓ Menu inspection: new "Debug: Validate All PDFs (last 2 weeks)" entry between Check Teacher Folders and Drive Access
+
+### Action required after deploy
+
+1. Reload spreadsheet (close tab + reopen) for new menu state.
+2. Run **Email Tools -> Debug: Validate All PDFs (last 2 weeks)**.
+3. Review the MISSING list — for each teacher-week missing a PDF, ping mark.katigbak so upstream PDF generation re-runs.
+4. After upstream regen, re-run the validator to confirm 0 missing.
+
 ## [v2.6.1] - 2026-04-28
 
 ### Smoke test fixture: swap Faith Armstrong → Vipul Singhal (Metro)
