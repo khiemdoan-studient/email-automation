@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.3] - 2026-04-28
+
+### validateAllPdfs: add traversal fallback (mirror createDraftForTeacher)
+
+User ran v2.6.2's `validateAllPdfs` and got 0/74 PDF match for the current week + 50/74 for the prior week, with many MISSING teachers (Bertha Folk, Avlen Edwards, Verenice Rivera, etc.) whose PDFs were clearly visible in Drive. Same teachers had succeeded in v2.6.0's smoke test — same code path (`findTeacherPdfBySearch`), same week. Why the divergence?
+
+### Root cause
+
+`createDraftForTeacher` (Code.js:1865-1881) does **search-API first, traversal fallback** — but my v2.6.2 `validateAllPdfs` only called `findTeacherPdfBySearch`. It missed the fallback entirely.
+
+Drive's search API has known **search-index lag** for shared-with-me users: a file added by a different owner (mark.katigbak) is not immediately findable via `getFilesByName`, even though the file is fully accessible via folder traversal. The fallback in `createDraftForTeacher` exists exactly to handle this — once the school folder is cached, `findTeacherPdfByTraversal` finds files inside it regardless of search-index state.
+
+So the bulk Generate run worked for the same teachers that validateAllPdfs reported as missing — search returned null, traversal succeeded silently. validateAllPdfs was reporting false-positives because it stopped at search.
+
+### Fix
+
+`validateAllPdfs` now mirrors the exact same two-phase lookup as `createDraftForTeacher`:
+
+1. Try `findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache)` first.
+2. If null, try `findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache)`.
+3. Only report MISSING if BOTH return null (which is what `createDraftForTeacher` would also fail on).
+
+Added `schoolFolderMap` build (mirrors lines 815-818 of generateDraftsForCurrentUser). Added `foundViaFallback` counter; the per-week match-rate line now shows e.g. `67.6% (50 / 74) (12 via traversal fallback — search-index lag)` when the fallback was needed, so user can distinguish "search index stale" from "real upstream gap".
+
+### Files modified
+
+- `Code.js` — `validateAllPdfs` (~10 LOC added: schoolFolderMap build + traversal call + counter).
+- `package.json` — version bump 2.6.2 → 2.6.3.
+- `CHANGELOG.md` — this entry.
+- `CLAUDE.md` — v2.6.3 history line.
+
+### Verified
+
+- ✓ `node --check Code.js`: SYNTAX OK
+- ✓ `node test_runner.js`: 45 / 45 unit tests PASS (no regression — fallback is additive)
+- ✓ `npm run deploy`: pushed to clasp
+
+### Action required
+
+1. Reload spreadsheet (close tab + reopen).
+2. Re-run **Email Tools -> Debug: Validate All PDFs (last 2 weeks)**.
+3. Match rate should now match the bulk-Generate reality. Any "MISSING" reported here is a true upstream gap (no PDF anywhere in Drive for that teacher-week, by either lookup method) — pingable to mark.katigbak.
+
+### Lesson
+
+When mirroring an existing flow's behavior, **mirror the WHOLE flow**, not just the headline call. The bulk Generate run's PDF lookup is two-phase by design (v2.5.0 + v2.5.x); v2.6.2 cherry-picked one phase and produced false positives. Same lesson as the v2.5.2 incident (`checkTeacherFolders` searched only one folder-name form but Drive uses both — pre-existing bug surfaced by mismatched assumptions).
+
 ## [v2.6.2] - 2026-04-28
 
 ### Comprehensive PDF coverage validator (Apps Script side)

@@ -2870,6 +2870,11 @@ function validateAllPdfs() {
 
     // Build school folder cache once — reused across all weeks.
     var schoolFolderCache = buildSchoolFolderCache(allSchools, rootFolder);
+    // schoolFolderMap is needed for traversal fallback (mirrors generateDraftsForCurrentUser).
+    var schoolFolderMap = {};
+    for (var sm = 0; sm < allSchools.length; sm++) {
+      schoolFolderMap[allSchools[sm].displayName] = allSchools[sm].folderName;
+    }
 
     var html = '<h2>PDF Validation Report</h2>';
     html += '<p><b>User:</b> ' + Session.getActiveUser().getEmail() + '</p>';
@@ -2899,14 +2904,27 @@ function validateAllPdfs() {
 
       var missing = [];
       var found = 0;
+      var foundViaFallback = 0;
       for (var t2 = 0; t2 < withMetrics.length; t2++) {
         var teacher2 = withMetrics[t2];
         var pdf = null;
         var note = '';
+        // v2.6.3: mirror createDraftForTeacher's two-phase lookup. Search-API
+        // returns 0 hits for files mark.katigbak just added (Drive search index
+        // updates lazily for shared-with-me users), but the iteration fallback
+        // works because we already have the school folder cached.
         try {
           pdf = findTeacherPdfBySearch(teacher2, dateRange, schoolFolderCache);
         } catch (e) {
-          note = 'Drive lookup error: ' + (e.message || e);
+          note = 'Search-API error: ' + (e.message || e);
+        }
+        if (!pdf) {
+          try {
+            pdf = findTeacherPdfByTraversal(teacher2, dateRange, rootFolder, schoolFolderMap, schoolFolderCache);
+            if (pdf) foundViaFallback++;
+          } catch (e2) {
+            if (!note) note = 'Traversal error: ' + (e2.message || e2);
+          }
         }
         if (pdf) found++;
         else missing.push({ teacher: teacher2, error: note });
@@ -2917,7 +2935,11 @@ function validateAllPdfs() {
 
       var matchRate = withMetrics.length === 0 ? 0 : (found / withMetrics.length * 100);
       html += '<p><b>Teachers with metrics:</b> ' + withMetrics.length + '</p>';
-      html += '<p><b>PDF match rate:</b> ' + matchRate.toFixed(1) + '% &nbsp; (' + found + ' / ' + withMetrics.length + ')</p>';
+      html += '<p><b>PDF match rate:</b> ' + matchRate.toFixed(1) + '% &nbsp; (' + found + ' / ' + withMetrics.length + ')';
+      if (foundViaFallback > 0) {
+        html += ' &nbsp; <span style="color:#888;">(' + foundViaFallback + ' via traversal fallback — search-index lag)</span>';
+      }
+      html += '</p>';
 
       if (missing.length === 0) {
         html += '<p style="color:#2e7d32;font-weight:bold;">&#10003; All teachers with metrics have PDFs.</p>';
