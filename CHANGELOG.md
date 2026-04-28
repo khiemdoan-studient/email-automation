@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.0] - 2026-04-27
+
+### Audit follow-up — 6 deferred items addressed (helpers, magic nums, smoke test, regen, clasp, tests)
+
+After v2.5.3 audit shipped 16 fixes and deferred 6, this release tackles the deferred set per user direction. Phases A-F:
+
+### Phase A — Helper extraction (audit finding M-6)
+
+DRY cleanup for code duplicated 4+ times. Extracted to `HELPER FUNCTIONS` section near the top of Code.gs:
+
+- **`getMySchools(currentUserEmail, mappingData?)`**: filter School-IM Mapping by IM email. Used by `generateDraftsForCurrentUser`, `checkTeacherNames`, `checkTeacherFolders`, `debugDriveAccess`. ~30 LOC saved.
+- **`findSchoolFolder(school, rootFolder)`**: try displayName first (search-API path that works for shared-with-me), fallback to folderName. ~15 LOC saved.
+- **`buildSchoolFolderCache(mySchools, rootFolder)`**: dual-keyed cache build (per v2.5.1 fix). Calls `findSchoolFolder` internally.
+- **`cellToDateString(val)`**: convert Sheets cell value (Date object OR string) to ISO `YYYY-MM-DD`. Used in `checkMetricsExistForWeek` + `getTeacherMetricsForWeek`. ~10 LOC saved.
+
+**Validation strategy**: scanner ran BEFORE refactor (75/86 baseline) and AFTER (75/86 confirmed identical). All 30 existing tests pass. New tests added (see Phase F).
+
+### Phase B — Magic number extraction (audit finding #4)
+
+- **NEW `CONFIG.THRESHOLDS`**: `ACTIVE_DAYS_GREEN: 3.95`, `ACTIVE_DAYS_YELLOW: 2.95`, `AVG_MINS_GREEN: 99.5`, `AVG_MINS_YELLOW: 79.5`. Used by `buildMetricsTable` cell shading.
+- **NEW `CONFIG.LIMITS`**: `ERROR_LOG_MAX_ROWS: 500`, `ERROR_LOG_TRIM_TRIGGER: 600`, `ERROR_MSG_TRUNCATE: 1500`. Replaces module-level vars from v2.5.1.
+- All 7 magic-number sites in Code.gs now reference CONFIG.
+
+### Phase C — Smoke test fixture (audit alternative for #2 DriveAdapter)
+
+NEW menu item: **`Test Mode: Generate Smoke Test (drafts to me)`**.
+
+- **`CONFIG.SMOKE_TEST_TEACHERS`** (8 teachers, 1-2 per district): Avlen Edwards (JHMS), Muntasir Hamid (JHMS), Anton Haughton (AFMS), Bertha Folk (AFMS), Kim Bell (Reading — note: 1 of 11 upstream gaps as of 2026-04-20), Faith Armstrong (Metro), Verenice Rivera (Metro), Rebecca Reynolds (JHES).
+- **`findTeacherByName(nameLower)`**: NEW helper that searches BOTH Teacher Emails + Reading Teachers tabs. Returns same teacher shape as `getTeachersForSchools`.
+- **`generateSmokeTest()`**: full generation pipeline (search-API + alias resolution + PDF lookup + draft creation) but overrides `teacher.email` with current user's email. Result: ~6-8 drafts in YOUR Gmail Drafts folder for visual inspection.
+- Use case: pre-cycle sanity check that all template elements (metrics table, winners, trend alert, PDF attachment) render correctly across districts. Catches integration bugs that pure-function tests miss.
+
+### Phase D — Retry multi-select dialog (audit finding #3)
+
+NEW menu item: **`Retry Last Run's Failed Teachers`**.
+
+Persistence via Error Log `run_id` (per user choice — multi-session retries supported).
+
+- **`retryLastRunFailed()`**: reads Error Log, finds most recent `run_id`'s `ERROR`-severity rows from `createDraftForTeacher`, opens a modal with checkboxes (one per failed teacher, all checked by default).
+- **`_buildRetryDialogHtml(failedTeachers, runId)`** (pure helper, testable): renders the HTML form. Sanitizes runId against XSS (strips `<>"` chars). Has 4 unit tests.
+- **`processRetry(selectedTeacherStrs)`**: server-side handler called by the modal. Re-resolves teacher objects by email, runs `deleteExistingDraft` then `createDraftForTeacher` for each selected. Returns HTML summary.
+- **`deleteExistingDraft(teacherEmail, subject)`**: NEW helper. Iterates `GmailApp.getDrafts()`, deletes any draft matching the (recipient, subject) pair. Returns count deleted. Resilient to mid-iteration draft-deleted-by-user.
+- LockService respected — retry waits if a bulk run is in progress.
+
+### Phase E — clasp deploy automation (audit finding #1)
+
+User opted to set up clasp themselves and report back. This release adds the documentation + scripts; user does the auth + first push.
+
+- **NEW `docs/CLASP_SETUP.md`**: step-by-step guide (install → enable Apps Script API → login → pull → push → troubleshooting). Includes "When NOT to use clasp" section for Workspace SSO restrictions.
+- **`package.json`** scripts added: `npm run pull`, `npm run push`, `npm run open`, `npm run deploy`.
+- **Manual paste workflow preserved** as fallback. CLASP_SETUP.md explicitly notes this.
+
+### Phase F — Tests + docs
+
+**`runUnitTests` grew from 30 → 45 test cases** (+15 v2.6.0):
+- `cellToDateString` × 4 (Date object, string passthrough, null, undefined)
+- `getMySchools` × 4 (frank/bruna filtering, no-match, returned-shape)
+- `_buildRetryDialogHtml` × 4 (header, teacher name, empty list, runId XSS sanitize)
+- `CONFIG.THRESHOLDS / LIMITS` sanity × 3 (existence, ordering invariants)
+
+All 45 pass via `node test_runner.js` (with NAME_ALIASES drift check + new tests).
+
+### Files modified
+
+- `Code.gs` — Phase A (helpers + 5 caller refactors), Phase B (CONFIG.THRESHOLDS + LIMITS + 7 replacements), Phase C (~150 LOC new for smoke test), Phase D (~250 LOC new for retry dialog), Phase F (+15 unit tests). Net: ~+450 LOC (-50 from helper de-duplication).
+- `package.json` — version bump 2.5.3 → 2.6.0 + clasp scripts.
+- `docs/CLASP_SETUP.md` — NEW.
+- `CHANGELOG.md` — this entry.
+- `CLAUDE.md` — v2.6.0 history line.
+- `write_doc.py` — user-facing v2.6.0 summary.
+
+### Verified
+
+- ✓ `node --check Code.gs`: SYNTAX OK
+- ✓ `node test_runner.js`: NAME_ALIASES drift check PASS + **45 / 45** unit tests PASS
+- ✓ `python scripts/check_email_data.py --week 2026-04-20`: still **75 / 86** matched (no regression from helper extraction)
+
+### Action required after deploy
+
+1. **(Recommended)** Set up clasp per `docs/CLASP_SETUP.md`. Once configured, deploy is `npm run push` instead of paste-into-editor.
+2. Paste latest `Code.gs` into Apps Script editor (or `npm run push` after clasp setup) → Save → reload spreadsheet.
+3. Run **Email Tools → Run Unit Tests** — expect **45 passed, 0 failed**.
+4. Run **Email Tools → Test Mode: Generate Smoke Test (drafts to me)** — should create ~7-8 drafts in YOUR Gmail Drafts. Inspect visually for rendering issues across districts.
+5. After your next bulk Generate run, if any teachers fail, try **Email Tools → Retry Last Run's Failed Teachers** for surgical retry.
+
+### Skipped (final disposition of original audit findings)
+
+| # | Finding | Status | Reason |
+|---|---------|--------|--------|
+| #5 | Unicode normalization in `lookupByName` | **Skipped permanently** | No production case; no upcoming international names confirmed |
+| (n/a) | DriveAdapter integration tests | **Replaced** | User opted for smoke test fixture (Phase C above) instead |
+
 ## [v2.5.3] - 2026-04-27
 
 ### Full project audit (3 parallel agents, 23 findings, 16 fixes)

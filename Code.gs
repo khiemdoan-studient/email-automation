@@ -16,7 +16,38 @@ var CONFIG = {
   CAMPUS_COL: 2,           // Column C: Campus
   TEACHER_FIRST_COL: 24,   // Column Y: Teacher 1 First Name
   TEACHER_LAST_COL: 25,    // Column Z: Teacher 1 Last Name
-  TEACHER_EMAIL_COL: 26    // Column AA: Teacher 1 Email
+  TEACHER_EMAIL_COL: 26,   // Column AA: Teacher 1 Email
+
+  // v2.6.0: Color-band thresholds for the metrics table cell shading.
+  // Tweak here if content team adjusts the green/yellow/red bands.
+  THRESHOLDS: {
+    ACTIVE_DAYS_GREEN: 3.95,   // >= → green; tightened from 4 to capture 3.95+ teachers
+    ACTIVE_DAYS_YELLOW: 2.95,  // >= → yellow (else red)
+    AVG_MINS_GREEN: 99.5,      // >= → green; ~100 min/wk benchmark
+    AVG_MINS_YELLOW: 79.5      // >= → yellow (else red)
+  },
+
+  // v2.6.0: Operational limits.
+  LIMITS: {
+    ERROR_LOG_MAX_ROWS: 500,        // Target row count after a trim
+    ERROR_LOG_TRIM_TRIGGER: 600,    // Hysteresis trigger (avoids O(n) deleteRows on every call past 500)
+    ERROR_MSG_TRUNCATE: 1500        // Max chars in error string shown in completion alert (Apps Script alert cap is 4096)
+  },
+
+  // v2.6.0: Smoke test fixture — 1-2 teachers per district for "Test Mode: Generate Smoke Test".
+  // Picks ~6-8 teachers across districts; smoke test generates drafts to current user
+  // (not real teachers) for visual verification that all template elements render.
+  // Names lowercased to match metrics-tab keys.
+  SMOKE_TEST_TEACHERS: [
+    'avlen edwards',          // JHMS — Jasper district
+    'muntasir hamid',         // JHMS — Jasper district
+    'anton haughton',         // AFMS — Allendale district (note: BQ name, alias maps Aston→Anton)
+    'bertha folk',            // AFMS — Allendale district
+    'kim bell',               // Reading Community (note: 1 of 11 upstream gaps as of 2026-04-20 — verify before relying)
+    'faith armstrong',        // Metro Schools
+    'verenice rivera',        // Metro Schools
+    'rebecca reynolds'        // JHES — Jasper district
+  ]
 };
 
 // ============================================
@@ -119,6 +150,9 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Email Tools')
     .addItem('Generate My Email Drafts', 'generateDraftsForCurrentUser')
+    .addItem('Retry Last Run\'s Failed Teachers', 'retryLastRunFailed')
+    .addSeparator()
+    .addItem('Test Mode: Generate Smoke Test (drafts to me)', 'generateSmokeTest')
     .addSeparator()
     .addItem('Debug: Check Teacher Names (roster vs metrics)', 'checkTeacherNames')
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
@@ -288,6 +322,397 @@ function setTemplate() {
 }
 
 // ============================================
+// v2.6.0 — SMOKE TEST FIXTURE (Phase C of audit follow-up)
+// ============================================
+//
+// Generates ~6-8 sample drafts to the current user's Gmail (NOT teacher emails)
+// for visual verification that all template elements (metrics table, winners,
+// trend alert, PDF attachment) render correctly across districts. Uses the
+// same generation pipeline as the bulk run, so it catches regressions in the
+// full path (search-API lookup, name resolution, alias handling, etc.).
+//
+// Teachers are listed in CONFIG.SMOKE_TEST_TEACHERS (1-2 per district).
+
+/**
+ * v2.6.0: Find a teacher by full lowercased name across BOTH the Teacher Emails
+ * tab AND the Reading Teachers tab. Returns the same teacher object shape as
+ * getTeachersForSchools. Returns null if not found.
+ *
+ * Used by smoke test (which needs to access teachers regardless of which IM
+ * runs the test). Production callers should use getTeachersForSchools instead.
+ */
+function findTeacherByName(nameLower) {
+  if (!nameLower) return null;
+  var target = nameLower.toLowerCase().trim();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Pass 1: Teacher Emails tab (regular schools)
+  var data = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME).getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var first = String(data[i][CONFIG.TEACHER_FIRST_COL] || '').trim();
+    var last = String(data[i][CONFIG.TEACHER_LAST_COL] || '').trim();
+    if (!first || !last) continue;
+    if ((first + ' ' + last).toLowerCase() === target) {
+      var emailVal = String(data[i][CONFIG.TEACHER_EMAIL_COL] || '').trim();
+      var campus = String(data[i][CONFIG.CAMPUS_COL] || '').trim();
+      return {
+        firstName: first.split(' ')[0],
+        lastName: last,
+        name: first + ' ' + last,
+        folderName: (first + '_' + last).replace(/ /g, '_'),
+        email: emailVal,
+        campus: campus
+      };
+    }
+  }
+
+  // Pass 2: Reading Teachers tab
+  var rs = ss.getSheetByName(CONFIG.READING_TEACHERS_SHEET_NAME);
+  if (rs) {
+    var rdata = rs.getDataRange().getValues();
+    for (var r = 1; r < rdata.length; r++) {
+      var fn = String(rdata[r][0] || '').trim();
+      var ln = String(rdata[r][1] || '').trim();
+      if (!fn || !ln) continue;
+      if ((fn + ' ' + ln).toLowerCase() === target) {
+        return {
+          firstName: fn.split(' ')[0],
+          lastName: ln,
+          name: fn + ' ' + ln,
+          folderName: (fn + '_' + ln).replace(/ /g, '_'),
+          email: String(rdata[r][2] || '').trim(),
+          campus: 'Reading Community City School District'
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * v2.6.0: Generate smoke test drafts. Creates ~6-8 drafts in the current
+ * user's Gmail (overrides teacher.email) using the teachers listed in
+ * CONFIG.SMOKE_TEST_TEACHERS. Uses currently-selected Config Date Range +
+ * Template. Result: visual inspection batch in IM's own Drafts folder.
+ */
+function generateSmokeTest() {
+  var ui = SpreadsheetApp.getUi();
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    ui.alert('Already Running',
+      'Email generation is in progress. Wait for the current run to finish before starting a smoke test.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
+    _runIdCache = null;
+    var currentUserEmail = Session.getActiveUser().getEmail();
+    var dateRange = getConfigValue('Date Range');
+    if (!dateRange) {
+      ui.alert('Error', 'Please set Date Range first.', ui.ButtonSet.OK);
+      return;
+    }
+    var templateName = getConfigValue('Template') || '4/27: Last Week of Motivention';
+    var template = TEMPLATES[templateName];
+    if (!template) {
+      ui.alert('Error', 'Unknown template: ' + templateName, ui.ButtonSet.OK);
+      return;
+    }
+
+    // Resolve smoke test teachers from CONFIG list
+    var smokeNames = CONFIG.SMOKE_TEST_TEACHERS || [];
+    var resolved = [];
+    var missing = [];
+    for (var n = 0; n < smokeNames.length; n++) {
+      var t = findTeacherByName(smokeNames[n]);
+      if (t) resolved.push(t);
+      else missing.push(smokeNames[n]);
+    }
+
+    if (resolved.length === 0) {
+      ui.alert('No smoke test teachers found',
+        'CONFIG.SMOKE_TEST_TEACHERS contains: ' + smokeNames.join(', ') +
+        '\n\nNone matched the roster. Edit CONFIG.SMOKE_TEST_TEACHERS in Code.gs.',
+        ui.ButtonSet.OK);
+      return;
+    }
+
+    var rootFolder = getRootFolder();
+    if (!rootFolder) {
+      ui.alert('Error', 'Could not find root folder. Run Debug: Drive Access.', ui.ButtonSet.OK);
+      return;
+    }
+
+    // Build cache for the smoke test schools
+    var seen = {};
+    var smokeSchools = [];
+    for (var i = 0; i < resolved.length; i++) {
+      var c = resolved[i].campus;
+      if (!seen[c] && c) {
+        seen[c] = true;
+        smokeSchools.push({ displayName: c, folderName: c.replace(/ /g, '_') });
+      }
+    }
+    var schoolFolderCache = buildSchoolFolderCache(smokeSchools, rootFolder);
+    var schoolFolderMap = {};
+    for (var s = 0; s < smokeSchools.length; s++) {
+      schoolFolderMap[smokeSchools[s].displayName] = smokeSchools[s].folderName;
+    }
+
+    // Confirm
+    var msg = 'About to generate ' + resolved.length + ' SMOKE TEST drafts to YOUR Gmail (' + currentUserEmail + '):\n\n';
+    for (var r2 = 0; r2 < resolved.length; r2++) {
+      msg += '  - ' + resolved[r2].name + ' (' + resolved[r2].campus + ')\n';
+    }
+    if (missing.length > 0) {
+      msg += '\nNot found in roster (will skip): ' + missing.join(', ') + '\n';
+    }
+    msg += '\nDate Range: ' + dateRange + '\nTemplate: ' + templateName + '\n\nProceed?';
+    if (ui.alert('Smoke Test', msg, ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+
+    // Load metrics + winners
+    var weekStart = dateRange.split('_to_')[0];
+    var allMetrics = getTeacherMetricsForWeek(weekStart);
+    var allWinners = getStudentWinners();
+
+    // Generate
+    var success = 0, fail = 0;
+    var errors = [];
+    for (var t2 = 0; t2 < resolved.length; t2++) {
+      var teacher = resolved[t2];
+      // Override email to current user
+      var smokeTeacher = {
+        firstName: teacher.firstName,
+        lastName: teacher.lastName,
+        name: teacher.name,
+        folderName: teacher.folderName,
+        campus: teacher.campus,
+        email: currentUserEmail  // <-- key override
+      };
+      var metrics = lookupByName(allMetrics, teacher.firstName, teacher.lastName, teacher.name);
+      var winners = lookupByName(allWinners, teacher.firstName, teacher.lastName, teacher.name) || [];
+      try {
+        var result = createDraftForTeacher(smokeTeacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache);
+        if (result.success) success++;
+        else { fail++; errors.push(teacher.name + ': ' + result.error); }
+      } catch (e) {
+        fail++;
+        errors.push(teacher.name + ': ' + (e.message || e));
+      }
+    }
+
+    var done = 'Smoke Test Complete: ' + success + ' drafts created in YOUR Gmail, ' + fail + ' failed.\n\n';
+    if (errors.length > 0) done += 'Errors:\n' + errors.join('\n') + '\n\n';
+    done += 'Open Gmail Drafts to verify all template elements render correctly.';
+    ui.alert('Smoke Test Complete', done, ui.ButtonSet.OK);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ============================================
+// v2.6.0 — RETRY LAST RUN'S FAILED TEACHERS (Phase D of audit follow-up)
+// ============================================
+//
+// After a bulk Generate run, IM can run "Retry Last Run's Failed Teachers"
+// from the menu. The function reads the Error Log tab, identifies the most
+// recent run_id's ERROR rows, and shows a modal with checkboxes (one per
+// failed teacher). IM picks which to retry; existing drafts are deleted
+// (with confirmation skipped — the regenerate intent implies replacement)
+// before generating fresh ones.
+//
+// Persistence: state lives in the Error Log tab via run_id. Survives page
+// reloads. Multi-session retries supported.
+
+function retryLastRunFailed() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var errorSheet = ss.getSheetByName(ERROR_LOG_TAB);
+  if (!errorSheet) {
+    ui.alert('No Error Log',
+      'Run "Generate My Email Drafts" first \u2014 the Error Log is created on the first failure.',
+      ui.ButtonSet.OK);
+    return;
+  }
+  var data = errorSheet.getDataRange().getValues();
+  if (data.length < 2) {
+    ui.alert('No Errors', 'Error Log is empty.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Find the most recent run_id by walking from the bottom.
+  var lastRunId = null;
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (data[i][1]) { lastRunId = String(data[i][1]); break; }
+  }
+  if (!lastRunId) {
+    ui.alert('No Run Found', 'Error Log has no run_id entries.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Collect ERROR rows from createDraftForTeacher in that run.
+  var failedTeachers = [];
+  var seen = {};
+  for (var j = 1; j < data.length; j++) {
+    if (String(data[j][1]) !== lastRunId) continue;
+    if (String(data[j][2]) !== 'ERROR') continue;
+    if (String(data[j][3]) !== 'createDraftForTeacher') continue;
+    var teacherStr = String(data[j][4] || '').trim();
+    if (!teacherStr || seen[teacherStr]) continue;
+    seen[teacherStr] = true;
+    failedTeachers.push(teacherStr);
+  }
+
+  if (failedTeachers.length === 0) {
+    ui.alert('No Failures',
+      'No createDraftForTeacher errors found for run ' + lastRunId + '.\n\n' +
+      'If a different run had failures, manually inspect the Error Log tab.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  // Show modal with checkboxes
+  var html = _buildRetryDialogHtml(failedTeachers, lastRunId);
+  var output = HtmlService.createHtmlOutput(html).setWidth(640).setHeight(560);
+  ui.showModalDialog(output, 'Retry Failed Teachers');
+}
+
+/** Pure helper: builds the retry dialog HTML. Testable. */
+function _buildRetryDialogHtml(failedTeachers, runId) {
+  var html = '<h2 style="margin-top:0;">Retry Failed Teachers</h2>';
+  html += '<p><b>Run:</b> <code>' + String(runId).replace(/[<>"]/g, '') + '</code></p>';
+  html += '<p>' + failedTeachers.length + ' teacher(s) failed. Pick which to retry. ';
+  html += 'Existing drafts to those teachers will be DELETED before regenerating.</p>';
+  html += '<form id="rf">';
+  for (var i = 0; i < failedTeachers.length; i++) {
+    var safeStr = String(failedTeachers[i]).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    html += '<div style="margin:6px 0;"><label>'
+      + '<input type="checkbox" name="t" value="' + safeStr + '" checked> '
+      + safeStr + '</label></div>';
+  }
+  html += '<div style="margin-top:15px;">';
+  html += '<button type="button" onclick="submitForm()" style="padding:8px 16px;font-size:14px;">Retry Selected</button> ';
+  html += '<button type="button" onclick="google.script.host.close()" style="padding:8px 16px;font-size:14px;">Cancel</button>';
+  html += '</div>';
+  html += '</form>';
+  html += '<div id="result" style="margin-top:15px;font-family:monospace;font-size:12px;white-space:pre-wrap;"></div>';
+  html += '<script>';
+  html += 'function submitForm(){';
+  html += '  var checks=document.querySelectorAll("input[name=t]:checked");';
+  html += '  var sel=Array.prototype.map.call(checks,function(c){return c.value;});';
+  html += '  if(sel.length===0){document.getElementById("result").textContent="Pick at least one teacher.";return;}';
+  html += '  document.getElementById("result").textContent="Working... please wait...";';
+  html += '  google.script.run';
+  html += '    .withSuccessHandler(function(r){document.getElementById("result").innerHTML=r;})';
+  html += '    .withFailureHandler(function(e){document.getElementById("result").textContent="Error: "+e;})';
+  html += '    .processRetry(sel);';
+  html += '}';
+  html += '</script>';
+  return html;
+}
+
+/**
+ * Server-side handler called by the retry modal. Receives an array of
+ * teacher strings (formatted "Name <email>"), deletes existing drafts,
+ * regenerates fresh ones. Returns HTML summary for the modal.
+ */
+function processRetry(selectedTeacherStrs) {
+  if (!Array.isArray(selectedTeacherStrs) || selectedTeacherStrs.length === 0) {
+    return '<span style="color:#c62828;">No teachers selected.</span>';
+  }
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    return '<span style="color:#c62828;">Another generation is in progress. Wait and try again.</span>';
+  }
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
+    var mySchools = getMySchools(currentUserEmail);
+    var allTeachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
+    var emailToTeacher = {};
+    for (var i = 0; i < allTeachers.length; i++) {
+      emailToTeacher[allTeachers[i].email.toLowerCase()] = allTeachers[i];
+    }
+
+    var dateRange = getConfigValue('Date Range');
+    var templateName = getConfigValue('Template') || '4/27: Last Week of Motivention';
+    var template = TEMPLATES[templateName];
+    if (!template) return '<span style="color:#c62828;">Unknown template: ' + templateName + '</span>';
+    var weekStart = dateRange.split('_to_')[0];
+    var allMetrics = getTeacherMetricsForWeek(weekStart);
+    var allWinners = getStudentWinners();
+    var rootFolder = getRootFolder();
+    if (!rootFolder) return '<span style="color:#c62828;">Root folder not found.</span>';
+    var schoolFolderCache = buildSchoolFolderCache(mySchools, rootFolder);
+    var schoolFolderMap = {};
+    for (var s2 = 0; s2 < mySchools.length; s2++) {
+      schoolFolderMap[mySchools[s2].displayName] = mySchools[s2].folderName;
+    }
+
+    var success = 0, fail = 0;
+    var report = [];
+    for (var k = 0; k < selectedTeacherStrs.length; k++) {
+      var teacherStr = selectedTeacherStrs[k];
+      var em = teacherStr.match(/<([^>]+)>$/);
+      if (!em) {
+        fail++;
+        report.push('\u2717 Could not parse email from: ' + teacherStr);
+        continue;
+      }
+      var email = em[1].toLowerCase();
+      var teacher = emailToTeacher[email];
+      if (!teacher) {
+        fail++;
+        report.push('\u2717 Teacher not found in roster: ' + email);
+        continue;
+      }
+      // Delete existing draft
+      try { deleteExistingDraft(teacher.email, template.subject); }
+      catch (e) { /* ignore — will create new anyway */ }
+      var metrics = lookupByName(allMetrics, teacher.firstName, teacher.lastName, teacher.name);
+      var winners = lookupByName(allWinners, teacher.firstName, teacher.lastName, teacher.name) || [];
+      try {
+        var result = createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache);
+        if (result.success) { success++; report.push('\u2713 ' + teacher.name); }
+        else { fail++; report.push('\u2717 ' + teacher.name + ': ' + result.error); }
+      } catch (e) {
+        fail++;
+        report.push('\u2717 ' + teacher.name + ': ' + (e.message || e));
+      }
+    }
+    return '<b>' + success + ' retried successfully, ' + fail + ' failed.</b><br><br>' + report.join('<br>');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * v2.6.0: Delete any existing draft to a given recipient with a matching subject.
+ * Returns count of drafts deleted. Used by processRetry before regenerating.
+ */
+function deleteExistingDraft(teacherEmail, subject) {
+  if (!teacherEmail || !subject) return 0;
+  var emailLower = teacherEmail.toLowerCase();
+  var drafts = GmailApp.getDrafts();
+  var deleted = 0;
+  for (var i = 0; i < drafts.length; i++) {
+    try {
+      var msg = drafts[i].getMessage();
+      if (msg.getSubject() === subject &&
+          msg.getTo().toLowerCase().indexOf(emailLower) !== -1) {
+        drafts[i].deleteDraft();
+        deleted++;
+      }
+    } catch (e) {
+      // Draft may have been deleted by user mid-iteration; skip and continue.
+    }
+  }
+  return deleted;
+}
+
+// ============================================
 // MAIN GENERATION FLOW
 // ============================================
 function generateDraftsForCurrentUser() {
@@ -323,14 +748,9 @@ function generateDraftsForCurrentUser() {
     return ui.alert('Error', 'Unknown template: ' + templateName + '\n\nSet a valid template in Config or use Email Tools > Set Template.', ui.ButtonSet.OK);
   }
 
-  // Get IM's assigned schools
+  // Get IM's assigned schools (v2.6.0: extracted to getMySchools helper).
   var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
-  var mySchools = [];
-  for (var i = 1; i < mappingData.length; i++) {
-    if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
-      mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
-    }
-  }
+  var mySchools = getMySchools(currentUserEmail, mappingData);
 
   if (mySchools.length === 0) return ui.alert('Error', 'Your email is not assigned to any schools.', ui.ButtonSet.OK);
 
@@ -352,22 +772,10 @@ function generateDraftsForCurrentUser() {
   // (with spaces) first means most lookups exact-match in one Drive call and avoid the
   // failure surface entirely. folderName is kept as a backstop for any sheet rows that
   // only have it populated.
-  // v2.5.1: cache keyed by BOTH displayName AND folderName for robust lookups.
-  // Reads use teacher.campus (which equals displayName by construction in
-  // getTeachersForSchools), but dual-keying prevents silent cache misses if
-  // any future caller passes the folderName form instead.
-  var schoolFolderCache = {};
-  for (var sIdx = 0; sIdx < mySchools.length; sIdx++) {
-    var sch = mySchools[sIdx];
-    var folder = sch.displayName ? findFolderByName(sch.displayName, rootFolder) : null;
-    if (!folder && sch.folderName) folder = findFolderByName(sch.folderName, rootFolder);
-    if (folder) {
-      if (sch.displayName) schoolFolderCache[sch.displayName] = folder;
-      if (sch.folderName && sch.folderName !== sch.displayName) {
-        schoolFolderCache[sch.folderName] = folder;
-      }
-    }
-  }
+  // v2.6.0: cache build extracted to buildSchoolFolderCache helper. Cache is
+  // dual-keyed by both displayName AND folderName (per v2.5.1 fix) — see helper
+  // doc-comment for rationale.
+  var schoolFolderCache = buildSchoolFolderCache(mySchools, rootFolder);
 
   // v2.5.3: pre-flight `checkDriveFolderExists` removed. After the v2.5.0
   // search-API pivot, that pre-flight was wasted work — it failed-open on
@@ -427,8 +835,8 @@ function generateDraftsForCurrentUser() {
   if (errorCount > 0) {
     // Cap error string at ~1500 chars to stay well under Apps Script's 4096-char alert limit.
     var errStr = errors.join(' | ');
-    if (errStr.length > 1500) {
-      errStr = errStr.substring(0, 1500) + '... (' + (errors.length) + ' total errors -- see logs for full list)';
+    if (errStr.length > CONFIG.LIMITS.ERROR_MSG_TRUNCATE) {
+      errStr = errStr.substring(0, CONFIG.LIMITS.ERROR_MSG_TRUNCATE) + '... (' + (errors.length) + ' total errors -- see logs for full list)';
       console.log('Full error list:\n' + errors.join('\n'));
     }
     msg += ' | ERRORS: ' + errStr;
@@ -444,6 +852,93 @@ function generateDraftsForCurrentUser() {
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
+
+// ─────────────────────────────────────────────────────────────────────
+// v2.6.0: Shared helpers extracted from 4+ callers (DRY cleanup per audit M-6).
+// Each helper has a unit test; behavior is byte-equivalent to the inline code
+// it replaced (verified via scanner before/after diff).
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * v2.6.0: Get the IM's assigned schools by reading the School-IM Mapping tab.
+ * Filters by IM email; returns array of {folderName, displayName} objects.
+ *
+ * @param {string} currentUserEmail   IM's email (lowercased + trimmed by caller)
+ * @param {Array<Array>=} mappingData Optional: pre-loaded mapping data (saves a
+ *     Sheets API call when caller already has it). If omitted, loaded internally.
+ * @return {Array<{folderName: string, displayName: string}>}
+ */
+function getMySchools(currentUserEmail, mappingData) {
+  if (!mappingData) {
+    mappingData = SpreadsheetApp.getActiveSpreadsheet()
+      .getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
+  }
+  var mySchools = [];
+  for (var i = 1; i < mappingData.length; i++) {
+    if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
+      mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
+    }
+  }
+  return mySchools;
+}
+
+/**
+ * v2.6.0: Look up a single school's Drive folder. Tries displayName first
+ * (search-API path that works for shared-with-me users), falls back to
+ * folderName (underscored form).
+ *
+ * @param {{displayName: string, folderName: string}} school
+ * @param {Folder} rootFolder
+ * @return {Folder|null}
+ */
+function findSchoolFolder(school, rootFolder) {
+  if (!school) return null;
+  var folder = school.displayName ? findFolderByName(school.displayName, rootFolder) : null;
+  if (!folder && school.folderName) folder = findFolderByName(school.folderName, rootFolder);
+  return folder;
+}
+
+/**
+ * v2.6.0: Build the school-folder cache used by createDraftForTeacher's PDF
+ * lookup path. Cache is dual-keyed by both displayName AND folderName (per
+ * v2.5.1 fix) so reads via either key hit. Calls findSchoolFolder for each.
+ *
+ * @param {Array<{displayName, folderName}>} mySchools
+ * @param {Folder} rootFolder
+ * @return {Object<string, Folder>}
+ */
+function buildSchoolFolderCache(mySchools, rootFolder) {
+  var cache = {};
+  for (var i = 0; i < mySchools.length; i++) {
+    var sch = mySchools[i];
+    var folder = findSchoolFolder(sch, rootFolder);
+    if (folder) {
+      if (sch.displayName) cache[sch.displayName] = folder;
+      if (sch.folderName && sch.folderName !== sch.displayName) {
+        cache[sch.folderName] = folder;
+      }
+    }
+  }
+  return cache;
+}
+
+/**
+ * v2.6.0: Convert a sheet cell value (Date object OR string) to ISO date
+ * string "YYYY-MM-DD". Used for week_start columns where the Sheets API may
+ * return either type depending on the cell format.
+ *
+ * @param {any} val
+ * @return {string}
+ */
+function cellToDateString(val) {
+  if (val instanceof Date) {
+    var y = val.getFullYear();
+    var m = ('0' + (val.getMonth() + 1)).slice(-2);
+    var d = ('0' + val.getDate()).slice(-2);
+    return y + '-' + m + '-' + d;
+  }
+  return String(val == null ? '' : val).trim();
+}
 
 /**
  * Looks up a teacher in a name-keyed object, trying multiple name formats.
@@ -523,16 +1018,8 @@ function checkMetricsExistForWeek(weekStart) {
   if (!sheet) return false;
   var data = sheet.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
-    var val = data[i][0];
-    if (val instanceof Date) {
-      var y = val.getFullYear();
-      var m = ('0' + (val.getMonth() + 1)).slice(-2);
-      var d = ('0' + val.getDate()).slice(-2);
-      val = y + '-' + m + '-' + d;
-    } else {
-      val = String(val).trim();
-    }
-    if (val === weekStart) return true;
+    // v2.6.0: extracted to cellToDateString helper.
+    if (cellToDateString(data[i][0]) === weekStart) return true;
   }
   return false;
 }
@@ -569,17 +1056,8 @@ function getTeacherMetricsForWeek(weekStart) {
   var metrics = {};
 
   for (var i = 1; i < data.length; i++) {
-    // Column A: week_start
-    var wsVal = data[i][0];
-    if (wsVal instanceof Date) {
-      var y = wsVal.getFullYear();
-      var m = ('0' + (wsVal.getMonth() + 1)).slice(-2);
-      var d = ('0' + wsVal.getDate()).slice(-2);
-      wsVal = y + '-' + m + '-' + d;
-    } else {
-      wsVal = String(wsVal).trim();
-    }
-
+    // Column A: week_start (v2.6.0: extracted to cellToDateString helper).
+    var wsVal = cellToDateString(data[i][0]);
     if (wsVal !== weekStart) continue;
 
     // Column B: Teacher, C: Grade, D-L: metrics
@@ -785,8 +1263,7 @@ function withGmailRetry(fn) {
 
 var ERROR_LOG_TAB = 'Error Log';
 var ERROR_LOG_HEADERS = ['timestamp', 'run_id', 'severity', 'function', 'teacher', 'message', 'stack'];
-var ERROR_LOG_MAX_ROWS = 500;       // Target row count after a trim
-var ERROR_LOG_TRIM_TRIGGER = 600;   // v2.5.1: only trigger trim when count exceeds this (hysteresis to avoid O(n) deleteRows on every call past 500)
+// v2.6.0: ERROR_LOG_MAX_ROWS + ERROR_LOG_TRIM_TRIGGER moved to CONFIG.LIMITS.
 var _runIdCache = null;
 
 /**
@@ -838,16 +1315,13 @@ function logError(severity, fnName, teacherObj, message, stack) {
       String(stack || '').substring(0, 500)
     ]);
 
-    // v2.5.1: Trim with hysteresis. Old (v2.5.0) behavior triggered deleteRows
-    // on EVERY call past 500 — an O(n) Sheet operation that rewrites all
-    // subsequent rows. End-of-year runs that log 50+ errors per execution
-    // would cascade into 50 expensive deletes mid-loop. New: only trigger
-    // trim when count exceeds ERROR_LOG_TRIM_TRIGGER (600), then trim down
-    // to ERROR_LOG_MAX_ROWS (500). Trims ~once every 100 errors instead of
-    // on every call.
+    // v2.5.1: Trim with hysteresis. v2.6.0: thresholds moved to CONFIG.LIMITS.
+    // Only trigger trim when count exceeds CONFIG.LIMITS.ERROR_LOG_TRIM_TRIGGER (600);
+    // then trim down to CONFIG.LIMITS.ERROR_LOG_MAX_ROWS (500). Avoids O(n) deleteRows
+    // on every call past 500.
     var lastRow = sheet.getLastRow();
-    if (lastRow > ERROR_LOG_TRIM_TRIGGER + 1) {
-      sheet.deleteRows(2, lastRow - ERROR_LOG_MAX_ROWS - 1);
+    if (lastRow > CONFIG.LIMITS.ERROR_LOG_TRIM_TRIGGER + 1) {
+      sheet.deleteRows(2, lastRow - CONFIG.LIMITS.ERROR_LOG_MAX_ROWS - 1);
     }
   } catch (logErr) {
     console.log('logError itself failed: ' + (logErr.message || logErr));
@@ -1307,6 +1781,52 @@ function runUnitTests() {
   _testAssertEq(results, 'aliases: direct match wins over alias',
     lookupByName({ 'aston haughton': 'DIRECT', 'anton haughton': 'ALIAS' }, 'Aston', 'Haughton', 'Aston Haughton'), 'DIRECT');
 
+  // --- v2.6.0: cellToDateString helper ---
+  var apr20 = new Date(2026, 3, 20); // month is 0-indexed
+  _testAssertEq(results, 'cellToDateString: Date object yields ISO',
+    cellToDateString(apr20), '2026-04-20');
+  _testAssertEq(results, 'cellToDateString: string passthrough trimmed',
+    cellToDateString('  2026-04-20  '), '2026-04-20');
+  _testAssertEq(results, 'cellToDateString: null safe',
+    cellToDateString(null), '');
+  _testAssertEq(results, 'cellToDateString: undefined safe',
+    cellToDateString(undefined), '');
+
+  // --- v2.6.0: getMySchools helper (mock mappingData) ---
+  var mockMapping = [
+    ['Folder Name', 'Display Name', 'IM Email'],
+    ['JHES_-_Hardeeville_Elementary_School', 'JHES - Hardeeville Elementary School', 'frank@studient.com'],
+    ['AFMS_-_Allendale_Fairfax_Middle_School', 'AFMS - Allendale Fairfax Middle School', 'bruna@studient.com'],
+    ['JHMS_-_Hardeeville', 'JHMS - Hardeeville Junior Senior High School', 'frank@studient.com']
+  ];
+  _testAssertEq(results, 'getMySchools: frank gets 2 schools',
+    getMySchools('frank@studient.com', mockMapping).length, 2);
+  _testAssertEq(results, 'getMySchools: bruna gets 1 school',
+    getMySchools('bruna@studient.com', mockMapping).length, 1);
+  _testAssertEq(results, 'getMySchools: no match returns empty array',
+    getMySchools('nobody@nowhere.com', mockMapping), []);
+  _testAssertEq(results, 'getMySchools: returned shape is {folderName, displayName}',
+    Object.keys(getMySchools('bruna@studient.com', mockMapping)[0]).sort(),
+    ['displayName', 'folderName']);
+
+  // --- v2.6.0: _buildRetryDialogHtml helper ---
+  _testAssertEq(results, 'retryDialogHtml: contains header',
+    _buildRetryDialogHtml(['Aston Haughton <a@x.com>'], 'run-123').indexOf('Retry Failed Teachers') !== -1, true);
+  _testAssertEq(results, 'retryDialogHtml: contains teacher name',
+    _buildRetryDialogHtml(['Aston Haughton <a@x.com>'], 'run-123').indexOf('Aston Haughton') !== -1, true);
+  _testAssertEq(results, 'retryDialogHtml: empty list still renders',
+    _buildRetryDialogHtml([], 'run-x').indexOf('0 teacher(s)') !== -1, true);
+  _testAssertEq(results, 'retryDialogHtml: sanitizes runId',
+    _buildRetryDialogHtml([], '<script>alert(1)</script>').indexOf('<script>alert') === -1, true);
+
+  // --- v2.6.0: Threshold sanity (not bugs but confirms CONFIG values exist) ---
+  _testAssertEq(results, 'CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN exists',
+    typeof CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN, 'number');
+  _testAssertEq(results, 'CONFIG.THRESHOLDS.AVG_MINS_GREEN > YELLOW',
+    CONFIG.THRESHOLDS.AVG_MINS_GREEN > CONFIG.THRESHOLDS.AVG_MINS_YELLOW, true);
+  _testAssertEq(results, 'CONFIG.LIMITS.ERROR_LOG_TRIM_TRIGGER > MAX_ROWS',
+    CONFIG.LIMITS.ERROR_LOG_TRIM_TRIGGER > CONFIG.LIMITS.ERROR_LOG_MAX_ROWS, true);
+
   // Render
   var pass = 0, fail = 0;
   var lines = [];
@@ -1432,8 +1952,11 @@ function buildMetricsTable(teacher, metricsArray) {
     var activeDays = Number(m.activeDays || 0);
     var avgMins = Number(m.avgMins || 0);
     var avgLessons = Number(m.avgLessons || 0);
-    var daysColor = activeDays >= 3.95 ? '#d9ead3' : (activeDays >= 2.95 ? '#fff2cc' : '#f4cccc');
-    var minsColor = avgMins >= 99.5 ? '#d9ead3' : (avgMins >= 79.5 ? '#fff2cc' : '#f4cccc');
+    // v2.6.0: thresholds extracted to CONFIG.THRESHOLDS.
+    var daysColor = activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN ? '#d9ead3' :
+                    (activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW ? '#fff2cc' : '#f4cccc');
+    var minsColor = avgMins >= CONFIG.THRESHOLDS.AVG_MINS_GREEN ? '#d9ead3' :
+                    (avgMins >= CONFIG.THRESHOLDS.AVG_MINS_YELLOW ? '#fff2cc' : '#f4cccc');
     html += '<tr>';
     html += '<td style="padding:8px;">' + String(teacher.name || '') + '</td>';
     html += '<td style="padding:8px;">' + String(m.grade || '') + '</td>';
@@ -2152,13 +2675,8 @@ function checkTeacherNames() {
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
-  var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
-  var mySchools = [];
-  for (var i = 1; i < mappingData.length; i++) {
-    if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
-      mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
-    }
-  }
+  // v2.6.0: extracted to getMySchools helper.
+  var mySchools = getMySchools(currentUserEmail);
   if (mySchools.length === 0) {
     ui.alert('Error', 'No schools assigned to your email.', ui.ButtonSet.OK);
     return;
@@ -2227,16 +2745,9 @@ function checkTeacherNames() {
 function checkTeacherFolders() {
   var ui = SpreadsheetApp.getUi();
   var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
-  var mySchools = [];
-  for (var i = 1; i < mappingData.length; i++) {
-    if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
-      mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
-    }
-  }
-
+  // v2.6.0: extracted to getMySchools helper.
+  var mySchools = getMySchools(currentUserEmail);
   if (mySchools.length === 0) return ui.alert('Error', 'No schools assigned to you.', ui.ButtonSet.OK);
 
   var teachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
@@ -2361,13 +2872,8 @@ function debugDriveAccess() {
   // 3. For current user's schools, check teacher folders + PDFs
   var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
-  var mySchools = [];
-  for (var i = 1; i < mappingData.length; i++) {
-    if (String(mappingData[i][2]).toLowerCase().trim() === currentUserEmail) {
-      mySchools.push({ folderName: mappingData[i][0], displayName: mappingData[i][1] });
-    }
-  }
+  // v2.6.0: extracted to getMySchools helper.
+  var mySchools = getMySchools(currentUserEmail);
 
   report += '<h3>3. Your Schools (from School-IM Mapping)</h3>';
   for (var s = 0; s < mySchools.length; s++) {

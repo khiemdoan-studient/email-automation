@@ -1,12 +1,16 @@
 {
   "name": "email-automation",
-  "version": "2.5.3",
-  "description": "Apps Script email automation for teacher weekly reports. Tests + scripts only; production deploy is via clasp push.",
+  "version": "2.6.0",
+  "description": "Apps Script email automation for teacher weekly reports.",
   "private": true,
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "node test_runner.js"
+    "test": "node test_runner.js",
+    "pull": "clasp pull",
+    "push": "clasp push",
+    "open": "clasp open",
+    "deploy": "clasp push && echo 'Deployed. Reload the spreadsheet to see new menu items.'"
   }
 }
