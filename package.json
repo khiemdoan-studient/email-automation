@@ -11,6 +11,6 @@
     "pull": "clasp pull",
     "push": "clasp push",
     "open": "clasp open",
-    "deploy": "clasp push && echo 'Deployed. Reload the spreadsheet to see new menu items.'"
+    "deploy": "npm test && clasp push && echo Deployed. Reload spreadsheet then run Email Tools - Run Unit Tests to confirm."
   }
 }
