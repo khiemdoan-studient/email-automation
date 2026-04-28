@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.1] - 2026-04-28
+
+### Smoke test fixture: swap Faith Armstrong → Vipul Singhal (Metro)
+
+After v2.6.0 deployed, Khiem ran the smoke test and got 6/7 success. The 1 failure was Faith Armstrong (Metro): `PDF not found for "Faith Armstrong" week "2026-04-20 - 2026-04-26"`.
+
+### Investigation
+
+Faith DOES have students (5 grade-9 + 1 grade-10 = 6 total) per the All Teacher Metrics tab. But her cohort is winding down: current-week activity is 0.6 active days / 60% login / 0 lessons mastered. The PDF was missing because mark.katigbak's upstream PDF generation system either skipped her low-activity cohort or has a Metro-Schools-specific gap.
+
+Either way, having Faith in `CONFIG.SMOKE_TEST_TEACHERS` would cause the smoke test to always fail on the Metro slot — which defeats the smoke test's purpose (catch real anomalies, not always-failures from known-stale data).
+
+### Fix
+
+Swapped `'faith armstrong'` → `'vipul singhal'` in `CONFIG.SMOKE_TEST_TEACHERS`. Vipul:
+- Multi-grade 9+10 (13 students total — most Metro data)
+- 0.8 login rate, 17.92 / 34.3 avg minutes — real ongoing activity
+- Better template signal across multiple grade rows
+
+### Verified
+
+- ✓ `npm run deploy` (test-gated): 45/45 passed → `clasp push` → "Pushed 2 files" (Code.js + appsscript.json — no test_runner.js leak per v2.6.0 `.claspignore`)
+- After reload, smoke test should now report 7/7
+
+### Files modified
+
+- `Code.js` — 1 line swap in `CONFIG.SMOKE_TEST_TEACHERS`
+- `package.json` — version bump 2.6.0 → 2.6.1
+- `CHANGELOG.md` — this entry
+
+### Action required after deploy
+
+1. Already pushed via clasp (production has v2.6.1 Code.js).
+2. Reload spreadsheet (close tab + reopen) so new menu state picks up.
+3. Re-run **Email Tools → Test Mode: Generate Smoke Test (drafts to me)** — expect **7 drafts created in YOUR Gmail, 0 failed** (was 6/1 in v2.6.0).
+
+### Note: Faith Armstrong's missing PDF
+
+Not fixed by this release. The upstream PDF generation system (mark.katigbak's pipeline) didn't generate Faith's PDF for week 2026-04-20. If she needs to receive an actual draft when an IM runs the bulk Generate flow, ping mark.katigbak to investigate. For now, the system correctly handles this case: the per-teacher error logs to the Error Log tab without blocking the rest of the run.
+
 ## [v2.6.0] - 2026-04-27
 
 ### Audit follow-up — 6 deferred items addressed (helpers, magic nums, smoke test, regen, clasp, tests)

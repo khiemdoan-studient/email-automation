@@ -44,7 +44,7 @@ var CONFIG = {
     'anton haughton',         // AFMS — Allendale district (note: BQ name, alias maps Aston→Anton)
     'bertha folk',            // AFMS — Allendale district
     'kim bell',               // Reading Community (note: 1 of 11 upstream gaps as of 2026-04-20 — verify before relying)
-    'faith armstrong',        // Metro Schools
+    'vipul singhal',          // Metro Schools — multi-grade 9+10, 13 students (most Metro data; v2.6.1 swap from Faith Armstrong whose PDF wasn't being generated upstream)
     'verenice rivera',        // Metro Schools
     'rebecca reynolds'        // JHES — Jasper district
   ]
