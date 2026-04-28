@@ -48,9 +48,12 @@ global.Session = { getActiveUser: () => ({ getEmail: () => 'test@example.com' })
 global.Utilities = { sleep: () => {} };
 global.console = console;
 
-// ── Load and evaluate Code.gs ──
+// ── Load and evaluate Code.js (was Code.gs pre-v2.6.0; renamed for clasp 3.x compatibility) ──
+// Falls back to Code.gs if .js not found, so the runner works during the migration.
+const codeJsPath = path.join(__dirname, 'Code.js');
 const codeGsPath = path.join(__dirname, 'Code.gs');
-const code = fs.readFileSync(codeGsPath, 'utf8');
+const codeFile = fs.existsSync(codeJsPath) ? codeJsPath : codeGsPath;
+const code = fs.readFileSync(codeFile, 'utf8');
 // Indirect eval at module scope so `var` declarations land in global.
 const indirectEval = eval;
 indirectEval(code);
