@@ -2278,10 +2278,11 @@ function buildStudentSpotlights(highlights) {
   var renderNarrative = function(h) {
     var name = h.studentName || 'A standout student';
     if (h.leadingMetric === 'grade_levels') {
+      // v2.6.7: drop subject mention per user direction; spotlight is
+      // student-level total grade_levels across all subjects.
       var n = Math.round(h.cumulativeGradeLevels || 0);
-      var subj = h.topSubject || 'their subject';
       return name + ' mastered ' + n + ' grade level' + (n === 1 ? '' : 's') +
-             ' in ' + subj + ' this year, showing exceptional growth through Motivention.';
+             ' this year, showing exceptional growth through Motivention.';
     }
     // default: lessons
     var l = Math.round(h.cumulativeLessons || 0);
@@ -2890,7 +2891,8 @@ function generateScFinalEmailBody(teacher, metricsArray, winnersArray) {
 
     // Intro + slide CTA
     '<p>Make sure students spend their points on prizes and a chance to enter the raffle. Attached data has points earned last week.</p>',
-    '<p style="margin:14px 0;text-align:center;">',
+    '<p style="text-decoration:underline;text-align:center;margin:14px 0 4px 0;font-weight:bold;">Teachers: please show your students this slide</p>',
+    '<p style="margin:4px 0 14px 0;text-align:center;">',
     '<a href="https://canva.link/y430aqrxczjr9oz" style="display:inline-block;background-color:#1a73e8;color:#ffffff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px;">SHOW THIS SLIDE</a>',
     '</p>',
     '<div style="background-color:#fff2cc;padding:12px;border-radius:6px;border:1px solid #ffe599;margin:12px 0;">',
@@ -2906,7 +2908,7 @@ function generateScFinalEmailBody(teacher, metricsArray, winnersArray) {
     buildStudentSpotlights(highlights),
 
     // Quarter coaching paragraph
-    '<p style="margin-top:20px;font-style:italic;color:#333;">This didn\'t happen by chance &mdash; it\'s the result of intentional coaching and becoming more consistent through the process each week this quarter.</p>',
+    '<p style="margin-top:20px;font-style:italic;color:#333;">This didn\'t happen by chance: it\'s the result of intentional coaching and becoming more consistent through the process each week this quarter.</p>',
     '<p><strong>Weekly Data Attached</strong></p>',
 
     // State testing transition

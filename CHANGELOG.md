@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.7] - 2026-05-04
+
+### HOTFIX — multi-campus teacher uniqueness probe + SC Final Email template polish (paired with parent v3.41.6)
+
+Post-v2.6.6 the user caught that **Muntasir Hamid's** SC Final Email body STILL showed wrong totals (280 / 37 / 0 instead of 42,685 / 2,698 / 57). Muntasir teaches at JHMS (primary, 105 students) AND JRHS (secondary, 1 student); the parent `query_year_teacher_totals` GROUP BY `(campus, teacher)` emitted 2 rows, and `getYearTeacherTotals()` last-write-wins picked the JRHS row.
+
+Parent v3.41.6 changes the GROUP BY to `teacher_name` only. This release adds the matching sheet-side validator probe + 3 Code.js polish items.
+
+### What lands
+
+NEW in `scripts/check_email_data.py`:
+
+1. **`_probe_no_duplicate_teacher_in_year_totals(sheets)`** — asserts each teacher_name in the live `Year Teacher Totals` tab appears in at most 1 row. Catches re-introduction of per-(campus, teacher) grouping at the parent.
+
+CHANGED in `Code.js`:
+
+- Line 2909: replaced `&mdash;` with `:`. New text: "This didn't happen by chance: it's the result of intentional coaching..."
+- Lines 2891-2895: inserted underlined "Teachers: please show your students this slide" sentence above the SHOW THIS SLIDE button.
+- `renderNarrative` (lines 2278-2290): dropped subject mention from the grade_levels narrative per user direction. New format: "Daleyza mastered 4 grade levels this year, showing exceptional growth through Motivention." (no "in [subject]")
+
+### Verified
+
+- ✓ Parent v3.41.6 deployed: Year Teacher Totals 81 → 75 rows (multi-campus teachers collapsed). Student Year Highlights 146 → 143 rows.
+- ✓ Muntasir Hamid: 1 row, 106 students, 42,685 min, 2,698 lessons, 57 grade_levels. Spotlight 2 = Azucena (80 lessons), not Alinson.
+- ✓ Alicia Westcot (3 campuses): cross-campus rank 1 (David Parsons / Reading) + rank 2 (Angel Raymundo Duarte / Vita).
+- ✓ Timothy Saxton (2 campuses): Richard Arthur + Jeremy Aguilar Jimenez.
+- ✓ 0 duplicate teachers across all 80.
+- ✓ Parent reconcile: 36/36 PASS.
+- ✓ `python -m py_compile scripts/check_email_data.py`: PASS.
+
 ## [v2.6.6] - 2026-05-04
 
 ### HOTFIX — extended check_email_data.py with 2 cross-validation probes (paired with parent v3.41.5)

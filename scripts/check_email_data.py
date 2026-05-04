@@ -364,6 +364,16 @@ def main(week: str, strict: bool = False):
     year_totals_match_ok = _probe_year_totals_match_weekly_dashboard(sheets, bq_client)
     highlights_within_ok = _probe_highlights_within_actuals(sheets, bq_client)
 
+    # v2.6.7: catch multi-campus teacher row collision in Year Teacher Totals.
+    # Previously query_year_teacher_totals GROUP BY (campus, teacher) emitted
+    # multiple rows for teachers serving multiple campuses; Apps Script's
+    # last-write-wins map silently dropped the larger campus.
+    print()
+    print("=" * 70)
+    print("MULTI-CAMPUS TEACHER UNIQUENESS (v2.6.7)")
+    print("=" * 70)
+    no_dupe_teachers_ok = _probe_no_duplicate_teacher_in_year_totals(sheets)
+
     if strict and (
         likely_typo
         or upstream_gap
@@ -371,6 +381,7 @@ def main(week: str, strict: bool = False):
         or not student_highlights_ok
         or not year_totals_match_ok
         or not highlights_within_ok
+        or not no_dupe_teachers_ok
     ):
         sys.exit(1)
 
@@ -478,6 +489,51 @@ def _probe_year_totals_match_weekly_dashboard(sheets, bq_client):
         return False
     print(
         f"  ✓ Year Teacher Totals: all {len(sheet_totals)} teachers within 1% of BQ baseline"
+    )
+    return True
+
+
+def _probe_no_duplicate_teacher_in_year_totals(sheets):
+    """v2.6.7: assert each teacher_name appears in AT MOST 1 row of the
+    Year Teacher Totals tab.
+
+    Catches re-introduction of per-(campus, teacher) GROUP BY in the parent
+    query_year_teacher_totals. When a teacher serves multiple campuses,
+    multiple rows would silently collide in Apps Script's
+    `getYearTeacherTotals()` map (last-write-wins picks one campus's data).
+    """
+    from collections import Counter
+
+    try:
+        res = (
+            sheets.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="'Year Teacher Totals'!B2:B",
+                valueRenderOption="UNFORMATTED_VALUE",
+            )
+            .execute()
+        )
+    except Exception as e:
+        print(f"  ✗ Year Teacher Totals: tab not readable ({e})")
+        return False
+
+    teacher_names = [
+        str(r[0]).strip()
+        for r in res.get("values", [])
+        if r and r[0] and str(r[0]).strip()
+    ]
+    counts = Counter(teacher_names)
+    duplicates = [(n, c) for n, c in counts.items() if c > 1]
+
+    if duplicates:
+        print(f"  ✗ Year Teacher Totals: {len(duplicates)} teacher(s) appear in >1 row")
+        for n, c in duplicates[:5]:
+            print(f"      {n}: {c} rows")
+        return False
+    print(
+        f"  ✓ Year Teacher Totals: {len(set(teacher_names))} unique teachers, no duplicates"
     )
     return True
 
