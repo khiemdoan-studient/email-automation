@@ -478,9 +478,11 @@ fmt.append(
 )
 
 sub_start = end + 1
-sub_end = sub_start + len(
-    "User Guide & Documentation (v2.5.3)"
-)  # v2.5.3: was stale "v2.4.2"
+# v2.6.5: subtitle string MUST match the version-suffixed line in the body
+# at line 34 (currently "v2.6.0"). If they diverge, the styling range
+# computed by len(...) lands on the wrong characters. Re-sync this string
+# whenever the body line 34 version is bumped.
+sub_end = sub_start + len("User Guide & Documentation (v2.6.0)")
 fmt.append(
     {
         "updateParagraphStyle": {
@@ -493,6 +495,14 @@ fmt.append(
 
 for title in [
     "What Is This?",
+    # v2.6.5: title-styling list now extends through v2.6.4 so when user-facing
+    # body sections for v2.6.1-v2.6.4 are added, they'll get HEADING_2 styling
+    # automatically. These entries no-op until a matching body title exists.
+    "What\u2019s New in v2.6.4",
+    "What\u2019s New in v2.6.3",
+    "What\u2019s New in v2.6.2",
+    "What\u2019s New in v2.6.1",
+    "What\u2019s New in v2.6.0",
     "What\u2019s New in v2.5.3",
     "What\u2019s New in v2.5.2",
     "What\u2019s New in v2.5.1",

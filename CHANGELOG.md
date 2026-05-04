@@ -2,6 +2,85 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.5] - 2026-04-30
+
+### NEW template: SC Final Email — Growth & Hardwork = Results
+
+End-of-year template for the May closure push (Motivention store closes May 8). Year-cumulative summary per teacher, with student spotlights, transitioning into state + MAP testing language.
+
+### What lands in the dropdown
+
+```
+SC Final Email: Growth & Hardwork = Results
+```
+
+Subject: `Motivention Store Closing Friday (+ Impressive Results)`
+
+### Body sections
+
+1. Greeting + intro paragraph + "SHOW THIS SLIDE" button-link to canva.link/y430aqrxczjr9oz
+2. "Last day to order is May 8th!" callout
+3. **Classroom Data Highlight Reel**: 3-metric per-teacher table (Total Minutes / Total Lessons Mastered / Total Grade Levels Mastered) — year-to-date since 2025-09-01
+4. **Top Student Highlights**: 2 KPIs (Avg Mastered Lessons/Student + Avg Mastered Grades/Student) + 2 student spotlight cards
+   - Spotlight 1 narrative: `"<student> mastered <N> grade levels in <subject> this year, showing exceptional growth through Motivention."`
+   - Spotlight 2 narrative: `"<student> worked diligently to master <N> lessons this year, leading the class."`
+   - Selection logic: rank 1 = top by year-cumulative grade_levels DESC; rank 2 = top by year-cumulative lessons DESC among students NOT chosen as rank 1
+5. Quarter-coaching paragraph + "Weekly Data Attached" callout
+6. State testing transition (3 sentences)
+7. **Mindset Mini-Launches**: numbered list with 3 hyperlinks (Week 9 Confidence, Week 10 Self-Efficacy, Week 11 Brain-Body Feedback Loop)
+
+### Data plumbing (cross-repo)
+
+This template requires **2 new tabs** in the email-automation spreadsheet, populated by parent repo `Studient Excel Automation` v3.41.4:
+
+| Tab | Schema | Source |
+|-----|--------|--------|
+| `Year Teacher Totals` | `campus_name | teacher_name | num_students | total_minutes | total_lessons | total_grade_levels | avg_lessons_per_student | avg_grade_levels_per_student` | `query_year_teacher_totals` (parent) |
+| `Student Year Highlights` | `campus_name | teacher_name | rank | student_name | cumulative_lessons | cumulative_grade_levels | top_subject | leading_metric` | `query_student_year_highlights` (parent) |
+
+Both tabs are written every time `python email_only.py` or the full pipeline runs.
+
+### Code.js changes
+
+- **CONFIG**: 2 new sheet name constants (`YEAR_TOTALS_SHEET_NAME`, `STUDENT_HIGHLIGHTS_SHEET_NAME`).
+- **TEMPLATES registry**: 14th template entry (`SC Final Email: Growth & Hardwork = Results`).
+- **Module-level cache**: `_yearTotalsCache`, `_studentHighlightsCache`. Reset to `null` at top of `generateDraftsForCurrentUser` + `generateSmokeTest` (alongside existing `_runIdCache = null`).
+- **2 new readers**: `getYearTeacherTotals`, `getStudentYearHighlights`. Module-cache + 1-shot read pattern.
+- **3 new HTML helpers**: `buildYearHighlightReel(totals)`, `buildYearKpiStrip(totals)`, `buildStudentSpotlights(highlights)`.
+- **1 new buildBody**: `generateScFinalEmailBody(teacher, metricsArray, winnersArray)` — looks up the teacher's year-cumulative data internally (signature unchanged so existing dispatch path works).
+
+### Tests
+
+`runUnitTests()` 45 → **51 cases**:
+- buildYearHighlightReel: comma-formatted totals (`8,423`) + null fallback (`--`)
+- buildYearKpiStrip: 1-decimal avg formatting (`15.7`)
+- buildStudentSpotlights: grade_levels narrative substitution + lessons narrative substitution + empty-array fallback
+
+`scripts/check_email_data.py`: 2 new tab probes (`Year Teacher Totals`, `Student Year Highlights`) — schema check + row-count > 0. Strict mode exits 1 if either tab is empty/malformed.
+
+### Verified
+
+- ✓ Parent pipeline `python email_only.py` ran clean: 80 teacher rows in `Year Teacher Totals`, 145 student rows in `Student Year Highlights`
+- ✓ `node test_runner.js`: 51/51 PASS
+- ✓ `npm run deploy`: Code.js + appsscript.json pushed to clasp (no test_runner.js leak per .claspignore)
+- ✓ Live smoke test: drafts render with non-zero totals, real student names, narrative substitution
+
+### Files modified
+
+- `Code.js` — CONFIG, TEMPLATES registry, module caches, 2 readers, 3 helpers, 1 buildBody, cache reset hooks. Net: +260 LOC.
+- `package.json` — version bump 2.6.4 → 2.6.5.
+- `scripts/check_email_data.py` — 2 new probe functions + main() integration.
+- `CHANGELOG.md` — this entry.
+- `CLAUDE.md` — v2.6.5 history line + template registry update.
+
+### Action required after deploy
+
+1. Run `python email_only.py` from the parent repo (or wait for the next hourly cron) to populate the 2 new tabs.
+2. Reload the email-automation spreadsheet (close tab + reopen).
+3. Run **Email Tools → Refresh Template Dropdown** so the Config B4 dropdown picks up `SC Final Email: Growth & Hardwork = Results`.
+4. Set Config Date Range + Template, then run **Email Tools → Test Mode: Generate Smoke Test** to verify rendering.
+5. When ready for the actual cycle, run **Email Tools → Generate My Email Drafts**.
+
 ## [v2.6.4] - 2026-04-28
 
 ### validateAllPdfs: respect Config Date Range (not "last 2 weeks")

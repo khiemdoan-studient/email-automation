@@ -336,8 +336,96 @@ def main(week: str, strict: bool = False):
         print("};")
 
     print()
-    if strict and (likely_typo or upstream_gap):
+    # v2.6.5: probe the 2 new year-cumulative tabs (parent v3.37.7).
+    print()
+    print("=" * 70)
+    print("YEAR-CUMULATIVE TABS (v2.6.5 — SC Final Email template)")
+    print("=" * 70)
+    year_totals_ok = _probe_year_teacher_totals(sheets)
+    student_highlights_ok = _probe_student_year_highlights(sheets)
+    if not (year_totals_ok and student_highlights_ok):
+        print("  -> Run `python email_only.py` from parent repo to populate.")
+
+    if strict and (
+        likely_typo or upstream_gap or not year_totals_ok or not student_highlights_ok
+    ):
         sys.exit(1)
+
+
+def _probe_year_teacher_totals(sheets):
+    """v2.6.5: validate Year Teacher Totals tab structure + row count."""
+    expected_header = [
+        "campus_name",
+        "teacher_name",
+        "num_students",
+        "total_minutes",
+        "total_lessons",
+        "total_grade_levels",
+        "avg_lessons_per_student",
+        "avg_grade_levels_per_student",
+    ]
+    try:
+        res = (
+            sheets.spreadsheets()
+            .values()
+            .get(spreadsheetId=SPREADSHEET_ID, range="'Year Teacher Totals'!A1:H")
+            .execute()
+        )
+    except Exception as e:
+        print(f"  ✗ Year Teacher Totals: tab not readable ({e})")
+        return False
+    values = res.get("values", [])
+    if not values:
+        print("  ✗ Year Teacher Totals: tab is EMPTY")
+        return False
+    header = values[0]
+    if header != expected_header:
+        print(f"  ✗ Year Teacher Totals: header mismatch — got {header}")
+        return False
+    n_rows = len(values) - 1
+    if n_rows < 1:
+        print(f"  ✗ Year Teacher Totals: 0 data rows (header only)")
+        return False
+    print(f"  ✓ Year Teacher Totals: {n_rows} teacher rows, schema OK")
+    return True
+
+
+def _probe_student_year_highlights(sheets):
+    """v2.6.5: validate Student Year Highlights tab structure + row count."""
+    expected_header = [
+        "campus_name",
+        "teacher_name",
+        "rank",
+        "student_name",
+        "cumulative_lessons",
+        "cumulative_grade_levels",
+        "top_subject",
+        "leading_metric",
+    ]
+    try:
+        res = (
+            sheets.spreadsheets()
+            .values()
+            .get(spreadsheetId=SPREADSHEET_ID, range="'Student Year Highlights'!A1:H")
+            .execute()
+        )
+    except Exception as e:
+        print(f"  ✗ Student Year Highlights: tab not readable ({e})")
+        return False
+    values = res.get("values", [])
+    if not values:
+        print("  ✗ Student Year Highlights: tab is EMPTY")
+        return False
+    header = values[0]
+    if header != expected_header:
+        print(f"  ✗ Student Year Highlights: header mismatch — got {header}")
+        return False
+    n_rows = len(values) - 1
+    if n_rows < 1:
+        print(f"  ✗ Student Year Highlights: 0 data rows")
+        return False
+    print(f"  ✓ Student Year Highlights: {n_rows} student rows, schema OK")
+    return True
 
 
 if __name__ == "__main__":

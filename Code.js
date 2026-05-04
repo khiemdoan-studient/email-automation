@@ -11,6 +11,9 @@ var CONFIG = {
   WINNERS_SHEET_NAME: "Student Winners",
   READING_TEACHERS_SHEET_NAME: "Reading Teachers",
   AVAILABLE_WEEKS_SHEET_NAME: "Available Weeks",
+  // v2.6.5: year-cumulative tabs for the SC Final Email template (parent v3.41.4).
+  YEAR_TOTALS_SHEET_NAME: "Year Teacher Totals",
+  STUDENT_HIGHLIGHTS_SHEET_NAME: "Student Year Highlights",
 
   // Column indices in Teacher Emails sheet (0-indexed)
   CAMPUS_COL: 2,           // Column C: Campus
@@ -113,6 +116,12 @@ var TEMPLATES = {
   '4/27: Last Week of Motivention': {
     subject: 'Data crunch & point calculation complete: (+ 3 non-boring updates to finish strong)',
     buildBody: generateLastWeekFinishLineBody
+  },
+  // v2.6.5: SC Final Email — year-cumulative end-of-year summary with student spotlights.
+  // Reads new tabs Year Teacher Totals + Student Year Highlights (populated by parent v3.41.4).
+  'SC Final Email: Growth & Hardwork = Results': {
+    subject: 'Motivention Store Closing Friday (+ Impressive Results)',
+    buildBody: generateScFinalEmailBody
   }
 };
 
@@ -409,6 +418,9 @@ function generateSmokeTest() {
 
   try {
     _runIdCache = null;
+    // v2.6.5: reset year-cumulative caches so each run reads fresh from the sheet.
+    _yearTotalsCache = null;
+    _studentHighlightsCache = null;
     var currentUserEmail = Session.getActiveUser().getEmail();
     var dateRange = getConfigValue('Date Range');
     if (!dateRange) {
@@ -1131,6 +1143,87 @@ function getTeachersForSchools(schoolDisplayNames) {
   return Array.from(teacherMap.values());
 }
 
+/**
+ * v2.6.5: Read the "Year Teacher Totals" tab into a teacher-keyed object.
+ * Returns { teacherNameLower: { numStudents, totalMinutes, totalLessons,
+ *   totalGradeLevels, avgLessons, avgGradeLevels, campus } }.
+ *
+ * Module-level cache (`_yearTotalsCache`). Reset at run-start in
+ * generateDraftsForCurrentUser + generateSmokeTest.
+ */
+function getYearTeacherTotals() {
+  if (_yearTotalsCache !== null) return _yearTotalsCache;
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.YEAR_TOTALS_SHEET_NAME);
+  if (!sheet) {
+    _yearTotalsCache = {};
+    return _yearTotalsCache;
+  }
+  var data = sheet.getDataRange().getValues();
+  var totals = {};
+  // Schema: campus_name | teacher_name | num_students | total_minutes |
+  //         total_lessons | total_grade_levels | avg_lessons_per_student |
+  //         avg_grade_levels_per_student
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] == null) continue;
+    var teacherName = String(data[i][1]).trim().toLowerCase();
+    if (!teacherName || teacherName === 'null' || teacherName === 'undefined') continue;
+    totals[teacherName] = {
+      campus: String(data[i][0] || '').trim(),
+      numStudents: parseFloat(data[i][2]) || 0,
+      totalMinutes: parseFloat(data[i][3]) || 0,
+      totalLessons: parseFloat(data[i][4]) || 0,
+      totalGradeLevels: parseFloat(data[i][5]) || 0,
+      avgLessons: parseFloat(data[i][6]) || 0,
+      avgGradeLevels: parseFloat(data[i][7]) || 0
+    };
+  }
+  _yearTotalsCache = totals;
+  return totals;
+}
+
+/**
+ * v2.6.5: Read the "Student Year Highlights" tab into a teacher-keyed object.
+ * Returns { teacherNameLower: [{ rank, studentName, cumulativeLessons,
+ *   cumulativeGradeLevels, topSubject, leadingMetric }] }.
+ *
+ * Each teacher gets up to 2 entries (rank 1 + rank 2), sorted by rank.
+ * Module-level cache (`_studentHighlightsCache`).
+ */
+function getStudentYearHighlights() {
+  if (_studentHighlightsCache !== null) return _studentHighlightsCache;
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.STUDENT_HIGHLIGHTS_SHEET_NAME);
+  if (!sheet) {
+    _studentHighlightsCache = {};
+    return _studentHighlightsCache;
+  }
+  var data = sheet.getDataRange().getValues();
+  var highlights = {};
+  // Schema: campus_name | teacher_name | rank | student_name |
+  //         cumulative_lessons | cumulative_grade_levels | top_subject | leading_metric
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] == null) continue;
+    var teacherName = String(data[i][1]).trim().toLowerCase();
+    if (!teacherName || teacherName === 'null' || teacherName === 'undefined') continue;
+    if (!highlights[teacherName]) highlights[teacherName] = [];
+    highlights[teacherName].push({
+      rank: parseInt(data[i][2], 10) || 0,
+      studentName: String(data[i][3] || '').trim(),
+      cumulativeLessons: parseFloat(data[i][4]) || 0,
+      cumulativeGradeLevels: parseFloat(data[i][5]) || 0,
+      topSubject: String(data[i][6] || '').trim(),
+      leadingMetric: String(data[i][7] || '').trim().toLowerCase()
+    });
+  }
+  // Sort each teacher's array by rank (rank 1 first).
+  for (var k in highlights) {
+    if (highlights.hasOwnProperty(k)) {
+      highlights[k].sort(function(a, b) { return a.rank - b.rank; });
+    }
+  }
+  _studentHighlightsCache = highlights;
+  return highlights;
+}
+
 function getStudentWinners() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.WINNERS_SHEET_NAME);
   if (!sheet) return {};
@@ -1266,6 +1359,11 @@ var ERROR_LOG_TAB = 'Error Log';
 var ERROR_LOG_HEADERS = ['timestamp', 'run_id', 'severity', 'function', 'teacher', 'message', 'stack'];
 // v2.6.0: ERROR_LOG_MAX_ROWS + ERROR_LOG_TRIM_TRIGGER moved to CONFIG.LIMITS.
 var _runIdCache = null;
+// v2.6.5: module-level caches for the SC Final Email template's year-cumulative
+// data. Reset to null at the top of generateDraftsForCurrentUser and
+// generateSmokeTest to prevent stale-data bleed across runs.
+var _yearTotalsCache = null;
+var _studentHighlightsCache = null;
 
 /**
  * Returns a stable run-id string used to group all log entries from the
@@ -1828,6 +1926,29 @@ function runUnitTests() {
   _testAssertEq(results, 'CONFIG.LIMITS.ERROR_LOG_TRIM_TRIGGER > MAX_ROWS',
     CONFIG.LIMITS.ERROR_LOG_TRIM_TRIGGER > CONFIG.LIMITS.ERROR_LOG_MAX_ROWS, true);
 
+  // --- v2.6.5: SC Final Email helpers ---
+  var mockTotals = {
+    campus: 'AFMS - Allendale Fairfax Middle School',
+    numStudents: 12, totalMinutes: 8423, totalLessons: 188,
+    totalGradeLevels: 14, avgLessons: 15.7, avgGradeLevels: 1.2
+  };
+  _testAssertEq(results, 'buildYearHighlightReel: shows totalMinutes formatted with commas',
+    buildYearHighlightReel(mockTotals).indexOf('8,423') !== -1, true);
+  _testAssertEq(results, 'buildYearHighlightReel: null totals renders dashes',
+    buildYearHighlightReel(null).indexOf('--') !== -1, true);
+  _testAssertEq(results, 'buildYearKpiStrip: shows avg with one decimal',
+    buildYearKpiStrip(mockTotals).indexOf('15.7') !== -1, true);
+  var mockHighlightGrade = [{ rank: 1, studentName: 'Sa’myiah Patterson', cumulativeLessons: 41,
+    cumulativeGradeLevels: 3, topSubject: 'Reading', leadingMetric: 'grade_levels' }];
+  _testAssertEq(results, 'buildStudentSpotlights: grade_levels narrative substitutes student/subject/N',
+    buildStudentSpotlights(mockHighlightGrade).indexOf('mastered 3 grade levels in Reading this year') !== -1, true);
+  var mockHighlightLessons = [{ rank: 2, studentName: 'James Lee', cumulativeLessons: 67,
+    cumulativeGradeLevels: 1, topSubject: 'Math', leadingMetric: 'lessons' }];
+  _testAssertEq(results, 'buildStudentSpotlights: lessons narrative substitutes student/N',
+    buildStudentSpotlights(mockHighlightLessons).indexOf('master 67 lessons this year, leading the class') !== -1, true);
+  _testAssertEq(results, 'buildStudentSpotlights: empty array shows fallback',
+    buildStudentSpotlights([]).indexOf('still being calculated') !== -1, true);
+
   // Render
   var pass = 0, fail = 0;
   var lines = [];
@@ -2079,6 +2200,112 @@ function buildResourcesSection(links) {
   html += '<li><strong>Pomodoro Timer:</strong> <a href="https://studient.com/customer-portal">studient.com/customer-portal</a></li>';
   html += '<li><strong>Goal Tracker Sheet:</strong> <a href="https://drive.google.com/file/d/1aA963Hk-r4WJ3OEEa2GLTEPwerRZOAQ8/view?usp=drive_link">ELA Weekly Tracker</a>; <a href="https://drive.google.com/file/d/1alli2qWNmgNfWV5rXAGQXAtE7InQE2LR/view?usp=drive_link">Math Weekly Tracker</a></li>';
   html += '</ol>';
+  return html;
+}
+
+/**
+ * v2.6.5: SC Final Email — "Classroom Data Highlight Reel" 1-row table.
+ * Three metrics: Total Minutes / Total Lessons Mastered / Total Grade Levels Mastered.
+ * Renders dashes if `totals` missing.
+ */
+function buildYearHighlightReel(totals) {
+  var fmtNum = function(n) {
+    if (n == null || isNaN(n)) return '--';
+    return Math.round(n).toLocaleString('en-US');
+  };
+  var totalMinutes = totals ? totals.totalMinutes : null;
+  var totalLessons = totals ? totals.totalLessons : null;
+  var totalGradeLevels = totals ? totals.totalGradeLevels : null;
+  var html = '<h3 style="color:#1a1a1a;margin-bottom:8px;">Classroom Data Highlight Reel</h3>';
+  html += '<table border="1" cellpadding="10" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;max-width:560px;font-size:14px;">';
+  html += '<tr style="background-color:#1a1a1a;color:#fff;">';
+  html += '<th style="padding:8px;text-align:center;">Total Minutes</th>';
+  html += '<th style="padding:8px;text-align:center;">Total Lessons Mastered</th>';
+  html += '<th style="padding:8px;text-align:center;">Total Grade Levels Mastered</th>';
+  html += '</tr>';
+  html += '<tr style="background-color:#f9f9f9;">';
+  html += '<td style="padding:10px;text-align:center;font-size:18px;font-weight:bold;">' + fmtNum(totalMinutes) + '</td>';
+  html += '<td style="padding:10px;text-align:center;font-size:18px;font-weight:bold;">' + fmtNum(totalLessons) + '</td>';
+  html += '<td style="padding:10px;text-align:center;font-size:18px;font-weight:bold;">' + fmtNum(totalGradeLevels) + '</td>';
+  html += '</tr>';
+  html += '</table>';
+  return html;
+}
+
+/**
+ * v2.6.5: SC Final Email — 2 KPI cards: Avg Mastered Lessons/Student + Avg Mastered Grades/Student.
+ * Renders dashes if `totals` missing.
+ */
+function buildYearKpiStrip(totals) {
+  var fmtAvg = function(n) {
+    if (n == null || isNaN(n)) return '--';
+    return (Math.round(n * 10) / 10).toFixed(1);
+  };
+  var avgLessons = totals ? totals.avgLessons : null;
+  var avgGradeLevels = totals ? totals.avgGradeLevels : null;
+  var html = '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:560px;margin-top:8px;">';
+  html += '<tr>';
+  html += '<td style="width:50%;padding:6px;">';
+  html += '<div style="background-color:#e8f5e9;border:1px solid #c8e6c9;border-radius:6px;padding:14px;text-align:center;">';
+  html += '<div style="font-size:13px;color:#1a1a1a;font-weight:bold;">Avg Mastered Lessons / Student</div>';
+  html += '<div style="font-size:24px;font-weight:bold;color:#2e7d32;margin-top:4px;">' + fmtAvg(avgLessons) + '</div>';
+  html += '</div>';
+  html += '</td>';
+  html += '<td style="width:50%;padding:6px;">';
+  html += '<div style="background-color:#e3f2fd;border:1px solid #bbdefb;border-radius:6px;padding:14px;text-align:center;">';
+  html += '<div style="font-size:13px;color:#1a1a1a;font-weight:bold;">Avg Mastered Grades / Student</div>';
+  html += '<div style="font-size:24px;font-weight:bold;color:#1565c0;margin-top:4px;">' + fmtAvg(avgGradeLevels) + '</div>';
+  html += '</div>';
+  html += '</td>';
+  html += '</tr>';
+  html += '</table>';
+  return html;
+}
+
+/**
+ * v2.6.5: SC Final Email — 2 student spotlight cards.
+ * `highlights` is the per-teacher array from getStudentYearHighlights.
+ * Narrative templates by leading_metric:
+ *   'grade_levels': "<student> mastered <N> grade levels in <subject> this year, showing exceptional growth through Motivention."
+ *   'lessons':     "<student> worked diligently to master <N> lessons this year, leading the class."
+ */
+function buildStudentSpotlights(highlights) {
+  var html = '<h3 style="color:#1a1a1a;margin-top:18px;margin-bottom:8px;">Student Spotlights</h3>';
+  if (!highlights || highlights.length === 0) {
+    html += '<p style="color:#666;font-style:italic;">Top student highlights are still being calculated for this period.</p>';
+    return html;
+  }
+  var renderNarrative = function(h) {
+    var name = h.studentName || 'A standout student';
+    if (h.leadingMetric === 'grade_levels') {
+      var n = Math.round(h.cumulativeGradeLevels || 0);
+      var subj = h.topSubject || 'their subject';
+      return name + ' mastered ' + n + ' grade level' + (n === 1 ? '' : 's') +
+             ' in ' + subj + ' this year, showing exceptional growth through Motivention.';
+    }
+    // default: lessons
+    var l = Math.round(h.cumulativeLessons || 0);
+    return name + ' worked diligently to master ' + l + ' lesson' + (l === 1 ? '' : 's') +
+           ' this year, leading the class.';
+  };
+  html += '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:560px;">';
+  html += '<tr>';
+  for (var i = 0; i < Math.min(2, highlights.length); i++) {
+    var bg = i === 0 ? '#fff8e1' : '#fce4ec';
+    var border = i === 0 ? '#ffd54f' : '#f8bbd0';
+    html += '<td style="width:50%;padding:6px;vertical-align:top;">';
+    html += '<div style="background-color:' + bg + ';border:1px solid ' + border + ';border-radius:6px;padding:14px;">';
+    html += '<div style="font-size:12px;font-weight:bold;color:#1a1a1a;letter-spacing:0.5px;">SPOTLIGHT ' + (i + 1) + '</div>';
+    html += '<p style="margin:8px 0 0 0;font-size:14px;line-height:1.4;">' + renderNarrative(highlights[i]) + '</p>';
+    html += '</div>';
+    html += '</td>';
+  }
+  // Pad if only 1 highlight
+  if (highlights.length === 1) {
+    html += '<td style="width:50%;padding:6px;"></td>';
+  }
+  html += '</tr>';
+  html += '</table>';
   return html;
 }
 
@@ -2646,6 +2873,54 @@ function generateLastWeekFinishLineBody(teacher, metricsArray, winnersArray) {
         + '<a href="https://canva.link/motiventionweek11">Week 11 - Confidence - The Brain-Body Feedback Loop</a>'
     ])
     // No buildWeeklyChallenge per source
+  ]);
+}
+
+// --- SC FINAL EMAIL: Growth & Hardwork = Results (v2.6.5) ---
+// Year-cumulative end-of-year summary. Reads Year Teacher Totals +
+// Student Year Highlights tabs (populated by parent v3.41.4).
+// Per-teacher data: classroom highlight reel + 2 KPIs + 2 student spotlights.
+function generateScFinalEmailBody(teacher, metricsArray, winnersArray) {
+  var teacherNameLower = (teacher && teacher.name) ? teacher.name.toLowerCase() : '';
+  var totals = getYearTeacherTotals()[teacherNameLower] || null;
+  var highlights = getStudentYearHighlights()[teacherNameLower] || [];
+
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+
+    // Intro + slide CTA
+    '<p>Make sure students spend their points on prizes and a chance to enter the raffle. Attached data has points earned last week.</p>',
+    '<p style="margin:14px 0;text-align:center;">',
+    '<a href="https://canva.link/y430aqrxczjr9oz" style="display:inline-block;background-color:#1a73e8;color:#ffffff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px;">SHOW THIS SLIDE</a>',
+    '</p>',
+    '<div style="background-color:#fff2cc;padding:12px;border-radius:6px;border:1px solid #ffe599;margin:12px 0;">',
+    '<p style="margin:0;font-weight:bold;">Last day to order is May 8th!</p>',
+    '</div>',
+
+    // Classroom Data Highlight Reel
+    buildYearHighlightReel(totals),
+
+    // Top Student Highlights = 2 KPIs + 2 spotlights
+    '<h2 style="color:#1a1a1a;margin-top:22px;">Top Student Highlights</h2>',
+    buildYearKpiStrip(totals),
+    buildStudentSpotlights(highlights),
+
+    // Quarter coaching paragraph
+    '<p style="margin-top:20px;font-style:italic;color:#333;">This didn\'t happen by chance &mdash; it\'s the result of intentional coaching and becoming more consistent through the process each week this quarter.</p>',
+    '<p><strong>Weekly Data Attached</strong></p>',
+
+    // State testing transition
+    '<p>The practices that built this growth are the same ones that will carry students into state and MAP testing with confidence.</p>',
+    '<p>As you move into state testing, know that your work has prepared students well.</p>',
+    '<p>We\'re excited to connect again at the end of the month for MAP testing and to keep building on this progress.</p>',
+
+    // Mindset Mini-Launches (Week 9-11)
+    '<h3 style="color:#1a1a1a;margin-top:18px;">Keep going! Mindset Mini-Launches</h3>',
+    '<ol style="padding-left:20px;line-height:1.6;">',
+    '<li><strong>Week 9 - Confidence:</strong> <a href="https://www.canva.com/design/DAHEzkY6lYU/raJFlAdAxHyZfVrLf31oYw/view?utm_content=DAHEzkY6lYU&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h499bdd75c8">What Is Confidence?</a></li>',
+    '<li><strong>Week 10 - Confidence:</strong> <a href="https://www.canva.com/design/DAHFGgoRC5c/oDVz3mDlrpNOov7jVmSZCw/view?utm_content=DAHFGgoRC5c&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=he56325bd08">What Is Self-Efficacy?</a></li>',
+    '<li><strong>Week 11 - Confidence:</strong> <a href="https://canva.link/motiventionweek11">The Brain-Body Feedback Loop</a></li>',
+    '</ol>'
   ]);
 }
 
