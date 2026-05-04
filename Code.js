@@ -1940,8 +1940,9 @@ function runUnitTests() {
     buildYearKpiStrip(mockTotals).indexOf('15.7') !== -1, true);
   var mockHighlightGrade = [{ rank: 1, studentName: 'Sa’myiah Patterson', cumulativeLessons: 41,
     cumulativeGradeLevels: 3, topSubject: 'Reading', leadingMetric: 'grade_levels' }];
-  _testAssertEq(results, 'buildStudentSpotlights: grade_levels narrative substitutes student/subject/N',
-    buildStudentSpotlights(mockHighlightGrade).indexOf('mastered 3 grade levels in Reading this year') !== -1, true);
+  // v2.6.7: subject mention dropped from grade_levels narrative — student-level total only.
+  _testAssertEq(results, 'buildStudentSpotlights: grade_levels narrative substitutes student/N',
+    buildStudentSpotlights(mockHighlightGrade).indexOf('mastered 3 grade levels this year, showing exceptional growth through Motivention') !== -1, true);
   var mockHighlightLessons = [{ rank: 2, studentName: 'James Lee', cumulativeLessons: 67,
     cumulativeGradeLevels: 1, topSubject: 'Math', leadingMetric: 'lessons' }];
   _testAssertEq(results, 'buildStudentSpotlights: lessons narrative substitutes student/N',
