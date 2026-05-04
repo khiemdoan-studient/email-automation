@@ -38,6 +38,7 @@ from difflib import get_close_matches
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+from google.cloud import bigquery
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -234,10 +235,18 @@ def categorize_unmatched(teacher, metrics_keys, cutoff=0.85):
 
 
 def main(week: str, strict: bool = False):
+    # v2.6.6: BQ scope added for the new cross-validation probes against
+    # weekly_dashboard. The probes hit the same BQ project the parent
+    # pipeline writes to.
     creds = service_account.Credentials.from_service_account_file(
-        SA_KEY, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        SA_KEY,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/bigquery",
+        ],
     )
     sheets = build("sheets", "v4", credentials=creds)
+    bq_client = bigquery.Client(project="studient-flat-exports-doan", credentials=creds)
 
     print("=" * 70)
     print(f"EMAIL ROSTER ↔ METRICS ALIGNMENT  —  week {week}")
@@ -336,7 +345,7 @@ def main(week: str, strict: bool = False):
         print("};")
 
     print()
-    # v2.6.5: probe the 2 new year-cumulative tabs (parent v3.37.7).
+    # v2.6.5: probe the 2 new year-cumulative tabs (parent v3.41.4).
     print()
     print("=" * 70)
     print("YEAR-CUMULATIVE TABS (v2.6.5 — SC Final Email template)")
@@ -346,8 +355,22 @@ def main(week: str, strict: bool = False):
     if not (year_totals_ok and student_highlights_ok):
         print("  -> Run `python email_only.py` from parent repo to populate.")
 
+    # v2.6.6: cross-validate year-cumulative tabs against raw weekly_dashboard.
+    # Catches the v3.41.4 cross-product multiplication bug class.
+    print()
+    print("=" * 70)
+    print("YEAR-TAB ↔ WEEKLY_DASHBOARD CROSS-VALIDATION (v2.6.6)")
+    print("=" * 70)
+    year_totals_match_ok = _probe_year_totals_match_weekly_dashboard(sheets, bq_client)
+    highlights_within_ok = _probe_highlights_within_actuals(sheets, bq_client)
+
     if strict and (
-        likely_typo or upstream_gap or not year_totals_ok or not student_highlights_ok
+        likely_typo
+        or upstream_gap
+        or not year_totals_ok
+        or not student_highlights_ok
+        or not year_totals_match_ok
+        or not highlights_within_ok
     ):
         sys.exit(1)
 
@@ -387,6 +410,149 @@ def _probe_year_teacher_totals(sheets):
         print(f"  ✗ Year Teacher Totals: 0 data rows (header only)")
         return False
     print(f"  ✓ Year Teacher Totals: {n_rows} teacher rows, schema OK")
+    return True
+
+
+def _probe_year_totals_match_weekly_dashboard(sheets, bq_client):
+    """v2.6.6: cross-validate Year Teacher Totals tab against raw weekly_dashboard.
+
+    For each teacher in the tab, the total_lessons cell must equal the per-teacher
+    SUM(weekly_dashboard.lessons_mastered) since 2025-09-01 within 1% tolerance.
+
+    Catches regressions in query_year_teacher_totals (e.g., filter drift,
+    incorrect aggregation grain).
+    """
+    try:
+        res = (
+            sheets.spreadsheets()
+            .values()
+            .get(spreadsheetId=SPREADSHEET_ID, range="'Year Teacher Totals'!A1:H")
+            .execute()
+        )
+    except Exception as e:
+        print(f"  ✗ Year Teacher Totals: tab not readable ({e})")
+        return False
+
+    rows = res.get("values", [])[1:]  # skip header
+    sheet_totals = {}
+    for r in rows:
+        if len(r) < 5 or not r[1]:
+            continue
+        sheet_totals[r[1].strip()] = float(r[4] or 0)
+
+    if not sheet_totals:
+        print("  ✗ Year Teacher Totals: empty tab")
+        return False
+
+    # Query BQ for ground truth (no whitelist filter — match the writer's scope)
+    sql = """
+    SELECT teacher_name, IFNULL(SUM(lessons_mastered), 0) AS total_lessons
+    FROM `studient-flat-exports-doan.studient_analytics.weekly_dashboard`
+    WHERE week_start >= DATE '2025-09-01'
+      AND teacher_name IS NOT NULL AND TRIM(teacher_name) != ''
+    GROUP BY teacher_name
+    """
+    bq_totals = {
+        r.teacher_name: float(r.total_lessons) for r in bq_client.query(sql).result()
+    }
+
+    drift_count = 0
+    drift_examples = []
+    for teacher, sheet_val in sheet_totals.items():
+        bq_val = bq_totals.get(teacher, 0)
+        if bq_val == 0 and sheet_val == 0:
+            continue
+        denom = max(abs(bq_val), 1)
+        rel_diff = abs(sheet_val - bq_val) / denom
+        if rel_diff > 0.01:
+            drift_count += 1
+            if len(drift_examples) < 3:
+                drift_examples.append(
+                    f"{teacher}: sheet={sheet_val:.1f}, bq={bq_val:.1f} (Δ={rel_diff:.1%})"
+                )
+
+    if drift_count > 0:
+        print(f"  ✗ Year Teacher Totals: {drift_count} teacher(s) drift > 1%")
+        for ex in drift_examples:
+            print(f"      {ex}")
+        return False
+    print(
+        f"  ✓ Year Teacher Totals: all {len(sheet_totals)} teachers within 1% of BQ baseline"
+    )
+    return True
+
+
+def _probe_highlights_within_actuals(sheets, bq_client):
+    """v2.6.6: cross-validate Student Year Highlights spotlight values stay
+    bounded by actual per-student weekly_dashboard SUMs.
+
+    For each spotlight row, asserts cumulative_lessons <= actual + 5% slack.
+    Catches the v3.41.4 cross-product multiplication bug class (subject-axis
+    or week-axis inflation).
+    """
+    try:
+        res = (
+            sheets.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="'Student Year Highlights'!A1:H",
+            )
+            .execute()
+        )
+    except Exception as e:
+        print(f"  ✗ Student Year Highlights: tab not readable ({e})")
+        return False
+
+    rows = res.get("values", [])[1:]
+    spotlights = []  # list of (teacher, student_name, cumulative_lessons)
+    for r in rows:
+        if len(r) < 8 or not r[1] or not r[3]:
+            continue
+        try:
+            spotlights.append((r[1].strip(), r[3].strip(), float(r[4] or 0)))
+        except ValueError:
+            continue
+
+    if not spotlights:
+        print("  ✗ Student Year Highlights: empty tab")
+        return False
+
+    # Single BQ query for actual per-(teacher, student) lessons
+    sql = """
+    SELECT teacher_name, student_name, IFNULL(SUM(lessons_mastered), 0) AS actual_lessons
+    FROM `studient-flat-exports-doan.studient_analytics.weekly_dashboard`
+    WHERE week_start >= DATE '2025-09-01'
+      AND teacher_name IS NOT NULL AND TRIM(teacher_name) != ''
+      AND student_name IS NOT NULL AND TRIM(student_name) != ''
+    GROUP BY 1, 2
+    """
+    bq_lookup = {
+        (r.teacher_name, r.student_name): float(r.actual_lessons)
+        for r in bq_client.query(sql).result()
+    }
+
+    over_count = 0
+    over_examples = []
+    for teacher, student, sheet_lessons in spotlights:
+        actual = bq_lookup.get((teacher, student), 0)
+        if sheet_lessons > actual * 1.05:
+            over_count += 1
+            if len(over_examples) < 3:
+                over_examples.append(
+                    f"{teacher} / {student}: sheet={sheet_lessons:.0f}, actual={actual:.0f}"
+                )
+
+    if over_count > 0:
+        print(
+            f"  ✗ Student Year Highlights: {over_count} spotlight(s) exceed actual + 5% slack"
+        )
+        for ex in over_examples:
+            print(f"      {ex}")
+        return False
+    print(
+        f"  ✓ Student Year Highlights: all {len(spotlights)} spotlights within 5% of actual per-student weekly_dashboard SUM"
+    )
     return True
 
 

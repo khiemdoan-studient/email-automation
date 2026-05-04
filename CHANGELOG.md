@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.6] - 2026-05-04
+
+### HOTFIX — extended check_email_data.py with 2 cross-validation probes (paired with parent v3.41.5)
+
+After v2.6.5 shipped the SC Final Email template, user caught a bug in the parent v3.41.4 `query_student_year_highlights` SQL that inflated spotlight numbers (Carolina "70 grade levels" instead of 2; Kimberly "284 lessons" instead of 71). Parent v3.41.5 fixes the SQL via a `teacher_student_year` CTE rewrite. This release adds 2 cross-validation probes to `scripts/check_email_data.py` so the bug class is caught at the email-automation validator layer too.
+
+### What lands
+
+NEW in `scripts/check_email_data.py`:
+
+1. **`_probe_year_totals_match_weekly_dashboard(sheets, bq_client)`** — for each teacher in `Year Teacher Totals`, asserts `total_lessons` matches per-teacher `SUM(weekly_dashboard.lessons_mastered)` since 2025-09-01 within 1%.
+2. **`_probe_highlights_within_actuals(sheets, bq_client)`** — for each spotlight student in `Student Year Highlights`, asserts `cumulative_lessons` ≤ 1.05 × actual per-(teacher, student) weekly_dashboard SUM. Catches the v3.41.4 cross-product multiplication bug class.
+
+`main()` now creates a `bigquery.Client` (added BQ scope) and runs the 2 new probes after the existing v2.6.5 tab probes. `--strict` mode exits 1 if either fails.
+
+### Code.js: NO change
+
+The buildBody and helpers are correct; the data they consume was wrong. After parent v3.41.5 ships and the parent re-runs `email_only.py`, the spotlight numbers in fresh email drafts will be correct without any Code.js change.
+
+### Verified
+
+- ✓ Parent re-ran `email_only.py` post-v3.41.5: 80 teacher rows in `Year Teacher Totals` (unchanged), 145 student rows in `Student Year Highlights` (corrected).
+- ✓ Live sheet read for 5 sample teachers (Tashanique, Bertha, Avlen, Verenice, Rebecca): all spotlight rows now match BQ ground truth within 1%.
+- ✓ Tashanique rank 2 changed: Kimberly (lessons=284) → **Richar Galvez-Sanchez (lessons=77)** — the actual top-by-lessons after rank 1.
+- ✓ `python -m py_compile scripts/check_email_data.py`: PASS.
+- ✓ Parent reconcile post-v3.41.5: 35/35 PASS (3 new BQ-side probes).
+
+### Files modified
+
+- `scripts/check_email_data.py` — 2 new probe functions + main() integration + BQ scope addition.
+- `package.json` — version bump 2.6.5 → 2.6.6.
+- `CHANGELOG.md` — this entry.
+- `CLAUDE.md` — v2.6.6 history line.
+
+### Action required
+
+1. After parent v3.41.5 ships + EC2 hourly cron re-runs (or manual `python email_only.py`), the spreadsheet's `Student Year Highlights` tab will have corrected numbers.
+2. Reload spreadsheet, run `Email Tools → Test Mode: Generate Smoke Test (drafts to me)` to verify spotlight numbers in fresh drafts match the SA tab.
+3. Bulk Generate flow unchanged.
+
 ## [v2.6.5] - 2026-04-30
 
 ### NEW template: SC Final Email — Growth & Hardwork = Results
