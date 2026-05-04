@@ -1949,6 +1949,12 @@ function runUnitTests() {
     buildStudentSpotlights(mockHighlightLessons).indexOf('master 67 lessons this year, leading the class') !== -1, true);
   _testAssertEq(results, 'buildStudentSpotlights: empty array shows fallback',
     buildStudentSpotlights([]).indexOf('still being calculated') !== -1, true);
+  // v2.6.8: lookupByName resolves 3-token roster name to 2-token map key.
+  // Fixes "John Bradley Apostol" (roster) vs "john apostol" (Year Teacher Totals)
+  // mismatch where the previous direct-map lookup returned null.
+  var mockYearMap = { 'john apostol': { numStudents: 25, totalLessons: 1442 } };
+  _testAssertEq(results, 'lookupByName: 3-token roster name resolves to 2-token map key (john bradley apostol -> john apostol)',
+    lookupByName(mockYearMap, 'John', 'Apostol', 'John Bradley Apostol') !== null, true);
 
   // Render
   var pass = 0, fail = 0;
@@ -2883,9 +2889,18 @@ function generateLastWeekFinishLineBody(teacher, metricsArray, winnersArray) {
 // Student Year Highlights tabs (populated by parent v3.41.4).
 // Per-teacher data: classroom highlight reel + 2 KPIs + 2 student spotlights.
 function generateScFinalEmailBody(teacher, metricsArray, winnersArray) {
-  var teacherNameLower = (teacher && teacher.name) ? teacher.name.toLowerCase() : '';
-  var totals = getYearTeacherTotals()[teacherNameLower] || null;
-  var highlights = getStudentYearHighlights()[teacherNameLower] || [];
+  // v2.6.8: use lookupByName instead of direct-map lookup. Fixes multi-token
+  // roster names (e.g., "John Bradley Apostol" in roster vs "John Apostol" in
+  // BQ/Year Teacher Totals — BQ drops the middle name upstream). Direct lookup
+  // returned null → email rendered all "--" KPIs + spotlight fallback text.
+  // lookupByName step 2 resolves firstName.split(' ')[0] + ' ' + lastName,
+  // matching all 13 weekly templates' behavior.
+  var totals = lookupByName(
+    getYearTeacherTotals(), teacher && teacher.firstName, teacher && teacher.lastName, teacher && teacher.name
+  );
+  var highlights = lookupByName(
+    getStudentYearHighlights(), teacher && teacher.firstName, teacher && teacher.lastName, teacher && teacher.name
+  ) || [];
 
   return wrapEmailHtml([
     buildGreeting(teacher),

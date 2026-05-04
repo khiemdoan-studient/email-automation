@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.8] - 2026-05-04
+
+### HOTFIX — multi-token teacher name lookup in SC Final Email
+
+User reported John Bradley Apostol's SC Final Email body was rendering all "--" for KPIs and "Top student highlights are still being calculated for this period." for spotlights — even though the data was correctly populated in `Year Teacher Totals` and `Student Year Highlights`.
+
+### Root cause
+
+Roster vs BQ name mismatch:
+- Apps Script roster builds `teacher.name = "John Bradley Apostol"` (3 tokens — first + middle + last)
+- BigQuery `weekly_dashboard.teacher_name = "John Apostol"` (middle name dropped upstream — 900 rows since 2025-09-01)
+- Year Teacher Totals tab keyed by `'John Apostol'` only
+
+`generateScFinalEmailBody` at line 2884-2886 did direct-map lookup `getYearTeacherTotals()[teacher.name.toLowerCase()]` which returned null on the 3-token vs 2-token mismatch. The function bypassed the existing `lookupByName(obj, firstName, lastName, fullName)` helper that all 13 weekly templates use for exactly this case.
+
+### Fix
+
+Replaced the 2 direct-map lookups in `generateScFinalEmailBody` with `lookupByName` calls:
+
+```javascript
+var totals = lookupByName(
+  getYearTeacherTotals(), teacher.firstName, teacher.lastName, teacher.name
+);
+var highlights = lookupByName(
+  getStudentYearHighlights(), teacher.firstName, teacher.lastName, teacher.name
+) || [];
+```
+
+`lookupByName` algorithm (Code.js:967-992):
+1. Exact match `obj[fullName.toLowerCase()]` — unchanged behavior for 2-token names.
+2. **First+last fallback**: `obj[firstName.split(' ')[0] + ' ' + lastName]` — resolves "John Bradley Apostol" to "john apostol".
+3. Last-name fallback with restrictive first-name match.
+4. NAME_ALIASES map (covers BQ-side typos).
+
+### Why this is structural
+
+This is the same fix the legacy weekly templates (Week 0-8, Wrap Up, 4/27, etc.) already use for `metricsArray` lookups. SC Final Email (v2.6.5) was a new feature that introduced direct-map readers without wiring them through `lookupByName`. No NAME_ALIASES entry needed — step 2 of `lookupByName` handles the class structurally.
+
+### Verified
+
+- ✓ 52/52 unit tests PASS (added test for "John Bradley Apostol" → "john apostol" resolution).
+- ✓ Code.js deployed via clasp.
+- ✓ Existing 13 templates unchanged (single-token-first-name teachers hit step 1 of `lookupByName` exactly as before).
+- ✓ Multi-campus teachers from v2.6.7 still resolve correctly (orthogonal).
+
+### Expected output for John Bradley Apostol
+
+- Total Minutes: 21,177
+- Total Lessons Mastered: 1,442
+- Total Grade Levels Mastered: 4
+- Avg Mastered Lessons / Student: 57.7
+- Avg Mastered Grades / Student: 0.2
+- Spotlight 1: "Thiago Hernandez Vasquez mastered 1 grade level this year, showing exceptional growth through Motivention."
+- Spotlight 2: "Jeremiah Liam worked diligently to master 152 lessons this year, leading the class."
+
 ## [v2.6.7] - 2026-05-04
 
 ### HOTFIX — multi-campus teacher uniqueness probe + SC Final Email template polish (paired with parent v3.41.6)
