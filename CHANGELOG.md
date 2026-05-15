@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.7.0] - 2026-05-15
+
+### FEATURE: skip drafts for teachers without metrics for the selected week
+
+User reported v2.6.9 successfully restored JRES email generation for week 2026-04-13, but the bulk run created drafts for ALL 20 JRES roster teachers when only 11 actually had metrics in `All Teacher Metrics` for that week. The other 9 teachers (Kelly Thornton, Kelly Ann Thornton, Genesis Temonio, Linda Graves, Kumari Bolle, Egeria Bostick, Aresiha Arnett, Akeisha Arnett, Armi Laigue) got drafts with a "No metrics rows found" placeholder. The IM had to manually delete those wasted drafts from Gmail.
+
+v2.7.0 ships an opt-out-by-default skip filter: when metrics exist for the selected week, teachers without matching metrics rows are skipped entirely (no draft created). When metrics do NOT exist for the week at all, preserves pre-v2.7.0 behavior of "send to all with placeholder" so IMs can still ship template-only emails when they explicitly want.
+
+### What lands
+
+**Code.js (single function refactor + 1 new pure helper):**
+
+1. NEW pure helper `partitionTeachersByDataAvailability(teachers, hasDataFn)` (near `campusMatchesAnyDisplay`). Returns `{withData: [...], skipped: [...]}`. No Sheets I/O; unit-testable.
+
+2. `generateDraftsForCurrentUser` refactor:
+   - Load `teacherMetrics` (+ `getYearTeacherTotals()` for SC Final Email template) BEFORE the confirmation dialog so accurate counts can be shown.
+   - Partition teachers using a template-aware `hasDataFn`:
+     - SC Final Email: lookup against `getYearTeacherTotals()`
+     - All other templates: lookup against `getTeacherMetricsForWeek(weekStart)`
+   - Apply partition only when `metricsExist === true` OR template is SC Final Email. Preserves the pre-v2.7.0 "send to all" path when no metrics exist for the week.
+   - Confirmation dialog now shows: `Teachers in roster: X`, `Drafts to generate: Y`, `Skipped (no metrics this week): Z` (the last line only appears when Z > 0).
+   - Main loop iterates `teachersWithData` (was `teachers`).
+   - Completion alert appends: `Skipped Y teachers (no metrics this week): name1, name2, ... (full list in logs)`. Cap at 10 names + truncation; full list goes to `console.log`.
+
+3. 4 new unit tests for the partition helper bringing total 62 -> 66:
+   - mixed input separates correctly
+   - withData preserves teacher names
+   - skipped preserves teacher names
+   - empty input returns `{withData: [], skipped: []}`
+
+### Verified
+
+- `node test_runner.js`: 66/66 PASS
+- Live partition probe for JRES week 2026-04-13 (matches IM's expected list):
+  - Drafts to generate (11): alfreda harris, ann francis deonila, christin fiorillo, delores campbell heyward, ethel bolo, jasmine cuylear, kerrie kasarda, lasonnya chisolm-priester, shanatae taylor, sharon bush, wanda stevenson
+  - Skipped (9): akeisha arnett, aresiha arnett, armi laigue, egeria bostick, genesis temonio, kelly ann thornton, kelly thornton, kumari bolle, linda graves
+- `npm run deploy`: clasp push OK; Code.js + appsscript.json synced
+
+### Files modified
+
+- `Code.js` (~50 LOC inside `generateDraftsForCurrentUser` + new helper + 4 tests)
+- `package.json` (2.6.9 -> 2.7.0)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (v2.7.0 history line)
+
+### Backward compatibility
+
+- Existing weeks WITH metrics: behavior changes (filter applied, wasted drafts skipped).
+- Existing weeks WITHOUT metrics: behavior unchanged (WARNING shown, drafts created for all roster teachers).
+- SC Final Email template: filter applied unconditionally against `Year Teacher Totals` (year-cumulative data nearly always exists; teachers missing from it shouldn't get year-end emails anyway).
+
 ## [v2.6.9] - 2026-05-15
 
 ### HOTFIX + defense-in-depth: roster campus filter normalization + proactive validator probe

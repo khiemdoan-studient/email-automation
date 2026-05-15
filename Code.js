@@ -800,14 +800,56 @@ function generateDraftsForCurrentUser() {
   var weekStart = dateRange.split('_to_')[0];
   var metricsExist = checkMetricsExistForWeek(weekStart);
 
+  // v2.7.0: Load data BEFORE the confirmation dialog so we can show accurate
+  // draft-vs-skip counts. Previously metrics were loaded post-confirmation +
+  // looked up inside the per-teacher loop, which meant the dialog couldn't
+  // distinguish "22 teachers in roster" from "12 of those will get drafts".
+  var teacherMetrics = metricsExist ? getTeacherMetricsForWeek(weekStart) : {};
+  var allWinners = getStudentWinners();
+
+  // v2.7.0: Branch on template. SC Final Email uses year-cumulative metrics
+  // (Year Teacher Totals tab) instead of weekly metrics, so the filter checks
+  // a different dict for that template.
+  var isFinalEmail = templateName.indexOf('SC Final Email') === 0;
+  var yearTotalsForFilter = isFinalEmail ? getYearTeacherTotals() : null;
+
+  // v2.7.0: Partition teachers into (a) has data for this template + (b)
+  // would render a "No metrics rows found" placeholder. Skip (b) entirely.
+  // Only applied when metricsExist=true; if no metrics at all for the week,
+  // fall through to "send to all" with the WARNING shown below (preserves
+  // pre-v2.7.0 behavior for the case where IM explicitly wants placeholder
+  // drafts).
+  var hasDataFn = isFinalEmail
+    ? function(t) {
+        var hit = lookupByName(yearTotalsForFilter, t.firstName, t.lastName, t.name);
+        return hit !== null && hit !== undefined;
+      }
+    : function(t) {
+        var hit = lookupByName(teacherMetrics, t.firstName, t.lastName, t.name);
+        return hit !== null && hit !== undefined;
+      };
+  var teachersWithData = teachers;
+  var teachersSkipped = [];
+  if (metricsExist || isFinalEmail) {
+    var partitioned = partitionTeachersByDataAvailability(teachers, hasDataFn);
+    teachersWithData = partitioned.withData;
+    teachersSkipped = partitioned.skipped;
+  }
+
   // Show confirmation dialog
   var dialogMsg = 'Ready to generate email drafts.\n\n'
     + 'Date Range: ' + dateRange + '\n'
     + 'Template: ' + templateName + '\n'
-    + 'Teachers found: ' + teachers.length + '\n'
-    + 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n';
+    + 'Teachers in roster: ' + teachers.length + '\n'
+    + 'Drafts to generate: ' + teachersWithData.length + '\n';
 
-  if (!metricsExist) {
+  if (teachersSkipped.length > 0) {
+    dialogMsg += 'Skipped (no metrics this week): ' + teachersSkipped.length + '\n';
+  }
+
+  dialogMsg += 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n';
+
+  if (!metricsExist && !isFinalEmail) {
     dialogMsg += '\nWARNING: No metrics data found for week ' + weekStart + '.\n'
       + 'Emails will be generated WITHOUT metrics tables.\n';
   }
@@ -815,10 +857,6 @@ function generateDraftsForCurrentUser() {
   dialogMsg += '\nProceed?';
   var confirm = ui.alert('Confirm Generation', dialogMsg, ui.ButtonSet.YES_NO);
   if (confirm !== ui.Button.YES) return;
-
-  // Load data
-  var teacherMetrics = metricsExist ? getTeacherMetricsForWeek(weekStart) : {};
-  var allWinners = getStudentWinners();
 
   var successCount = 0, errorCount = 0;
   var errors = [];
@@ -831,8 +869,8 @@ function generateDraftsForCurrentUser() {
 
   var template = TEMPLATES[templateName];
 
-  for (var t = 0; t < teachers.length; t++) {
-    var teacher = teachers[t];
+  for (var t = 0; t < teachersWithData.length; t++) {
+    var teacher = teachersWithData[t];
     try {
       var metrics = lookupByName(teacherMetrics, teacher.firstName, teacher.lastName, teacher.name);
       var winners = lookupByName(allWinners, teacher.firstName, teacher.lastName, teacher.name) || [];
@@ -853,6 +891,15 @@ function generateDraftsForCurrentUser() {
       console.log('Full error list:\n' + errors.join('\n'));
     }
     msg += ' | ERRORS: ' + errStr;
+  }
+  // v2.7.0: surface skip list so IM can verify which teachers were intentionally
+  // not drafted (most commonly: teacher has no metrics row for this week).
+  if (teachersSkipped.length > 0) {
+    var skipNames = teachersSkipped.map(function(t) { return t.name; });
+    var displayList = skipNames.slice(0, 10).join(', ');
+    if (skipNames.length > 10) displayList += ', ... (' + skipNames.length + ' total, full list in logs)';
+    msg += ' | Skipped ' + teachersSkipped.length + ' teachers (no metrics this week): ' + displayList;
+    console.log('Full skipped list:\n' + skipNames.join('\n'));
   }
   msg += ' | Check your Gmail Drafts!';
   ui.alert('Complete', msg, ui.ButtonSet.OK);
@@ -1341,6 +1388,26 @@ function campusMatchesAnyDisplay(rosterCampus, displayNames) {
     if (normalizeFolderName(displayNames[i]) === target) return true;
   }
   return false;
+}
+
+/**
+ * v2.7.0: Split a teacher list into (a) teachers with metrics data and (b)
+ * teachers without. Used by generateDraftsForCurrentUser to skip wasted
+ * drafts for teachers who would otherwise get a "No metrics rows found"
+ * placeholder. Pure function for unit-testability.
+ *
+ * @param {Array} teachers   each item passed to hasDataFn
+ * @param {Function} hasDataFn   takes a teacher, returns true if has data
+ * @return {{withData: Array, skipped: Array}}
+ */
+function partitionTeachersByDataAvailability(teachers, hasDataFn) {
+  var withData = [];
+  var skipped = [];
+  for (var i = 0; i < teachers.length; i++) {
+    if (hasDataFn(teachers[i])) withData.push(teachers[i]);
+    else skipped.push(teachers[i]);
+  }
+  return { withData: withData, skipped: skipped };
 }
 
 /**
@@ -1870,6 +1937,33 @@ function runUnitTests() {
     campusMatchesAnyDisplay('Some Other School', ['JRES - Ridgeland Elementary School']), false);
   _testAssertEq(results, 'campusMatchesAnyDisplay: empty displayNames list returns false',
     campusMatchesAnyDisplay('JRES - Ridgeland Elementary School', []), false);
+
+  // --- v2.7.0: partitionTeachersByDataAvailability (drives the skip-without-data filter) ---
+  var fakeTeachers = [
+    { name: 'Lasonnya Chisolm-Priester', firstName: 'Lasonnya', lastName: 'Chisolm-Priester' },
+    { name: 'Kelly Thornton', firstName: 'Kelly', lastName: 'Thornton' },
+    { name: 'Alfreda Harris', firstName: 'Alfreda', lastName: 'Harris' },
+    { name: 'Genesis Temonio', firstName: 'Genesis', lastName: 'Temonio' }
+  ];
+  var fakeMetrics = {
+    'lasonnya chisolm-priester': 'L_METRICS',
+    'alfreda harris': 'A_METRICS'
+  };
+  var partFn = function(t) {
+    return lookupByName(fakeMetrics, t.firstName, t.lastName, t.name) !== null;
+  };
+  var partResult = partitionTeachersByDataAvailability(fakeTeachers, partFn);
+  _testAssertEq(results, 'partition: mixed input separates by data presence',
+    [partResult.withData.length, partResult.skipped.length], [2, 2]);
+  _testAssertEq(results, 'partition: withData preserves teacher names',
+    partResult.withData.map(function(t) { return t.name; }).sort(),
+    ['Alfreda Harris', 'Lasonnya Chisolm-Priester']);
+  _testAssertEq(results, 'partition: skipped preserves teacher names',
+    partResult.skipped.map(function(t) { return t.name; }).sort(),
+    ['Genesis Temonio', 'Kelly Thornton']);
+  _testAssertEq(results, 'partition: empty input returns empty arrays',
+    partitionTeachersByDataAvailability([], partFn),
+    { withData: [], skipped: [] });
 
   // --- dateRangeToPdfPattern ---
   _testAssertEq(results, 'dateRangeToPdfPattern: valid range',
