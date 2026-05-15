@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.9] - 2026-05-15
+
+### HOTFIX + defense-in-depth: roster campus filter normalization + proactive validator probe
+
+User (IM khiem.doan@studient.com) hit `"No teachers found for your schools."` for JRES week 2026-04-13 Week 6 template. Investigation showed the bug was NOT in Code.js: the upstream `MAP Master Roster for Public School SW Sales- (Studient do not edit)` spreadsheet (ID `1scEay0a8OR6vU3uJuxbHKWCEx_RVgSsRXF9naJh3XYw`) had Columns A-E wiped on all 478 rows of the "Ridgeland Elementary School (Dash)" tab. Teacher columns (Y/Z/AA) survived. IMPORTRANGE faithfully pulled the empty values into Teacher Emails Column C, and `getTeachersForSchools` correctly filtered them out.
+
+User restored the source tab Column C. v2.6.9 ships 3 defense-in-depth changes so any analog future wipe (any school's Column A-E goes empty, or any cosmetic format drift between Teacher Emails Column C and School-IM Mapping displayName) is caught proactively + tolerated automatically.
+
+### What lands
+
+**Code.js (3 hardenings):**
+
+1. New pure helper `campusMatchesAnyDisplay(rosterCampus, displayNames)` (near `normalizeFolderName`). Replaces the previous exact-match `indexOf` filter in `getTeachersForSchools` (lines 1100-1144). Now case + whitespace + separator + apostrophe insensitive. The roster filter no longer silently drops rows when Teacher Emails Column C drifts in cosmetic format from School-IM Mapping displayName.
+
+2. `checkTeacherNames` (lines 2961+): when `teachers.length === 0` and `mySchools.length > 0`, render an orange warning callout instead of silently rendering `Matched: 0 of 0`. Callout explains: "Zero teachers loaded from the roster... usually means the upstream MAP Master Roster source has empty Column C for your school. Action: open the source sheet (ID listed), find your school's tab, restore Column C from File > Version history."
+
+3. `generateDraftsForCurrentUser` "No teachers found" alert appended with: "Run Email Tools > Debug: Check Teacher Names for a diagnostic that explains why (most commonly: upstream source has empty Campus column for your school)."
+
+**scripts/check_email_data.py:** NEW `_probe_no_silently_dropped_school(sheets)` (with helper `_normalize_campus`). Reads School-IM Mapping displayName for each non-blank IM, and asserts at least 1 matching row exists in Teacher Emails Column C (normalized comparison). Skips Reading (which uses dedicated tab). Failure under `--strict` exits 1. Catches the JRES Column-A-E wipe bug class BEFORE any IM hits production.
+
+**test_runner.js / runUnitTests:** 10 new tests bringing total 52 -> 62.
+- 4 new `normalizeFolderName` cases (full school names spaced + underscored + uppercase + spaced-vs-underscored cross-equivalence)
+- 6 new `campusMatchesAnyDisplay` cases (exact match + underscored matches spaced + uppercase matches mixed-case + empty campus + non-matching campus + empty displayNames list)
+
+### Verified
+
+- `node test_runner.js`: 62/62 PASS
+- `python scripts/check_email_data.py --week 2026-04-13`: new probe reports `Roster coverage: all 9 assigned schools present in Teacher Emails` after source restore
+- Live destination roster post-restore: 10 distinct Campus values present (JHES 447, JHMS 335, JRES 481, JRHS 330, AASP 28, AFES 154, AFMS 182, Metro 130, Reading 204, plus 1 `#REF!` straggler)
+- `npm run deploy`: Code.js + appsscript.json pushed to clasp
+
+### Synthetic test for the new probe
+
+If JRES source tab Column C is wiped again, the probe output would change to:
+```
+1 of 9 School-IM Mapping schools are DROPPED in Teacher Emails:
+    'JRES - Ridgeland Elementary School' (IM: khiem.doan@studient.com) has 0 rows in Teacher Emails Column C
+Likely cause: upstream source spreadsheet (ID 1scEay0a8OR6vU3uJuxbHKWCEx_RVgSsRXF9naJh3XYw) lost Column C for that school's tab. Restore from File > Version history.
+```
+Under `--strict`, exits 1.
+
+### Files modified
+
+- `Code.js` (3 hardenings + 10 new test cases)
+- `scripts/check_email_data.py` (new `_probe_no_silently_dropped_school` + `_normalize_campus`)
+- `package.json` (version bump 2.6.8 -> 2.6.9)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (v2.6.9 history line + drift marker note)
+
+### Lesson learned
+
+When a Code.js filter uses literal exact-string equality against an externally-fed roster column, ANY cosmetic format drift in the source data (case, whitespace, separator, apostrophe variant) silently produces zero matches. The Drive-folder lookup path already hardened this in v2.0.3 + v2.4.2 + v2.5.0 via `normalizeFolderName`. The roster filter was the one remaining unsoftened comparison.
+
+The matching validator probe is essential because the symptom (`No teachers found for your schools`) doesn't point at the actual cause (empty upstream Column C). Without the probe, IMs hit a dead-end alert with no diagnostic; with it, the data team gets a loud exit-1 in pre-cycle validation before any IM is blocked.
+
 ## [v2.6.8] - 2026-05-04
 
 ### HOTFIX — multi-token teacher name lookup in SC Final Email

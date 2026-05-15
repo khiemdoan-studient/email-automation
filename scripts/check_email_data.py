@@ -374,6 +374,16 @@ def main(week: str, strict: bool = False):
     print("=" * 70)
     no_dupe_teachers_ok = _probe_no_duplicate_teacher_in_year_totals(sheets)
 
+    # v2.6.9: catch "school imported via IMPORTRANGE but Campus column blank"
+    # upstream. The JRES Column-A-E wipe bug class: source tab had teacher
+    # data in Y/Z/AA but empty Column C, so getTeachersForSchools silently
+    # returned 0 teachers and the IM hit "No teachers found for your schools".
+    print()
+    print("=" * 70)
+    print("SCHOOL ROSTER COVERAGE (v2.6.9)")
+    print("=" * 70)
+    school_coverage_ok = _probe_no_silently_dropped_school(sheets)
+
     if strict and (
         likely_typo
         or upstream_gap
@@ -382,6 +392,7 @@ def main(week: str, strict: bool = False):
         or not year_totals_match_ok
         or not highlights_within_ok
         or not no_dupe_teachers_ok
+        or not school_coverage_ok
     ):
         sys.exit(1)
 
@@ -534,6 +545,100 @@ def _probe_no_duplicate_teacher_in_year_totals(sheets):
         return False
     print(
         f"  ✓ Year Teacher Totals: {len(set(teacher_names))} unique teachers, no duplicates"
+    )
+    return True
+
+
+def _normalize_campus(s):
+    """Python port of Code.js normalizeFolderName for the v2.6.9 probe.
+
+    lowercase, trim, underscore to space, collapse whitespace, apostrophe normalize.
+    """
+    if not s:
+        return ""
+    out = str(s).lower().strip()
+    for ch in ("‘", "’", "‛", "`", "´"):
+        out = out.replace(ch, "'")
+    out = out.replace("_", " ")
+    out = " ".join(out.split())
+    return out
+
+
+def _probe_no_silently_dropped_school(sheets):
+    """v2.6.9: assert each School-IM Mapping displayName with a non-blank IM
+    has at least 1 matching row in the destination Teacher Emails tab.
+
+    Catches the JRES Column-A-E wipe bug class: when the upstream MAP Master
+    Roster tab for a school loses Column C, the IMPORTRANGE pulls empty values
+    into Teacher Emails Column C, getTeachersForSchools correctly filters them
+    out, and the assigned IM hits "No teachers found for your schools" with no
+    diagnostic of why. This probe fires BEFORE the IM cycle so the data team
+    can repopulate the source before any IM is blocked.
+
+    Reading Community uses the "Reading Teachers" tab (not Teacher Emails),
+    so this probe skips that displayName.
+    """
+    try:
+        mapping_res = (
+            sheets.spreadsheets()
+            .values()
+            .get(spreadsheetId=SPREADSHEET_ID, range="'School-IM Mapping'!A:C")
+            .execute()
+        )
+    except Exception as e:
+        print(f"  ✗ School-IM Mapping: tab not readable ({e})")
+        return False
+
+    try:
+        roster_res = (
+            sheets.spreadsheets()
+            .values()
+            .get(spreadsheetId=SPREADSHEET_ID, range="'Teacher Emails'!C:C")
+            .execute()
+        )
+    except Exception as e:
+        print(f"  ✗ Teacher Emails: tab not readable ({e})")
+        return False
+
+    mapping_rows = mapping_res.get("values", [])
+    roster_rows = roster_res.get("values", [])
+
+    roster_campus_set = set()
+    for row in roster_rows[1:]:
+        if not row:
+            continue
+        c = (row[0] or "").strip() if row else ""
+        if c:
+            roster_campus_set.add(_normalize_campus(c))
+
+    dropped = []
+    checked = 0
+    for row in mapping_rows[1:]:
+        if not row or len(row) < 3:
+            continue
+        display = (row[1] or "").strip() if len(row) > 1 else ""
+        im_email = (row[2] or "").strip() if len(row) > 2 else ""
+        if not display or not im_email:
+            continue
+        if _normalize_campus(display) == _normalize_campus(READING_DISPLAY_NAME):
+            continue
+        checked += 1
+        if _normalize_campus(display) not in roster_campus_set:
+            dropped.append((display, im_email))
+
+    if dropped:
+        print(
+            f"  ✗ {len(dropped)} of {checked} School-IM Mapping schools are DROPPED in Teacher Emails:"
+        )
+        for display, im in dropped:
+            print(f"      {display!r} (IM: {im}) has 0 rows in Teacher Emails Column C")
+        print()
+        print("    Likely cause: upstream source spreadsheet (ID")
+        print("    1scEay0a8OR6vU3uJuxbHKWCEx_RVgSsRXF9naJh3XYw) lost Column C for")
+        print("    that school's tab. Restore from File > Version history.")
+        return False
+    print(
+        f"  ✓ Roster coverage: all {checked} assigned schools present in Teacher Emails"
     )
     return True
 

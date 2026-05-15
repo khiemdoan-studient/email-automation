@@ -768,7 +768,7 @@ function generateDraftsForCurrentUser() {
   if (mySchools.length === 0) return ui.alert('Error', 'Your email is not assigned to any schools.', ui.ButtonSet.OK);
 
   var teachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
-  if (teachers.length === 0) return ui.alert('Error', 'No teachers found for your schools.', ui.ButtonSet.OK);
+  if (teachers.length === 0) return ui.alert('Error', 'No teachers found for your schools.\n\nRun Email Tools > Debug: Check Teacher Names for a diagnostic that explains why (most commonly: upstream source spreadsheet has empty Campus column for your school).', ui.ButtonSet.OK);
 
   // Validate Drive folder exists for this date range
   // Primary: use ROOT_FOLDER_ID (bulletproof). Fallback: name lookup.
@@ -1102,10 +1102,18 @@ function getTeachersForSchools(schoolDisplayNames) {
   var data = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME).getDataRange().getValues();
   var teacherMap = new Map();
 
+  // v2.6.9: precompute normalized Reading sentinel so we don't recompute per row.
+  var readingNormalized = normalizeFolderName('Reading Community City School District');
+
   for (var i = 1; i < data.length; i++) {
     var campus = String(data[i][CONFIG.CAMPUS_COL] || '').trim();
-    if (schoolDisplayNames.indexOf(campus) === -1) continue;
-    if (campus === 'Reading Community City School District') continue;
+    // v2.6.9: normalized comparison (was exact-match indexOf). The old filter
+    // silently dropped rows when Teacher Emails Column C drifted in case /
+    // whitespace / separator from School-IM Mapping displayName -- the JRES
+    // Column-A-E wipe bug class manifests upstream as empty Campus, but any
+    // future cosmetic-format drift is now tolerated automatically.
+    if (!campusMatchesAnyDisplay(campus, schoolDisplayNames)) continue;
+    if (normalizeFolderName(campus) === readingNormalized) continue;
 
     var firstName = String(data[i][CONFIG.TEACHER_FIRST_COL] || '').trim();
     var lastName = String(data[i][CONFIG.TEACHER_LAST_COL] || '').trim();
@@ -1120,8 +1128,8 @@ function getTeachersForSchools(schoolDisplayNames) {
     }
   }
 
-  // Reading Community: dedicated tab
-  if (schoolDisplayNames.indexOf('Reading Community City School District') !== -1) {
+  // Reading Community: dedicated tab (v2.6.9: normalized match for consistency).
+  if (campusMatchesAnyDisplay('Reading Community City School District', schoolDisplayNames)) {
     var readingSheet = ss.getSheetByName(CONFIG.READING_TEACHERS_SHEET_NAME);
     if (readingSheet) {
       var readingData = readingSheet.getDataRange().getValues();
@@ -1315,6 +1323,24 @@ function normalizeFolderName(name) {
     .replace(/_/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * v2.6.9: Returns true iff `rosterCampus` normalizes to the same string as ANY
+ * of the given `displayNames`. Pure helper extracted from getTeachersForSchools
+ * for unit-testability + to replace the previous exact-match `indexOf` filter
+ * (which silently produced zero matches when Teacher Emails Column C drifted in
+ * case / whitespace / separator from School-IM Mapping displayName).
+ *
+ * Empty / null rosterCampus returns false (an unaffiliated row).
+ */
+function campusMatchesAnyDisplay(rosterCampus, displayNames) {
+  var target = normalizeFolderName(rosterCampus);
+  if (!target) return false;
+  for (var i = 0; i < displayNames.length; i++) {
+    if (normalizeFolderName(displayNames[i]) === target) return true;
+  }
+  return false;
 }
 
 /**
@@ -1816,6 +1842,34 @@ function runUnitTests() {
     normalizeFolderName('  Foo   Bar  '), 'foo bar');
   _testAssertEq(results, 'normalizeFolderName: null safe',
     normalizeFolderName(null), '');
+
+  // v2.6.9: full-school-name normalization (the JRES regression class).
+  _testAssertEq(results, 'normalizeFolderName: full school name spaced',
+    normalizeFolderName('JRES - Ridgeland Elementary School'), 'jres - ridgeland elementary school');
+  _testAssertEq(results, 'normalizeFolderName: full school name underscored',
+    normalizeFolderName('JRES_-_Ridgeland_Elementary_School'), 'jres - ridgeland elementary school');
+  _testAssertEq(results, 'normalizeFolderName: full school name uppercase',
+    normalizeFolderName('JRES - RIDGELAND ELEMENTARY SCHOOL'), 'jres - ridgeland elementary school');
+  _testAssertEq(results, 'normalizeFolderName: spaced vs underscored cross-equivalence',
+    normalizeFolderName('JRES_-_Ridgeland_Elementary_School'),
+    normalizeFolderName('JRES - Ridgeland Elementary School'));
+
+  // --- v2.6.9: campusMatchesAnyDisplay (pure helper for getTeachersForSchools) ---
+  _testAssertEq(results, 'campusMatchesAnyDisplay: exact match',
+    campusMatchesAnyDisplay('JRES - Ridgeland Elementary School',
+      ['JRES - Ridgeland Elementary School']), true);
+  _testAssertEq(results, 'campusMatchesAnyDisplay: underscored campus matches spaced display',
+    campusMatchesAnyDisplay('JRES_-_Ridgeland_Elementary_School',
+      ['JRES - Ridgeland Elementary School']), true);
+  _testAssertEq(results, 'campusMatchesAnyDisplay: uppercase campus matches mixed-case display',
+    campusMatchesAnyDisplay('JRES - RIDGELAND ELEMENTARY SCHOOL',
+      ['JRES - Ridgeland Elementary School']), true);
+  _testAssertEq(results, 'campusMatchesAnyDisplay: empty campus returns false',
+    campusMatchesAnyDisplay('', ['JRES - Ridgeland Elementary School']), false);
+  _testAssertEq(results, 'campusMatchesAnyDisplay: non-matching campus returns false',
+    campusMatchesAnyDisplay('Some Other School', ['JRES - Ridgeland Elementary School']), false);
+  _testAssertEq(results, 'campusMatchesAnyDisplay: empty displayNames list returns false',
+    campusMatchesAnyDisplay('JRES - Ridgeland Elementary School', []), false);
 
   // --- dateRangeToPdfPattern ---
   _testAssertEq(results, 'dateRangeToPdfPattern: valid range',
@@ -2980,6 +3034,32 @@ function checkTeacherNames() {
   var metrics = getTeacherMetricsForWeek(weekStart);
   var metricsKeys = Object.keys(metrics);
 
+  var html = '<h2>Teacher Name Diagnostic</h2>';
+  html += '<p><b>Week:</b> ' + weekStart + '</p>';
+  html += '<p><b>Schools:</b> ' + mySchools.map(function(s) { return s.displayName; }).join(', ') + '</p>';
+
+  // v2.6.9: distinguish "roster empty for assigned schools" (upstream source
+  // Campus column wiped) from "roster non-empty but names don't match metrics"
+  // (the NAME_ALIASES path). The previous behavior silently rendered
+  // "Matched: 0 of 0" which looked like a clean pass.
+  if (teachers.length === 0) {
+    html += '<div style="background:#fff4e5;border-left:4px solid #f57c00;padding:12px 16px;margin:12px 0;">';
+    html += '<p style="color:#e65100;font-weight:bold;margin:0 0 8px 0;">&#9888; Zero teachers loaded from the roster</p>';
+    html += '<p style="margin:0 0 4px 0;">For your assigned school(s) (' + mySchools.map(function(s) { return s.displayName; }).join(', ') + '), the "Teacher Emails" roster returned zero candidate rows. This usually means the upstream MAP Master Roster source spreadsheet has empty <b>Column C ("Campus")</b> for your school. IMPORTRANGE pulls the empty values into Teacher Emails Column C; this function correctly filters them out.</p>';
+    html += '<p style="margin:8px 0 4px 0;"><b>Action:</b></p>';
+    html += '<ol style="margin:4px 0 0 24px;padding:0;">';
+    html += '<li>Open the MAP Master Roster source sheet (ID <code>1scEay0a8OR6vU3uJuxbHKWCEx_RVgSsRXF9naJh3XYw</code>).</li>';
+    html += '<li>Find the tab matching your school (e.g. "Ridgeland Elementary School (Dash)" for JRES).</li>';
+    html += '<li>Confirm Column C is populated for all student rows with the school name (e.g. "JRES - Ridgeland Elementary School").</li>';
+    html += '<li>If Column C is empty, restore from File &gt; Version history, then re-run this diagnostic.</li>';
+    html += '<li>If Column C is populated upstream but this destination still shows zero, force IMPORTRANGE recalc: edit the formula in Teacher Emails cell A1 (add then remove a space, hit Enter).</li>';
+    html += '</ol>';
+    html += '</div>';
+    var earlyOutput = HtmlService.createHtmlOutput(html).setWidth(800).setHeight(600);
+    ui.showModalDialog(earlyOutput, 'Teacher Name Diagnostic');
+    return;
+  }
+
   var matched = [], unmatched = [];
   for (var t = 0; t < teachers.length; t++) {
     var teacher = teachers[t];
@@ -2988,9 +3068,6 @@ function checkTeacherNames() {
     else unmatched.push(teacher);
   }
 
-  var html = '<h2>Teacher Name Diagnostic</h2>';
-  html += '<p><b>Week:</b> ' + weekStart + '</p>';
-  html += '<p><b>Schools:</b> ' + mySchools.map(function(s) { return s.displayName; }).join(', ') + '</p>';
   html += '<p style="color:#2e7d32;">&#10003; <b>Matched:</b> ' + matched.length + ' of ' + teachers.length + ' teachers will get metrics in their email</p>';
   if (unmatched.length === 0) {
     html += '<p style="color:#2e7d32;font-weight:bold;">All teachers matched. No NAME_ALIASES additions needed.</p>';
