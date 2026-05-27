@@ -384,6 +384,18 @@ def main(week: str, strict: bool = False):
     print("=" * 70)
     school_coverage_ok = _probe_no_silently_dropped_school(sheets)
 
+    # v2.8.0: assert the Spring 2026 MAP Scores tab is populated. Catches the
+    # case where parent generate_report_v3.py hasn't yet written the tab
+    # (e.g., before first --full run with NWEA CSV), which would make the
+    # Spring 2026 MAP Scores template skip every teacher silently.
+    print()
+    print("=" * 70)
+    print("SPRING 2026 MAP SCORES TAB (v2.8.0)")
+    print("=" * 70)
+    map_scores_ok = _probe_map_scores_tab_populated(sheets)
+    if not map_scores_ok:
+        print("  -> Run `python email_only.py` from parent repo to populate.")
+
     if strict and (
         likely_typo
         or upstream_gap
@@ -393,6 +405,7 @@ def main(week: str, strict: bool = False):
         or not highlights_within_ok
         or not no_dupe_teachers_ok
         or not school_coverage_ok
+        or not map_scores_ok
     ):
         sys.exit(1)
 
@@ -640,6 +653,54 @@ def _probe_no_silently_dropped_school(sheets):
     print(
         f"  ✓ Roster coverage: all {checked} assigned schools present in Teacher Emails"
     )
+    return True
+
+
+def _probe_map_scores_tab_populated(sheets):
+    """v2.8.0: assert the Spring 2026 MAP Scores tab exists, has >= 1 data
+    row, and has the expected 6-column schema.
+
+    The MAP Scores tab is written by parent generate_report_v3.py Step 5
+    (calling query_map_scores_for_email + write_map_scores_to_email_sheet).
+    If the tab is empty / missing, the Spring 2026 MAP Scores email template
+    cannot render anything useful and all teachers will be skipped via the
+    v2.7.0 partition logic. Catch the empty state pre-cycle.
+    """
+    expected_header = [
+        "campus_name",
+        "teacher_name",
+        "student_name",
+        "subject",
+        "winter_rit",
+        "spring_rit",
+    ]
+    try:
+        res = (
+            sheets.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="'Spring 2026 MAP Scores'!A1:F",
+            )
+            .execute()
+        )
+    except Exception as e:
+        print(f"  ✗ Spring 2026 MAP Scores: tab not readable ({e})")
+        return False
+    values = res.get("values", [])
+    if not values:
+        print("  ✗ Spring 2026 MAP Scores: tab is EMPTY")
+        return False
+    if values[0] != expected_header:
+        print(
+            f"  ✗ Spring 2026 MAP Scores: header mismatch. got={values[0]} expected={expected_header}"
+        )
+        return False
+    n_rows = len(values) - 1
+    if n_rows < 1:
+        print("  ✗ Spring 2026 MAP Scores: 0 data rows (header only)")
+        return False
+    print(f"  ✓ Spring 2026 MAP Scores: {n_rows} score rows, schema OK")
     return True
 
 

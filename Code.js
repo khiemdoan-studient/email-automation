@@ -14,6 +14,8 @@ var CONFIG = {
   // v2.6.5: year-cumulative tabs for the SC Final Email template (parent v3.41.4).
   YEAR_TOTALS_SHEET_NAME: "Year Teacher Totals",
   STUDENT_HIGHLIGHTS_SHEET_NAME: "Student Year Highlights",
+  // v2.8.0: Spring 2026 MAP Scores tab for the new live-data MAP template.
+  MAP_SCORES_SHEET_NAME: "Spring 2026 MAP Scores",
 
   // Column indices in Teacher Emails sheet (0-indexed)
   CAMPUS_COL: 2,           // Column C: Campus
@@ -122,6 +124,13 @@ var TEMPLATES = {
   'SC Final Email: Growth & Hardwork = Results': {
     subject: 'Motivention Store Closing Friday (+ Impressive Results)',
     buildBody: generateScFinalEmailBody
+  },
+  // v2.8.0: Spring 2026 MAP Scores. Live-data template (refreshes when parent
+  // pipeline writes the Spring 2026 MAP Scores tab). Reads MAP RIT scores by
+  // (student, subject); skips teachers with zero MAP students via partition.
+  'Spring 2026 MAP Scores': {
+    subject: 'Spring 2026 MAP Scores: Your students\' Winter and Spring results',
+    buildBody: generateSpring2026MapBody
   }
 };
 
@@ -421,6 +430,8 @@ function generateSmokeTest() {
     // v2.6.5: reset year-cumulative caches so each run reads fresh from the sheet.
     _yearTotalsCache = null;
     _studentHighlightsCache = null;
+    // v2.8.0: reset MAP-scores cache.
+    _mapScoresCache = null;
     var currentUserEmail = Session.getActiveUser().getEmail();
     var dateRange = getConfigValue('Date Range');
     if (!dateRange) {
@@ -747,6 +758,10 @@ function generateDraftsForCurrentUser() {
   // globals across consecutive runs in the same warm process, which would
   // otherwise share one run_id across two distinct user invocations.
   _runIdCache = null;
+  // v2.6.5 + v2.8.0: reset cross-template caches so each run reads fresh.
+  _yearTotalsCache = null;
+  _studentHighlightsCache = null;
+  _mapScoresCache = null;
 
   var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -807,15 +822,19 @@ function generateDraftsForCurrentUser() {
   var teacherMetrics = metricsExist ? getTeacherMetricsForWeek(weekStart) : {};
   var allWinners = getStudentWinners();
 
-  // v2.7.0: Branch on template. SC Final Email uses year-cumulative metrics
-  // (Year Teacher Totals tab) instead of weekly metrics, so the filter checks
-  // a different dict for that template.
+  // v2.7.0 + v2.8.0: Branch on template. SC Final Email uses year-cumulative
+  // metrics (Year Teacher Totals); Spring 2026 MAP uses the MAP Scores tab;
+  // everything else uses weekly metrics. Filter pulls the right dict per
+  // template so the partition skip-without-data logic is template-aware.
   var isFinalEmail = templateName.indexOf('SC Final Email') === 0;
+  var isMapScores = templateName.indexOf('Spring 2026 MAP') === 0;
   var yearTotalsForFilter = isFinalEmail ? getYearTeacherTotals() : null;
+  var mapScoresForFilter = isMapScores ? getMapScoresForTeacher() : null;
 
   // v2.7.0: Partition teachers into (a) has data for this template + (b)
   // would render a "No metrics rows found" placeholder. Skip (b) entirely.
-  // Only applied when metricsExist=true; if no metrics at all for the week,
+  // Only applied when metricsExist=true OR template is year-cumulative /
+  // MAP. If no metrics at all for the week AND template is a weekly one,
   // fall through to "send to all" with the WARNING shown below (preserves
   // pre-v2.7.0 behavior for the case where IM explicitly wants placeholder
   // drafts).
@@ -824,13 +843,18 @@ function generateDraftsForCurrentUser() {
         var hit = lookupByName(yearTotalsForFilter, t.firstName, t.lastName, t.name);
         return hit !== null && hit !== undefined;
       }
+    : isMapScores
+    ? function(t) {
+        var hit = lookupByName(mapScoresForFilter, t.firstName, t.lastName, t.name);
+        return hit !== null && hit !== undefined;
+      }
     : function(t) {
         var hit = lookupByName(teacherMetrics, t.firstName, t.lastName, t.name);
         return hit !== null && hit !== undefined;
       };
   var teachersWithData = teachers;
   var teachersSkipped = [];
-  if (metricsExist || isFinalEmail) {
+  if (metricsExist || isFinalEmail || isMapScores) {
     var partitioned = partitionTeachersByDataAvailability(teachers, hasDataFn);
     teachersWithData = partitioned.withData;
     teachersSkipped = partitioned.skipped;
@@ -849,7 +873,7 @@ function generateDraftsForCurrentUser() {
 
   dialogMsg += 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n';
 
-  if (!metricsExist && !isFinalEmail) {
+  if (!metricsExist && !isFinalEmail && !isMapScores) {
     dialogMsg += '\nWARNING: No metrics data found for week ' + weekStart + '.\n'
       + 'Emails will be generated WITHOUT metrics tables.\n';
   }
@@ -1279,6 +1303,42 @@ function getStudentYearHighlights() {
   return highlights;
 }
 
+/**
+ * v2.8.0: Read the "Spring 2026 MAP Scores" tab into a teacher-keyed object.
+ * Returns { teacherNameLower: [{ studentName, subject, winterRit, springRit }] }.
+ *
+ * Module-level cache (`_mapScoresCache`). Reset in generateDraftsForCurrentUser
+ * + generateSmokeTest so each run reads fresh from the live tab.
+ *
+ * Schema (column order): campus_name | teacher_name | student_name |
+ *   subject | winter_rit | spring_rit. Empty / null scores are preserved
+ *   as-is (the table helper renders them as "--").
+ */
+function getMapScoresForTeacher() {
+  if (_mapScoresCache !== null) return _mapScoresCache;
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.MAP_SCORES_SHEET_NAME);
+  if (!sheet) {
+    _mapScoresCache = {};
+    return _mapScoresCache;
+  }
+  var data = sheet.getDataRange().getValues();
+  var scores = {};
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] == null) continue;
+    var teacherName = String(data[i][1]).trim().toLowerCase();
+    if (!teacherName || teacherName === 'null' || teacherName === 'undefined') continue;
+    if (!scores[teacherName]) scores[teacherName] = [];
+    scores[teacherName].push({
+      studentName: String(data[i][2] || '').trim(),
+      subject: String(data[i][3] || '').trim(),
+      winterRit: data[i][4],
+      springRit: data[i][5]
+    });
+  }
+  _mapScoresCache = scores;
+  return scores;
+}
+
 function getStudentWinners() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.WINNERS_SHEET_NAME);
   if (!sheet) return {};
@@ -1457,6 +1517,9 @@ var _runIdCache = null;
 // generateSmokeTest to prevent stale-data bleed across runs.
 var _yearTotalsCache = null;
 var _studentHighlightsCache = null;
+// v2.8.0: cache for the Spring 2026 MAP Scores reader. Reset same as the
+// year-cumulative caches so each run reads fresh from the live tab.
+var _mapScoresCache = null;
 
 /**
  * Returns a stable run-id string used to group all log entries from the
@@ -2097,6 +2160,25 @@ function runUnitTests() {
     buildStudentSpotlights(mockHighlightLessons).indexOf('master 67 lessons this year, leading the class') !== -1, true);
   _testAssertEq(results, 'buildStudentSpotlights: empty array shows fallback',
     buildStudentSpotlights([]).indexOf('still being calculated') !== -1, true);
+
+  // --- v2.8.0: buildMapScoresTable (Spring 2026 MAP Scores template) ---
+  var mockMapRows = [
+    { studentName: 'Aiyana Patel', subject: 'Math', winterRit: 205, springRit: 213 },
+    { studentName: 'Aiyana Patel', subject: 'Reading', winterRit: 198, springRit: '' },
+    { studentName: 'Diego Martinez', subject: 'Language', winterRit: null, springRit: 220 }
+  ];
+  var mapTableHtml = buildMapScoresTable(mockMapRows);
+  _testAssertEq(results, 'buildMapScoresTable: renders 4-col header',
+    mapTableHtml.indexOf('Student Name') !== -1
+      && mapTableHtml.indexOf('Subject') !== -1
+      && mapTableHtml.indexOf('Winter Score') !== -1
+      && mapTableHtml.indexOf('Spring Score') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: empty rows shows fallback callout',
+    buildMapScoresTable([]).indexOf('No MAP score data found') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: null score renders as --',
+    buildMapScoresTable([{ studentName: 'X', subject: 'Math', winterRit: null, springRit: null }]).indexOf('--') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: data row count matches input',
+    (buildMapScoresTable(mockMapRows).match(/<tr style="background-color:#(?:ffffff|fafafa);">/g) || []).length, 3);
   // v2.6.8: lookupByName resolves 3-token roster name to 2-token map key.
   // Fixes "John Bradley Apostol" (roster) vs "john apostol" (Year Teacher Totals)
   // mismatch where the previous direct-map lookup returned null.
@@ -2461,6 +2543,44 @@ function buildStudentSpotlights(highlights) {
     html += '<td style="width:50%;padding:6px;"></td>';
   }
   html += '</tr>';
+  html += '</table>';
+  return html;
+}
+
+/**
+ * v2.8.0: Spring 2026 MAP Scores - 4-column table per teacher
+ * (Student Name | Subject | Winter Score | Spring Score).
+ * Missing scores render as "--" so students with only one window tested
+ * still appear. Empty rows array shows a friendly fallback callout.
+ *
+ * @param {Array<{studentName, subject, winterRit, springRit}>} rows
+ * @return {string} HTML table fragment.
+ */
+function buildMapScoresTable(rows) {
+  if (!rows || rows.length === 0) {
+    return '<div style="background-color:#fff3cd;padding:12px;border-radius:6px;border:1px solid #ffe082;margin:12px 0;">'
+      + '<p style="margin:0;">No MAP score data found for your students yet. Scores will populate here automatically as they are ingested.</p>'
+      + '</div>';
+  }
+  var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:640px;margin:12px 0;">';
+  html += '<tr style="background-color:#f3f3f3;font-weight:bold;">'
+    + '<th style="padding:8px;">Student Name</th>'
+    + '<th style="padding:8px;">Subject</th>'
+    + '<th style="padding:8px;">Winter Score</th>'
+    + '<th style="padding:8px;">Spring Score</th>'
+    + '</tr>';
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var winter = (r.winterRit === null || r.winterRit === undefined || r.winterRit === '') ? '--' : r.winterRit;
+    var spring = (r.springRit === null || r.springRit === undefined || r.springRit === '') ? '--' : r.springRit;
+    var bg = (i % 2 === 0) ? '#ffffff' : '#fafafa';
+    html += '<tr style="background-color:' + bg + ';">'
+      + '<td style="padding:6px;">' + (r.studentName || '') + '</td>'
+      + '<td style="padding:6px;">' + (r.subject || '') + '</td>'
+      + '<td style="padding:6px;">' + winter + '</td>'
+      + '<td style="padding:6px;">' + spring + '</td>'
+      + '</tr>';
+  }
   html += '</table>';
   return html;
 }
@@ -3087,6 +3207,38 @@ function generateScFinalEmailBody(teacher, metricsArray, winnersArray) {
     '<li><strong>Week 10 - Confidence:</strong> <a href="https://www.canva.com/design/DAHFGgoRC5c/oDVz3mDlrpNOov7jVmSZCw/view?utm_content=DAHFGgoRC5c&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=he56325bd08">What Is Self-Efficacy?</a></li>',
     '<li><strong>Week 11 - Confidence:</strong> <a href="https://canva.link/motiventionweek11">The Brain-Body Feedback Loop</a></li>',
     '</ol>'
+  ]);
+}
+
+
+// --- SPRING 2026 MAP SCORES (v2.8.0) ---
+// Live-data template. Reads the Spring 2026 MAP Scores tab (populated by parent
+// generate_report_v3.py Step 5). One row per (student, subject). The table
+// auto-reflects fresh data each time an IM clicks Generate My Email Drafts.
+function generateSpring2026MapBody(teacher, metricsArray, winnersArray) {
+  // v2.8.0: ignore standard args; load MAP scores via module-cached reader.
+  // Pattern mirrors generateScFinalEmailBody (v2.6.5).
+  var rows = lookupByName(
+    getMapScoresForTeacher(),
+    teacher && teacher.firstName,
+    teacher && teacher.lastName,
+    teacher && teacher.name
+  ) || [];
+
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+    '<h2 style="color:#1a1a1a;">Spring 2026 MAP Scores: Your Students\' Results</h2>',
+    '<p>Here is the latest snapshot of your students\' NWEA MAP RIT scores for the Winter and Spring 2026 testing windows. This table is connected to live data: as new scores ingest into the pipeline, they show up here automatically with no need to regenerate.</p>',
+    '<p>Use this to celebrate growth, identify students who need extra support before state testing, and reflect on what coaching practices made the biggest difference this year.</p>',
+    buildMapScoresTable(rows),
+    '<p style="margin-top:20px;">A few interpretation notes:</p>',
+    '<ul style="line-height:1.6;">',
+    '<li><strong>Winter Score</strong> is the student\'s RIT from the Winter 2025-26 testing window.</li>',
+    '<li><strong>Spring Score</strong> is the student\'s RIT from the Spring 2026 testing window.</li>',
+    '<li>A score of <strong>--</strong> means the student has not yet been tested in that window. If Spring testing is still in progress, scores will populate in this table automatically as they ingest.</li>',
+    '<li>Subjects: Math, Reading, Language. A student may appear in multiple rows if they were tested in multiple subjects.</li>',
+    '</ul>',
+    '<p style="margin-top:20px;">Thank you for the consistent focus this year. Your students\' growth shows.</p>'
   ]);
 }
 

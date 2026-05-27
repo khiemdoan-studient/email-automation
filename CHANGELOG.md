@@ -2,6 +2,97 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.8.0] - 2026-05-27
+
+### FEATURE: Spring 2026 MAP Scores email template (live data, multi-repo)
+
+New email template that renders, per teacher, a 4-column table of `{Student Name | Subject | Winter Score | Spring Score}` from NWEA MAP test data. Connected to live pipeline: parent `generate_report_v3.py` Step 5 writes the "Spring 2026 MAP Scores" tab hourly (via EC2 cron); Apps Script reads the tab at draft-creation time. Refreshes automatically as new scores ingest into BigQuery (no manual email-tab regeneration needed).
+
+### Cross-repo data flow
+
+```
+NWEA CSV -> Phase 2.5 (--full) -> BQ studient_growth_inputs
+   |
+   v
+generate_report_v3.py Step 5 (hourly EC2 cron)
+   query_map_scores_for_email(bq_client) -> 3,560 rows
+   write_map_scores_to_email_sheet(sheets_service, rows)
+   |
+   v
+"Spring 2026 MAP Scores" tab (email-automation spreadsheet)
+   |
+   v
+Apps Script getMapScoresForTeacher() (module-cached)
+   |
+   v
+generateSpring2026MapBody() -> Gmail draft
+```
+
+### What lands
+
+**Parent repo `Studient Excel Automation` (v3.49.x territory; parent will bump separately):**
+
+1. `queries_v3.py`: NEW `query_map_scores_for_email(client, project, dataset)` reading `studient_growth_inputs` LEFT JOIN `weekly_dashboard` for teacher_name. Returns one row per (student, subject) where Winter OR Spring score is non-null AND teacher is known. Ordered by (teacher, student, subject) for stable output.
+
+2. `email_winners.py`: NEW `write_map_scores_to_email_sheet(sheets_service, rows)`. Constant `MAP_SCORES_TAB_NAME = "Spring 2026 MAP Scores"`. Header: `[campus_name, teacher_name, student_name, subject, winter_rit, spring_rit]`. Mirrors the v3.41.4 year-totals writer pattern.
+
+3. `generate_report_v3.py`: wired query + writer into Step 5 (Email Automation Data block, line ~4702). Adds new `_maybe_query` instrumentation phase `map_scores_for_email`.
+
+4. `email_only.py`: wired same flow as Step 4 of the standalone email-data refresh script.
+
+**Email-automation repo:**
+
+1. `Code.js` CONFIG: `MAP_SCORES_SHEET_NAME: "Spring 2026 MAP Scores"`.
+
+2. Module cache `_mapScoresCache = null` + reset hooks in `generateDraftsForCurrentUser` + `generateSmokeTest`.
+
+3. NEW reader `getMapScoresForTeacher()`: reads the tab into `{teacherLower: [{studentName, subject, winterRit, springRit}, ...]}`.
+
+4. NEW HTML helper `buildMapScoresTable(rows)`: 4-column table, max width 640px, alternating row colors, missing scores render as `--`, empty rows array shows a yellow fallback callout.
+
+5. NEW `generateSpring2026MapBody(teacher, _, __)` buildBody: ignores standard metrics+winners args, calls `lookupByName(getMapScoresForTeacher(), ...)` internally (SC Final Email pattern). Composes: greeting, intro paragraph, MAP table, interpretation notes, closing.
+
+6. NEW `TEMPLATES` entry `'Spring 2026 MAP Scores'`. Subject: `Spring 2026 MAP Scores: Your students' Winter and Spring results`. After clasp deploy, run `Email Tools > Refresh Template Dropdown` once to surface in Config.
+
+7. `generateDraftsForCurrentUser` partition branch: adds `isMapScores = templateName.indexOf('Spring 2026 MAP') === 0`. `hasDataFn` checks `getMapScoresForTeacher()` when isMapScores. Partition gate condition extended (`metricsExist || isFinalEmail || isMapScores`). WARNING suppressed for isMapScores when metricsExist=false (MAP template doesn't depend on weekly metrics).
+
+8. `scripts/check_email_data.py`: NEW `_probe_map_scores_tab_populated(sheets)`. Asserts 6-col header + >= 1 data row. Hooked into `main()` after the v2.6.9 probe; added to `--strict` exit condition.
+
+9. 4 new unit tests for `buildMapScoresTable`:
+   - renders 4-col header
+   - empty rows shows fallback callout
+   - null score renders as `--`
+   - data row count matches input (regex tightened to exclude header row)
+
+10. Test count: 66 -> 70.
+
+### Verified
+
+- `node test_runner.js`: 70/70 PASS
+- Parent pipeline: `python email_only.py` wrote 3,560 rows to "Spring 2026 MAP Scores" tab (73 distinct teachers; subject distribution Language=1681, Reading=1675, Math=204 matches Spring 2026 NWEA expectations).
+- Live probe: schema matches 6-col header; JRES Lasonnya Chisolm-Priester returns 104 rows (52 students x 2 subjects). Many rows have Winter only (Spring testing window still in progress); those render as `--` in the spring column on the Apps Script side.
+- `python scripts/check_email_data.py --week 2026-04-13`: new probe reports `✓ Spring 2026 MAP Scores: 3560 score rows, schema OK`.
+- `npm run deploy`: Code.js + appsscript.json pushed to clasp.
+
+### Refresh cadence (user-confirmed at plan time)
+
+Pipeline-fresh, BQ-manual:
+- Email-automation tab refreshes automatically each time `generate_report_v3.py` runs (hourly EC2 cron).
+- Underlying `studient_growth_inputs` BQ table refreshes only when user manually downloads the NWEA CSV + triggers a `--full` build. No daily NWEA automation in this cycle.
+- This means: scores that have ALREADY landed in BQ propagate to email drafts within ~1 hour. New NWEA scores require manual ingest first.
+
+### Files modified
+
+- Parent: `queries_v3.py`, `email_winners.py`, `generate_report_v3.py`, `email_only.py`
+- Email-automation: `Code.js`, `scripts/check_email_data.py`, `package.json`, `CHANGELOG.md` (this), `CLAUDE.md`
+
+### Action required after pull
+
+1. Reload the email-automation spreadsheet.
+2. Run `Email Tools > Refresh Template Dropdown` so "Spring 2026 MAP Scores" appears in the Config Template dropdown.
+3. Run `Email Tools > Run Unit Tests` to confirm 70/70 PASS.
+4. Set Config Template to "Spring 2026 MAP Scores" + run `Generate My Email Drafts`. Partition logic skips teachers with zero MAP students automatically.
+
 ## [v2.7.0] - 2026-05-15
 
 ### FEATURE: skip drafts for teachers without metrics for the selected week
