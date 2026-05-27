@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.8.1] - 2026-05-27
+
+### HOTFIX: Spring 2026 MAP Scores template no longer requires a weekly PDF
+
+User ran the smoke test for the new `Spring 2026 MAP Scores` template and got 7/7 failures with "PDF not found for ... week 2026-05-25 - 2026-05-31. Tried search-API + folder traversal." The template carries its data table inline (Winter/Spring RIT scores per student) and was never supposed to attach a weekly PDF, but `createDraftForTeacher` was hardcoded to require one for every template.
+
+### What lands
+
+- `Code.js / TEMPLATES`: new `requiresPdf` field on each template (default true). Spring 2026 MAP Scores sets `requiresPdf: false`.
+- `Code.js / createDraftForTeacher`: when `template.requiresPdf === false`, skip the PDF lookup entirely (no search-API call, no folder-traversal fallback, no error on miss). Draft is created without an attachment.
+- All other templates (Week 0-8, Wrap Up, 4/20 Jasper, 4/20 Math+ELA, 4/27, SC Final Email) keep the existing PDF requirement and error behavior.
+
+### Verified
+
+- `node test_runner.js`: 70/70 PASS (unchanged from v2.8.0; no test surface for createDraftForTeacher itself)
+- `npm run deploy`: Code.js + appsscript.json pushed to clasp
+- Sanity check: smoke test will now create 7/7 Spring 2026 MAP Scores drafts for the SMOKE_TEST_TEACHERS fixture without attempting any PDF lookup (and without producing "PDF not found" errors).
+
+### Files modified
+
+- `Code.js` (TEMPLATES entry + createDraftForTeacher branch)
+- `package.json` (2.8.0 -> 2.8.1)
+- `CHANGELOG.md` (this entry)
+
 ## [v2.8.0] - 2026-05-27
 
 ### FEATURE: Spring 2026 MAP Scores email template (live data, multi-repo)

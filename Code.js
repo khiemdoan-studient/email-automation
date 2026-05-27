@@ -130,7 +130,11 @@ var TEMPLATES = {
   // (student, subject); skips teachers with zero MAP students via partition.
   'Spring 2026 MAP Scores': {
     subject: 'Spring 2026 MAP Scores: Your students\' Winter and Spring results',
-    buildBody: generateSpring2026MapBody
+    buildBody: generateSpring2026MapBody,
+    // v2.8.1: MAP template carries its own data table in the body. No weekly PDF
+    // attachment is needed or expected; skip the PDF lookup entirely so missing
+    // PDFs don't surface as errors for this template.
+    requiresPdf: false
   }
 };
 
@@ -2212,38 +2216,46 @@ function runUnitTests() {
 }
 
 function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners, schoolFolderMap, template, schoolFolderCache) {
+  // v2.8.1: templates can opt out of the weekly PDF attachment. Spring 2026
+  // MAP Scores carries its data table inline (no per-week PDF exists for it),
+  // so skip the PDF lookup entirely. Default true preserves Week 0-8 / Wrap
+  // Up / 4/20 / 4/27 / SC Final Email behavior.
+  var needsPdf = template.requiresPdf !== false;
+
   // v2.5.0 PIVOT: PDF lookup now tries Drive's search API FIRST (works for
   // shared-with-me users; bypasses parent-folder permission gap entirely).
   // Falls back to folder traversal for filename anomalies. Both paths log
   // failures to the Error Log tab; a clean miss returns a structured error.
   var summaryPdf = null;
-  try {
-    // v2.5.1: pass schoolFolderCache so collision-detection can verify parent
-    // chain when 2+ search hits exist (cross-school name collision defense).
-    summaryPdf = findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache);
-  } catch (e) {
-    logError('WARN', 'createDraftForTeacher', teacher,
-      'search-API path threw: ' + (e.message || e), e.stack || '');
-  }
-
-  // FALLBACK: existing folder traversal — handles cases where the PDF filename
-  // doesn't exactly match our candidate list (e.g., trailing whitespace, an
-  // unexpected name format). Failures here log + return null instead of crashing.
-  if (!summaryPdf) {
+  if (needsPdf) {
     try {
-      summaryPdf = findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache);
+      // v2.5.1: pass schoolFolderCache so collision-detection can verify parent
+      // chain when 2+ search hits exist (cross-school name collision defense).
+      summaryPdf = findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache);
     } catch (e) {
       logError('WARN', 'createDraftForTeacher', teacher,
-        'traversal fallback threw: ' + (e.message || e), e.stack || '');
+        'search-API path threw: ' + (e.message || e), e.stack || '');
     }
-  }
 
-  if (!summaryPdf) {
-    var pdfPatternForErr = dateRangeToPdfPattern(dateRange);
-    var msg = 'PDF not found for "' + teacher.name + '" week "' + pdfPatternForErr
-      + '". Tried search-API + folder traversal.';
-    logError('ERROR', 'createDraftForTeacher', teacher, msg, '');
-    return { success: false, error: msg };
+    // FALLBACK: existing folder traversal — handles cases where the PDF filename
+    // doesn't exactly match our candidate list (e.g., trailing whitespace, an
+    // unexpected name format). Failures here log + return null instead of crashing.
+    if (!summaryPdf) {
+      try {
+        summaryPdf = findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache);
+      } catch (e) {
+        logError('WARN', 'createDraftForTeacher', teacher,
+          'traversal fallback threw: ' + (e.message || e), e.stack || '');
+      }
+    }
+
+    if (!summaryPdf) {
+      var pdfPatternForErr = dateRangeToPdfPattern(dateRange);
+      var msg = 'PDF not found for "' + teacher.name + '" week "' + pdfPatternForErr
+        + '". Tried search-API + folder traversal.';
+      logError('ERROR', 'createDraftForTeacher', teacher, msg, '');
+      return { success: false, error: msg };
+    }
   }
 
   // v2.4.1: Pass the File directly to createDraft (no getAs() — it's already a PDF;
@@ -2252,18 +2264,20 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
   // specific PDF + size + Gmail operation that failed.
   // v2.5.3: withGmailRetry (renamed from withDriveRetry) handles transient 5xx /
   // rate-limit blips (one retry after 2s).
+  // v2.8.1: when needsPdf is false, no attachments key sent to createDraft.
   var body = template.buildBody(teacher, metrics, winners);
   try {
     withGmailRetry(function() {
-      GmailApp.createDraft(teacher.email, template.subject, '', {
-        htmlBody: body,
-        attachments: [summaryPdf]
-      });
+      var draftOptions = { htmlBody: body };
+      if (summaryPdf) draftOptions.attachments = [summaryPdf];
+      GmailApp.createDraft(teacher.email, template.subject, '', draftOptions);
     });
   } catch (e) {
-    var pdfName = '<unknown>';
-    var pdfSize = '<unknown>';
-    try { pdfName = summaryPdf.getName(); pdfSize = summaryPdf.getSize(); } catch (_) {}
+    var pdfName = summaryPdf ? '<unknown>' : '(no-pdf template)';
+    var pdfSize = summaryPdf ? '<unknown>' : 0;
+    if (summaryPdf) {
+      try { pdfName = summaryPdf.getName(); pdfSize = summaryPdf.getSize(); } catch (_) {}
+    }
     return {
       success: false,
       error: 'createDraft failed for "' + pdfName + '" (' + pdfSize + ' bytes): ' + (e.message || e)
