@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.9.0] - 2026-05-27
+
+### FEATURE: Spring 2026 MAP template overhaul (script + 6-col table + 5-band X Growth highlighting)
+
+User requested a comprehensive update to the v2.8.x Spring 2026 MAP Scores email template covering 4 buckets:
+
+#### 1. Body restructure
+- Replaced the v2.8.2 "Use this to celebrate growth, identify students who need extra support, and reflect on what coaching practices made the biggest difference this year." paragraph with:
+  - `<h3>Please prioritize the following today:</h3>` header
+  - 4-bullet action list:
+    1. Any student in attendance with a blank or incomplete MAP test must complete testing today.
+    2. (nested sub-bullet) Ensure Language testing is completed before Reading.
+    3. Review students highlighted in red and determine whether the scores reflect the growth you've seen this year.
+    4. Flag any student whose Language score does not accurately reflect their progress for the re-testing procedure.
+  - Italic blurb: "At other campuses, students with negative growth have improved significantly after re-testing. MAP allows Language re-testing when appropriate."
+  - Yellow IM-editable callout (labeled "IM ACTION: Add campus-specific testing instructions here") with placeholder text instructing the IM to edit before sending.
+
+#### 2. Data table extended to 6 columns
+- Added `Projected Growth` column (NWEA-norm RIT growth for the Winter-to-Spring window, 1-decimal float).
+- Added `X Growth` column (Actual Growth / NWEA Projected Growth, 2-decimal float, computed client-side using floor-at-1 rule matching `sheets_builder._compute_x_growth` from parent v3.43.7).
+- Max width bumped to 760px to fit the 2 new columns comfortably.
+
+#### 3. 5-band row color (replaces v2.8.3 Spring-vs-Winter 3-band scheme)
+Highlights by X Growth bucket:
+- `X >= 2.0`           -> darker green   `#6aa84f` (more than double the norm)
+- `1.5 <= X < 2.0`     -> medium green   `#93c47d`
+- `0 < X < 1.5`        -> very light green `#d9ead3`
+- `-2.0 <= X <= 0`     -> very light red `#f4cccc` (flat or moderate decline; absorbs the former yellow band)
+- `X < -2.0`           -> bright red     `#e06666` (severe decline)
+- X uncomputable (observed growth missing) -> white `#ffffff`
+
+Yellow `#fff2cc` from v2.8.3 is dropped; the "flat" case (X = 0) falls into the very-light-red bucket per the new framing.
+
+#### 4. Closing line addition
+Inserted "We will finalize all the growth calculations and growth prizes by Friday." paragraph before the existing "Thank you for the consistent focus..." sentence.
+
+#### 5. Interpretation notes extended
+Added 2 new bullets in the `A few interpretation notes:` list:
+- **Projected Growth** definition (NWEA-norm based on grade + subject + starting RIT).
+- **X Growth** formula explanation (Actual / NWEA Projected, with norm = 1.00 reference).
+
+### Cross-repo changes (parent `Studient Excel Automation`)
+
+To populate the 2 new columns:
+- `queries_v3.py` — extended `query_map_scores_for_email` SELECT with `gi.winter_to_spring_projected_growth` + `gi.winter_to_spring_observed_growth` (both FLOAT64 in `studient_growth_inputs`, already populated by v3.42.0 schema migration).
+- `email_winners.py` — extended `MAP_SCORES_HEADER` constant from 6 cols -> 8 cols + matching `r.get(...)` row population + clear-range from `'A:F'` to `'A:H'`.
+- Re-ran `python email_only.py` to repopulate the live "Spring 2026 MAP Scores" tab with 3,619 rows in the new 8-column layout.
+
+### Verified
+
+- `node test_runner.js`: 83/83 PASS (added 5 new color tests + 6 X Growth computation tests; updated existing 4-col header test -> 6-col; updated row-count regex)
+- `python scripts/check_email_data.py --week 2026-04-13`: `_probe_map_scores_tab_populated` reports `✓ Spring 2026 MAP Scores: 3619 score rows, schema OK` against the new 8-col expectation.
+- Live destination probe: 8-col header present + sample row Alfreda Harris/Adrianna Jones shows `projected_growth=1, observed_growth=3` (X Growth would render as 3.00 in the email -> darker green).
+- `npm run deploy`: Code.js + appsscript.json synced to clasp.
+
+### Files modified
+
+- `Code.js`: `getMapScoresForTeacher` (parse 2 new fields), `buildMapScoresTable` (6-col + 5-band colors + X Growth compute), `generateSpring2026MapBody` (new prioritize section, finalize-by-Friday line, extended interpretation), 11 new + 1 updated unit tests.
+- `scripts/check_email_data.py`: `_probe_map_scores_tab_populated` expects 8-col header (`A1:H` range).
+- `package.json`: 2.8.3 -> 2.9.0
+- `CHANGELOG.md`: this entry
+- `CLAUDE.md`: v2.9.0 history line in v2.6.x-v2.8.x evolution paragraph
+- Parent: `queries_v3.py` + `email_winners.py` (see cross-repo section)
+
 ## [v2.8.3] - 2026-05-27
 
 ### FEATURE: Spring 2026 MAP table rows now highlight Winter -> Spring direction

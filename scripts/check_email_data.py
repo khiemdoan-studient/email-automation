@@ -657,8 +657,9 @@ def _probe_no_silently_dropped_school(sheets):
 
 
 def _probe_map_scores_tab_populated(sheets):
-    """v2.8.0: assert the Spring 2026 MAP Scores tab exists, has >= 1 data
-    row, and has the expected 6-column schema.
+    """v2.9.0: assert the Spring 2026 MAP Scores tab exists, has >= 1 data
+    row, and has the expected 8-column schema (v2.9.0 added Winter-to-Spring
+    projected_growth + observed_growth for client-side X Growth computation).
 
     The MAP Scores tab is written by parent generate_report_v3.py Step 5
     (calling query_map_scores_for_email + write_map_scores_to_email_sheet).
@@ -673,6 +674,8 @@ def _probe_map_scores_tab_populated(sheets):
         "subject",
         "winter_rit",
         "spring_rit",
+        "winter_to_spring_projected_growth",
+        "winter_to_spring_observed_growth",
     ]
     try:
         res = (
@@ -680,7 +683,7 @@ def _probe_map_scores_tab_populated(sheets):
             .values()
             .get(
                 spreadsheetId=SPREADSHEET_ID,
-                range="'Spring 2026 MAP Scores'!A1:F",
+                range="'Spring 2026 MAP Scores'!A1:H",
             )
             .execute()
         )
