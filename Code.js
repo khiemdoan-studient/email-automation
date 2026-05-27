@@ -2182,7 +2182,19 @@ function runUnitTests() {
   _testAssertEq(results, 'buildMapScoresTable: null score renders as --',
     buildMapScoresTable([{ studentName: 'X', subject: 'Math', winterRit: null, springRit: null }]).indexOf('--') !== -1, true);
   _testAssertEq(results, 'buildMapScoresTable: data row count matches input',
-    (buildMapScoresTable(mockMapRows).match(/<tr style="background-color:#(?:ffffff|fafafa);">/g) || []).length, 3);
+    (buildMapScoresTable(mockMapRows).match(/<tr style="background-color:#(?:ffffff|d9ead3|f4cccc|fff2cc);">/g) || []).length, 3);
+
+  // v2.8.3: conditional row colors based on Winter -> Spring direction.
+  _testAssertEq(results, 'buildMapScoresTable: Spring > Winter renders light green (#d9ead3)',
+    buildMapScoresTable([{ studentName: 'A', subject: 'Math', winterRit: 200, springRit: 215 }]).indexOf('background-color:#d9ead3') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: Spring < Winter renders light red (#f4cccc)',
+    buildMapScoresTable([{ studentName: 'B', subject: 'Math', winterRit: 215, springRit: 200 }]).indexOf('background-color:#f4cccc') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: Spring == Winter renders light yellow (#fff2cc)',
+    buildMapScoresTable([{ studentName: 'C', subject: 'Math', winterRit: 210, springRit: 210 }]).indexOf('background-color:#fff2cc') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: missing Spring renders white (no highlight)',
+    buildMapScoresTable([{ studentName: 'D', subject: 'Math', winterRit: 200, springRit: null }]).indexOf('background-color:#ffffff') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: missing Winter renders white (no highlight)',
+    buildMapScoresTable([{ studentName: 'E', subject: 'Math', winterRit: '', springRit: 220 }]).indexOf('background-color:#ffffff') !== -1, true);
   // v2.6.8: lookupByName resolves 3-token roster name to 2-token map key.
   // Fixes "John Bradley Apostol" (roster) vs "john apostol" (Year Teacher Totals)
   // mismatch where the previous direct-map lookup returned null.
@@ -2585,9 +2597,23 @@ function buildMapScoresTable(rows) {
     + '</tr>';
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
-    var winter = (r.winterRit === null || r.winterRit === undefined || r.winterRit === '') ? '--' : r.winterRit;
-    var spring = (r.springRit === null || r.springRit === undefined || r.springRit === '') ? '--' : r.springRit;
-    var bg = (i % 2 === 0) ? '#ffffff' : '#fafafa';
+    var wMissing = (r.winterRit === null || r.winterRit === undefined || r.winterRit === '');
+    var sMissing = (r.springRit === null || r.springRit === undefined || r.springRit === '');
+    var winter = wMissing ? '--' : r.winterRit;
+    var spring = sMissing ? '--' : r.springRit;
+    // v2.8.3: row highlight reflects Winter -> Spring direction.
+    //   Spring > Winter -> light green (growth)
+    //   Spring < Winter -> light red   (decline)
+    //   Spring = Winter -> light yellow (flat)
+    //   Either missing  -> white (no comparison possible)
+    var bg = '#ffffff';
+    if (!wMissing && !sMissing) {
+      var wNum = Number(r.winterRit);
+      var sNum = Number(r.springRit);
+      if (sNum > wNum) bg = '#d9ead3';
+      else if (sNum < wNum) bg = '#f4cccc';
+      else bg = '#fff2cc';
+    }
     html += '<tr style="background-color:' + bg + ';">'
       + '<td style="padding:6px;">' + (r.studentName || '') + '</td>'
       + '<td style="padding:6px;">' + (r.subject || '') + '</td>'

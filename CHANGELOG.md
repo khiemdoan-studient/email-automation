@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.8.3] - 2026-05-27
+
+### FEATURE: Spring 2026 MAP table rows now highlight Winter -> Spring direction
+
+User-requested visual cue in the `buildMapScoresTable` data table:
+- Spring > Winter -> light green (`#d9ead3`) - growth
+- Spring < Winter -> light red   (`#f4cccc`) - decline
+- Spring = Winter -> light yellow (`#fff2cc`) - flat
+- Either score missing -> white (no comparison possible)
+
+Previous behavior was zebra-stripe alternating `#ffffff` / `#fafafa` which carried no growth signal. The new coloring follows the standard green/yellow/red convention used elsewhere in the dashboard for at-a-glance scanning.
+
+### Verified
+
+- `node test_runner.js`: 75/75 PASS (added 5 new tests for the color branches + updated the existing row-count regex)
+- `npm run deploy`: Code.js synced to clasp
+
+### Files modified
+
+- `Code.js` (buildMapScoresTable color logic + 5 unit tests; existing row-count test regex updated)
+- `package.json` (2.8.2 -> 2.8.3)
+- `CHANGELOG.md` (this entry)
+
 ## [v2.8.2] - 2026-05-27
 
 ### COPY: Spring 2026 MAP Scores body wording adjustments
