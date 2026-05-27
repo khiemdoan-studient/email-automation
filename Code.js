@@ -3242,14 +3242,14 @@ function generateSpring2026MapBody(teacher, metricsArray, winnersArray) {
   return wrapEmailHtml([
     buildGreeting(teacher),
     '<h2 style="color:#1a1a1a;">Spring 2026 MAP Scores: Your Students\' Results</h2>',
-    '<p>Here is the latest snapshot of your students\' NWEA MAP RIT scores for the Winter and Spring 2026 testing windows. This table is connected to live data: as new scores ingest into the pipeline, they show up here automatically with no need to regenerate.</p>',
-    '<p>Use this to celebrate growth, identify students who need extra support before state testing, and reflect on what coaching practices made the biggest difference this year.</p>',
+    '<p>Here is the latest snapshot of your students\' NWEA MAP RIT scores for the Winter and Spring 2026 testing windows. The table below reflects all tests completed as of yesterday.</p>',
+    '<p>Use this to celebrate growth, identify students who need extra support, and reflect on what coaching practices made the biggest difference this year.</p>',
     buildMapScoresTable(rows),
     '<p style="margin-top:20px;">A few interpretation notes:</p>',
     '<ul style="line-height:1.6;">',
     '<li><strong>Winter Score</strong> is the student\'s RIT from the Winter 2025-26 testing window.</li>',
     '<li><strong>Spring Score</strong> is the student\'s RIT from the Spring 2026 testing window.</li>',
-    '<li>A score of <strong>--</strong> means the student has not yet been tested in that window. If Spring testing is still in progress, scores will populate in this table automatically as they ingest.</li>',
+    '<li>A score of <strong>--</strong> means the student has not yet been tested in that window.</li>',
     '<li>Subjects: Math, Reading, Language. A student may appear in multiple rows if they were tested in multiple subjects.</li>',
     '</ul>',
     '<p style="margin-top:20px;">Thank you for the consistent focus this year. Your students\' growth shows.</p>'

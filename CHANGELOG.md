@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.8.2] - 2026-05-27
+
+### COPY: Spring 2026 MAP Scores body wording adjustments
+
+Per user feedback on the v2.8.0 template:
+- Removed "before state testing" phrase from the intro (the email is sent during the post-MAP window; no state testing context).
+- Replaced "connected to live data... as new scores ingest into the pipeline, they show up here automatically with no need to regenerate" with "The table below reflects all tests completed as of yesterday." More accurate framing (the tab refreshes on parent pipeline cron, not in real time) and sets the right expectation.
+- Removed the "If Spring testing is still in progress, scores will populate in this table automatically as they ingest" bullet for the same reason (over-promised real-time freshness).
+
+### Verified
+
+- `node test_runner.js`: 70/70 PASS (copy-only change; no test impact)
+- `npm run deploy`: Code.js synced to clasp
+
+### Files modified
+
+- `Code.js` (3 string edits inside `generateSpring2026MapBody`)
+- `package.json` (2.8.1 -> 2.8.2)
+- `CHANGELOG.md` (this entry)
+
 ## [v2.8.1] - 2026-05-27
 
 ### HOTFIX: Spring 2026 MAP Scores template no longer requires a weekly PDF
