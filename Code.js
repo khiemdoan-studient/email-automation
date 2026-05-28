@@ -2188,9 +2188,9 @@ function runUnitTests() {
   _testAssertEq(results, 'buildMapScoresTable: null score renders as --',
     buildMapScoresTable([{ studentName: 'X', subject: 'Math', winterRit: null, springRit: null, projectedGrowth: null, observedGrowth: null }]).indexOf('--') !== -1, true);
   _testAssertEq(results, 'buildMapScoresTable: data row count matches input',
-    (buildMapScoresTable(mockMapRows).match(/<tr style="background-color:#(?:ffffff|d9ead3|6aa84f|93c47d|f4cccc|e06666);">/g) || []).length, 3);
+    (buildMapScoresTable(mockMapRows).match(/<tr style="background-color:#(?:ffffff|d9ead3|6aa84f|93c47d|f4cccc|cc0000);">/g) || []).length, 3);
 
-  // v2.9.0: 5-band X-Growth row color (replaces v2.8.3 Spring-vs-Winter scheme).
+  // v2.9.1: 5-band X-Growth row color (boundary at X = -2 inclusive of dark red).
   _testAssertEq(results, 'buildMapScoresTable: X >= 2.0 renders darker green (#6aa84f)',
     buildMapScoresTable([{ studentName: 'A', subject: 'Math', winterRit: 200, springRit: 220, projectedGrowth: 5, observedGrowth: 20 }]).indexOf('background-color:#6aa84f') !== -1, true);
   _testAssertEq(results, 'buildMapScoresTable: 1.5 <= X < 2.0 renders medium green (#93c47d)',
@@ -2199,10 +2199,12 @@ function runUnitTests() {
     buildMapScoresTable([{ studentName: 'C', subject: 'Math', winterRit: 200, springRit: 205, projectedGrowth: 8, observedGrowth: 5 }]).indexOf('background-color:#d9ead3') !== -1, true);
   _testAssertEq(results, 'buildMapScoresTable: X = 0 (flat) renders very light red (#f4cccc)',
     buildMapScoresTable([{ studentName: 'D', subject: 'Math', winterRit: 200, springRit: 200, projectedGrowth: 8, observedGrowth: 0 }]).indexOf('background-color:#f4cccc') !== -1, true);
-  _testAssertEq(results, 'buildMapScoresTable: -2 <= X <= 0 renders very light red (#f4cccc)',
+  _testAssertEq(results, 'buildMapScoresTable: -2 < X <= 0 renders very light red (#f4cccc)',
     buildMapScoresTable([{ studentName: 'E', subject: 'Math', winterRit: 200, springRit: 192, projectedGrowth: 8, observedGrowth: -8 }]).indexOf('background-color:#f4cccc') !== -1, true);
-  _testAssertEq(results, 'buildMapScoresTable: X < -2 renders bright red (#e06666)',
-    buildMapScoresTable([{ studentName: 'F', subject: 'Math', winterRit: 200, springRit: 170, projectedGrowth: 5, observedGrowth: -30 }]).indexOf('background-color:#e06666') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: X = -2 exactly renders dark red (#cc0000)',
+    buildMapScoresTable([{ studentName: 'F2', subject: 'Math', winterRit: 200, springRit: 190, projectedGrowth: 5, observedGrowth: -10 }]).indexOf('background-color:#cc0000') !== -1, true);
+  _testAssertEq(results, 'buildMapScoresTable: X < -2 renders dark red (#cc0000)',
+    buildMapScoresTable([{ studentName: 'F', subject: 'Math', winterRit: 200, springRit: 170, projectedGrowth: 5, observedGrowth: -30 }]).indexOf('background-color:#cc0000') !== -1, true);
   _testAssertEq(results, 'buildMapScoresTable: observed missing renders white (no highlight)',
     buildMapScoresTable([{ studentName: 'G', subject: 'Math', winterRit: 200, springRit: null, projectedGrowth: 8, observedGrowth: null }]).indexOf('background-color:#ffffff') !== -1, true);
 
@@ -2639,20 +2641,20 @@ function buildMapScoresTable(rows) {
       xGrowth = Number(r.observedGrowth) / projFloor;
       xDisplay = xGrowth.toFixed(2);
     }
-    // v2.9.0: 5-band row color by X Growth (replaces v2.8.3 Spring-vs-Winter logic).
+    // v2.9.1: 5-band row color by X Growth (boundary at -2 is inclusive of dark red).
     //   X >= 2.0      -> darker green   #6aa84f
     //   1.5 <= X < 2  -> medium green   #93c47d
     //   0 < X < 1.5   -> very light gn  #d9ead3
-    //   -2 <= X <= 0  -> very light red #f4cccc
-    //   X < -2        -> bright red     #e06666
+    //   -2 < X <= 0   -> very light red #f4cccc
+    //   X <= -2       -> dark red       #cc0000
     //   X uncomputable (observed missing) -> white  #ffffff
     var bg = '#ffffff';
     if (xGrowth !== null) {
       if (xGrowth >= 2.0) bg = '#6aa84f';
       else if (xGrowth >= 1.5) bg = '#93c47d';
       else if (xGrowth > 0) bg = '#d9ead3';
-      else if (xGrowth >= -2.0) bg = '#f4cccc';
-      else bg = '#e06666';
+      else if (xGrowth > -2.0) bg = '#f4cccc';
+      else bg = '#cc0000';
     }
     html += '<tr style="background-color:' + bg + ';">'
       + '<td style="padding:6px;">' + (r.studentName || '') + '</td>'
@@ -3318,27 +3320,23 @@ function generateSpring2026MapBody(teacher, metricsArray, winnersArray) {
     '<ul style="line-height:1.6;margin:4px 0;">',
     '<li>Ensure Language testing is completed before Reading.</li>',
     '</ul>',
-    '<li>Review students highlighted in red and determine whether the scores reflect the growth you\'ve seen this year.</li>',
-    '<li>Flag any student whose Language score does not accurately reflect their progress for the re-testing procedure.</li>',
+    '<li>Review students highlighted in red <span style="font-style:italic;">(especially dark red)</span> and determine whether the scores reflect the growth you\'ve seen this year.</li>',
+    '<li>Retest on 5/28 any above students whose <u>Language</u> score does not accurately reflect their learning <span style="font-style:italic;">At other campuses, students with negative growth have improved significantly after re-testing. MAP allows Language re-testing when appropriate.</span></li>',
     '</ul>',
-    '<p style="font-style:italic;color:#555;margin:6px 0 16px 0;">At other campuses, students with negative growth have improved significantly after re-testing. MAP allows Language re-testing when appropriate.</p>',
     // Yellow IM-editable callout
     '<div style="background-color:#fff3cd;border-left:4px solid #f57c00;padding:12px 16px;margin:16px 0;">',
-    '<p style="margin:0 0 6px 0;font-weight:bold;color:#7c5a00;">IM ACTION: Add campus-specific testing instructions here</p>',
+    '<p style="margin:0 0 6px 0;font-weight:bold;color:#7c5a00;">STUDIENT IM ACTION [DO THIS]: Add campus-specific testing instructions here</p>',
     '<p style="margin:0;color:#5a4500;">[Edit this section before sending. Add custom directions for completing testing today, re-testing procedures, or anything else teachers at your campus need to know.]</p>',
     '</div>',
     buildMapScoresTable(rows),
     '<p style="margin-top:20px;">A few interpretation notes:</p>',
     '<ul style="line-height:1.6;">',
-    '<li><strong>Winter Score</strong> is the student\'s RIT from the Winter 2025-26 testing window.</li>',
-    '<li><strong>Spring Score</strong> is the student\'s RIT from the Spring 2026 testing window.</li>',
-    '<li><strong>Projected Growth</strong> is the NWEA-norm RIT growth expected for that student over the Winter-to-Spring window, based on national norms for their grade level, subject, and starting RIT.</li>',
-    '<li><strong>X Growth</strong> = Actual Growth divided by NWEA Projected Growth. A value of 1.00 means the student grew exactly as the national norm predicted; above 1.00 means they exceeded the norm, below 1.00 means they fell short. Calculated per student per subject.</li>',
+    '<li><strong>Spring Score</strong> is the student\'s RIT from the Spring</li>',
+    '<li><strong>Projected Growth</strong> is the RIT growth expected by NWEA for that student</li>',
+    '<li><strong>X Growth</strong> = How much more or less a student grew than expected; above 1.00 means they exceeded expectations, below 1.00 means they fell short of expectations</li>',
     '<li>A score of <strong>--</strong> means the student has not yet been tested in that window.</li>',
-    '<li>Subjects: Math, Reading, Language. A student may appear in multiple rows if they were tested in multiple subjects.</li>',
     '</ul>',
-    '<p style="margin-top:20px;">We will finalize all the growth calculations and growth prizes by Friday.</p>',
-    '<p style="margin-top:8px;">Thank you for the consistent focus this year. Your students\' growth shows.</p>'
+    '<p style="margin-top:20px;">We will finalize all the growth calculations and growth prizes by Friday.</p>'
   ]);
 }
 

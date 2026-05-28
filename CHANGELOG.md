@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.9.1] - 2026-05-27
+
+### COPY + COLOR: Spring 2026 MAP template refinements per first-look feedback
+
+Six tweaks to the v2.9.0 template:
+
+1. **Last prioritize bullet merged + reworded.** The 4th bullet ("Flag any student whose Language score does not accurately reflect their progress for the re-testing procedure.") and the trailing italic paragraph ("At other campuses, students with negative growth have improved significantly after re-testing. MAP allows Language re-testing when appropriate.") are now a SINGLE bullet: "Retest on 5/28 any above students whose `<u>Language</u>` score does not accurately reflect their learning `<span italic>`At other campuses, students with negative growth have improved significantly after re-testing. MAP allows Language re-testing when appropriate.`</span>`". First "Language" underlined; trailing two sentences italicized inline.
+
+2. **"Review students" bullet** now reads "Review students highlighted in red `<i>`(especially dark red)`</i>` and determine whether the scores reflect the growth you've seen this year." (parenthetical is italicized).
+
+3. **Yellow callout label renamed** from `IM ACTION: Add campus-specific testing instructions here` to `STUDIENT IM ACTION [DO THIS]: Add campus-specific testing instructions here`.
+
+4. **Dark-red row coloring updated.** Boundary moved from `X < -2.0` (exclusive) to `X <= -2.0` (inclusive). Color changed from bright red `#e06666` to dark red `#cc0000`. Very-light-red bucket becomes `-2.0 < X <= 0` (was `-2.0 <= X <= 0`). New boundary test locks the inclusive-at-(-2) behavior.
+
+5. **Interpretation notes simplified** from 6 bullets to 4: Spring Score, Projected Growth, X Growth (reworded as "How much more or less a student grew than expected; above 1.00 means they exceeded expectations, below 1.00 means they fell short"), and missing-score note. Dropped: Winter Score definition and Subjects bullet.
+
+6. **Conclusion reduced** to the single sentence "We will finalize all the growth calculations and growth prizes by Friday." (the "Thank you for the consistent focus this year..." sentence is dropped).
+
+### Verified
+
+- `node test_runner.js`: 84/84 PASS (added X = -2 boundary test; updated X < -2 + (-2,0] tests to new colors/boundaries; updated row-count regex)
+- `npm run deploy`: Code.js + appsscript.json synced to clasp
+
+### Files modified
+
+- `Code.js` (5 string edits in `generateSpring2026MapBody` + 2 line edits in `buildMapScoresTable` color logic + 3 test updates + 1 new boundary test)
+- `package.json` (2.9.0 -> 2.9.1)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (v2.9.1 history note)
+
 ## [v2.9.0] - 2026-05-27
 
 ### FEATURE: Spring 2026 MAP template overhaul (script + 6-col table + 5-band X Growth highlighting)
