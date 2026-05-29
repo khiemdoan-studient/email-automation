@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.9.2] - 2026-05-28
+
+### COPY: Spring 2026 MAP template prioritize-section + yellow-callout cleanup + new conclusion
+
+Four refinements per user feedback:
+
+1. Removed the "Review students highlighted in red (especially dark red)..." bullet.
+2. Removed the "Retest on 5/28..." bullet (plus its inline italic At-other-campuses trailing sentences).
+3. Added new sub-bullet "Some students who have been identified as re-test candidates will be testing again today" directly below the existing "Ensure Language testing is completed before Reading." sub-bullet.
+4. Removed the entire yellow STUDIENT IM ACTION callout div (4 string elements: opening div, label paragraph, body paragraph, closing div). The table now renders immediately after the prioritize section.
+5. Changed final paragraph from "We will finalize all the growth calculations and growth prizes by Friday." to "Growth calculations and prizes will be handed out today."
+
+### Verified
+
+- `node test_runner.js`: 84/84 PASS (copy-only changes; unit tests unchanged)
+- `npm run deploy`: clasp push synced
+
+### Files modified
+
+- `Code.js` (3 edits in `generateSpring2026MapBody`)
+- `package.json` (2.9.1 to 2.9.2)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (v2.9.2 history note)
+
 ## [v2.9.1] - 2026-05-27
 
 ### COPY + COLOR: Spring 2026 MAP template refinements per first-look feedback

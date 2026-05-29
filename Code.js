@@ -3319,15 +3319,9 @@ function generateSpring2026MapBody(teacher, metricsArray, winnersArray) {
     '<li>Any student in attendance with a blank or incomplete MAP test must complete testing today.</li>',
     '<ul style="line-height:1.6;margin:4px 0;">',
     '<li>Ensure Language testing is completed before Reading.</li>',
+    '<li>Some students who have been identified as re-test candidates will be testing again today.</li>',
     '</ul>',
-    '<li>Review students highlighted in red <span style="font-style:italic;">(especially dark red)</span> and determine whether the scores reflect the growth you\'ve seen this year.</li>',
-    '<li>Retest on 5/28 any above students whose <u>Language</u> score does not accurately reflect their learning <span style="font-style:italic;">At other campuses, students with negative growth have improved significantly after re-testing. MAP allows Language re-testing when appropriate.</span></li>',
     '</ul>',
-    // Yellow IM-editable callout
-    '<div style="background-color:#fff3cd;border-left:4px solid #f57c00;padding:12px 16px;margin:16px 0;">',
-    '<p style="margin:0 0 6px 0;font-weight:bold;color:#7c5a00;">STUDIENT IM ACTION [DO THIS]: Add campus-specific testing instructions here</p>',
-    '<p style="margin:0;color:#5a4500;">[Edit this section before sending. Add custom directions for completing testing today, re-testing procedures, or anything else teachers at your campus need to know.]</p>',
-    '</div>',
     buildMapScoresTable(rows),
     '<p style="margin-top:20px;">A few interpretation notes:</p>',
     '<ul style="line-height:1.6;">',
@@ -3336,7 +3330,7 @@ function generateSpring2026MapBody(teacher, metricsArray, winnersArray) {
     '<li><strong>X Growth</strong> = How much more or less a student grew than expected; above 1.00 means they exceeded expectations, below 1.00 means they fell short of expectations</li>',
     '<li>A score of <strong>--</strong> means the student has not yet been tested in that window.</li>',
     '</ul>',
-    '<p style="margin-top:20px;">We will finalize all the growth calculations and growth prizes by Friday.</p>'
+    '<p style="margin-top:20px;">Growth calculations and prizes will be handed out today.</p>'
   ]);
 }
 
