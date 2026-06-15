@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.11.0] - 2026-06-15
+
+### FEATURE: Summer School Week 1+2 selectable in the Config Template dropdown (IM one-button flow)
+
+Wires the v2.10.0 Summer School email into the standard `generateDraftsForCurrentUser` ("Generate My Email Drafts") path so non-technical IMs use the same one-button flow as every other template. Set Config Template to "Summer School Week 1+2" and run Generate My Email Drafts: it drafts that IM's School-IM Mapping summer schools only, addressed to the teachers' roster emails (blank-To + banner where there is no email), into the IM's own Gmail drafts.
+
+- Registered "Summer School Week 1+2" in TEMPLATES with a `summerSchool: true` routing flag (so it appears in the dropdown via TEMPLATE_NAMES). `requiresPdf: false`.
+- `generateDraftsForCurrentUser` short-circuits on the flag to a NEW school-scoped `_runSummerSchoolCore({ smokeMode: false, allowedCampuses })`, where allowedCampuses = the IM's School-IM Mapping displayNames (normalized). It bypasses Date Range / All Teacher Metrics / the weekly PDF tree.
+- Refactored the old `_runSummerSchool(smokeMode)` into a locking wrapper `_runSummerSchool(opts)` + a lock-free `_runSummerSchoolCore(opts)`, so the standard flow (which already holds the document lock) can call the core without deadlocking. Added per-campus filtering of the teacher universe + Unassigned, and a "Your schools:" line in the confirmation dialog when scoped.
+- Removed the all-schools `Generate Summer School Drafts (Wk 1+2)` menu item + its `generateSummerSchoolDrafts` function (footgun: it ignored School-IM Mapping and drafted all 6 schools into one Gmail). Kept `Summer School: Smoke Test (to me)` for an all-schools admin preview.
+- Guarded `generateSmokeTest`: if Config Template is the Summer School one, it redirects to the summer smoke test instead of trying the weekly-metrics smoke path.
+- Fixed two v2.10.0 unit tests that were tautological: a literal double-backslash made them search for a 6-character escape string instead of the em-dash / sun character. They now use `String.fromCharCode` and genuinely assert the rendered body has neither character.
+
+### Verified
+
+- `node test_runner.js`: 110/110 PASS (105 prior, 2 char-tests corrected, +5 Summer School template-registration tests).
+- Wiring confirmed: no dangling `generateSummerSchoolDrafts` reference; both the IM path and the smoke wrapper reach `_runSummerSchoolCore`.
+- Live draft creation runs in the IM's Apps Script session (operator-run). NOT verified live from a non-Apps-Script context (architectural).
+
+### Files modified
+
+- `Code.js` (TEMPLATES entry + summerSchool short-circuit + menu trim + smoke-test guard + runner refactor + test fixes/additions)
+- `package.json` (2.10.0 to 2.11.0)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (v2.11.0 overview + dropdown note + menu rows + test count)
+- `write_doc.py` (user-facing flow updated to the Template path)
+
 ## [v2.10.0] - 2026-06-15
 
 ### FEATURE: "Summer School Week 1+2" email - new external-source generation path

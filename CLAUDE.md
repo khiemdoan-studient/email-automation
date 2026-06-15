@@ -4,7 +4,7 @@
 
 Google Apps Script email automation system that generates weekly Gmail drafts for teachers with performance metrics tables and PDF attachments. Built for non-technical Implementation Managers (IMs) to run via a custom menu in Google Sheets.
 
-**v2.0**: IMs can select any available week and any email template before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks. (Originally launched with 10 templates: Week 0-8 + Wrap Up. Now 14.)
+**v2.0**: IMs can select any available week and any email template before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks. (Originally launched with 10 templates: Week 0-8 + Wrap Up. Now 15.)
 
 **v2.0.3**: Bulletproof root folder lookup via folder ID + comprehensive Drive diagnostic. Drive structure verified against live production Drive (April 2026).
 
@@ -17,6 +17,8 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 **Critical drift markers (v2.9.0)**: the Spring 2026 MAP Scores template depends on the parent pipeline writing the `Spring 2026 MAP Scores` tab with the **8-column header** (`campus_name, teacher_name, student_name, subject, winter_rit, spring_rit, winter_to_spring_projected_growth, winter_to_spring_observed_growth`). If the parent renames the tab, changes the header, or removes the writer call from `generate_report_v3.py` Step 5, the email template silently renders zero teachers OR renders X Growth as "--" for every row. The `_probe_map_scores_tab_populated` validator catches header mismatch pre-cycle. X Growth is computed client-side in `buildMapScoresTable` using `observed_growth / max(projected_growth, 1)` - the floor-at-1 rule MUST stay in sync with parent `sheets_builder._compute_x_growth` (v3.43.7 + v3.44.1). Underlying BQ refresh remains manual NWEA CSV + `--full` build (no daily auto-ingest yet).
 
 **v2.10.0**: New "Summer School Week 1+2" email on a SEPARATE external-source path (not the TEMPLATES dropdown). Reads three external resources via `CONFIG.SUMMER_SCHOOL` (Summer Performance Dashboard + MAP Master Roster + the nested "Public School Summer Camp" Drive tree, the last inside `ROOT_FOLDER_ID`), and drafts one email per teacher/group across all 6 SC summer schools (combined two-week data table + both weekly XP PDFs attached). Matching is normalized (campus, teacher); To = roster email or BLANK with a fill-in banner when a folder has no roster match; one `Unassigned` draft per school. Menu items: `Generate Summer School Drafts (Wk 1+2)` + `Summer School: Smoke Test (to me)`. 2026-06-15 reconciliation: 21 teacher/group folders, 11 addressed + 10 blank-To, all 21 with both-week data. Test count: 84 -> 105.
+
+**v2.11.0**: Wired Summer School Week 1+2 into the standard Config Template + "Generate My Email Drafts" path so non-technical IMs use the same one-button flow as every other template, scoped to their School-IM Mapping schools (drafts addressed to teacher emails, landing in the IM's Gmail). Registered in TEMPLATES with a `summerSchool` routing flag; `generateDraftsForCurrentUser` short-circuits to a school-scoped `_runSummerSchoolCore` (the old `_runSummerSchool` is now a thin locking wrapper around that core). Removed the all-schools "Generate Summer School Drafts (Wk 1+2)" menu item (footgun); kept "Summer School: Smoke Test (to me)" for admin preview. Test count: 105 -> 110.
 
 For full per-version implementation details + version-specific bug post-mortems, see `IMPLEMENTATION_NOTES.md`.
 
@@ -49,7 +51,7 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
 1. **Config** (A1:B4)
    - `Date Range` - dropdown from Available Weeks tab (e.g., `2026-03-30_to_2026-04-05`)
    - `Root Folder Name` - informational only; code uses hardcoded constants
-   - `Template` - dropdown of 14 templates. Refresh via `Email Tools > Refresh Template Dropdown` after Code.gs changes.
+   - `Template` - dropdown of 15 templates (incl. Summer School Week 1+2, v2.11.0). Refresh via `Email Tools > Refresh Template Dropdown` after Code.gs changes.
 
 2. **School-IM Mapping** (A1:C11)
    - Column A: School Folder Name (legacy underscored form - kept for backward compat)
@@ -134,8 +136,9 @@ Bruna and Mark's Schools - Weekly Report/   <- ROOT_FOLDER_NAME / ROOT_FOLDER_ID
 | 4/20 Math+ELA: Finishing Strong | Data drop: What's changing this week (and why it matters) | No |
 | 4/27: Last Week of Motivention | Data crunch & point calculation complete: (+ 3 non-boring updates...) | No (also omits **trend alert** as of v2.3.0) |
 | SC Final Email: Growth & Hardwork = Results | Motivention Store Closing Friday (+ Impressive Results) | No (year-cumulative spotlights instead) |
+| Summer School Week 1+2 | Studient: Week 2: Keep the Momentum Going | No (external sources, scoped per School-IM Mapping) |
 
-**Not in this dropdown:** "Summer School Week 1+2" (v2.10.0) runs on its OWN menu items (`Generate Summer School Drafts (Wk 1+2)` / `Summer School: Smoke Test (to me)`), reading external sources rather than the active spreadsheet. See the v2.10.0 overview + drift markers.
+**Summer School Week 1+2** (v2.10.0; dropdown-integrated in v2.11.0) is selectable here like any other template: set Config Template to it and run "Generate My Email Drafts", and it drafts that IM's School-IM-Mapping summer schools from EXTERNAL sources (Summer Performance Dashboard + MAP Master Roster + the Public School Summer Camp Drive tree), not the active spreadsheet. The `summerSchool` flag routes `generateDraftsForCurrentUser` to `_runSummerSchoolCore`, bypassing the normal metrics/PDF loop. "Summer School: Smoke Test (to me)" remains for an all-schools admin preview.
 
 ### Shared Components
 - `buildGreeting(teacher)` - "Hi {firstName},"
@@ -182,20 +185,19 @@ Debug menu items - run when "Drive folders NOT FOUND" or "Service error: Drive" 
 
 | Menu Item | Function | Purpose |
 |-----------|----------|---------|
-| Generate My Email Drafts | `generateDraftsForCurrentUser` | Main action |
+| Generate My Email Drafts | `generateDraftsForCurrentUser` | Main action; also runs Summer School Week 1+2 (scoped to your schools) when that Config Template is selected (v2.11.0) |
 | Debug: Check Teacher Folders | `checkTeacherFolders` | Lists missing teacher folders per school |
 | Debug: Check Teacher Names | `checkTeacherNames` | Roster vs metrics name match (use this when "No metrics rows found") |
 | Debug: Drive Access | `debugDriveAccess` | Full Drive visibility diagnostic |
 | Debug: Drive Auth | `diagnoseDriveAuth` | Run FIRST when "Service error: Drive" appears (v2.4.2+) |
 | Debug: Validate All PDFs (Config week) | `validateAllPdfs` | System-wide PDF coverage check (v2.6.4+) |
 | Test Mode: Generate Smoke Test | `runSmokeTest` | ~6-8 drafts to current user's Gmail across districts (v2.6.0+) |
-| Generate Summer School Drafts (Wk 1+2) | `generateSummerSchoolDrafts` | Summer-school email: external sources, per-teacher drafts + 2-week table + 2 PDFs (v2.10.0+) |
-| Summer School: Smoke Test (to me) | `generateSummerSchoolSmokeTest` | Same run, but all drafts to the operator for QA (v2.10.0+) |
+| Summer School: Smoke Test (to me) | `generateSummerSchoolSmokeTest` | All-schools Summer School preview, drafts to the operator (admin QA, v2.10.0+) |
 | Retry Last Run's Failed Teachers | `retryFailedTeachers` | Reads Error Log for last run's ERROR rows (v2.6.0+) |
 | Set Date Range | `setDateRange` | Manual override for Config Date Range |
 | Set Template | `setTemplate` | Manual override for Config Template |
 | Refresh Template Dropdown | `setupTemplateDropdown` | Rebuilds Config Template data validation from `TEMPLATE_NAMES` |
-| Run Unit Tests | (test runner) | 105 test cases (v2.10.0) |
+| Run Unit Tests | (test runner) | 110 test cases (v2.11.0) |
 
 ## Important Implementation Details
 

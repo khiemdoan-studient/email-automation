@@ -150,6 +150,18 @@ var TEMPLATES = {
     // attachment is needed or expected; skip the PDF lookup entirely so missing
     // PDFs don't surface as errors for this template.
     requiresPdf: false
+  },
+  // v2.11.0: Summer School Week 1+2. Runs on a SEPARATE external-source path
+  // (Summer Performance Dashboard + MAP Master Roster + the nested "Public
+  // School Summer Camp" Drive tree), scoped to the IM's School-IM Mapping
+  // schools. The summerSchool flag routes generateDraftsForCurrentUser to
+  // _runSummerSchoolCore instead of the normal metrics/PDF loop; buildBody is
+  // the summer body builder (invoked by the core, not the normal loop).
+  'Summer School Week 1+2': {
+    subject: CONFIG.SUMMER_SCHOOL.SUBJECT,
+    buildBody: generateSummerSchoolWeek12Body,
+    summerSchool: true,
+    requiresPdf: false
   }
 };
 
@@ -191,7 +203,6 @@ function onOpen() {
     .addSeparator()
     .addItem('Test Mode: Generate Smoke Test (drafts to me)', 'generateSmokeTest')
     .addSeparator()
-    .addItem('Generate Summer School Drafts (Wk 1+2)', 'generateSummerSchoolDrafts')
     .addItem('Summer School: Smoke Test (to me)', 'generateSummerSchoolSmokeTest')
     .addSeparator()
     .addItem('Debug: Check Teacher Names (roster vs metrics)', 'checkTeacherNames')
@@ -439,6 +450,14 @@ function findTeacherByName(nameLower) {
  */
 function generateSmokeTest() {
   var ui = SpreadsheetApp.getUi();
+  // v2.11.0: if Config Template is the Summer School one, the regular smoke path
+  // (weekly metrics + ROOT_FOLDER PDFs) does not apply. Redirect to the summer
+  // smoke test (it takes its own lock) BEFORE locking here.
+  var _smokeTpl = getConfigValue('Template');
+  if (_smokeTpl && TEMPLATES[_smokeTpl] && TEMPLATES[_smokeTpl].summerSchool) {
+    generateSummerSchoolSmokeTest();
+    return;
+  }
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(0)) {
     ui.alert('Already Running',
@@ -803,6 +822,17 @@ function generateDraftsForCurrentUser() {
   var mySchools = getMySchools(currentUserEmail, mappingData);
 
   if (mySchools.length === 0) return ui.alert('Error', 'Your email is not assigned to any schools.', ui.ButtonSet.OK);
+
+  // v2.11.0: Summer School Week 1+2 short-circuits to the external-source path,
+  // scoped to THIS IM's assigned schools. It does not use All Teacher Metrics or
+  // the weekly PDF tree. (Date Range is read above but unused here; IMs always
+  // have one set.) The lock is held + _runIdCache reset above, so call the core.
+  if (TEMPLATES[templateName].summerSchool) {
+    var ssAllowed = {};
+    for (var si = 0; si < mySchools.length; si++) ssAllowed[normalizeFolderName(mySchools[si].displayName)] = true;
+    _runSummerSchoolCore({ smokeMode: false, allowedCampuses: ssAllowed });
+    return;
+  }
 
   var teachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
   if (teachers.length === 0) return ui.alert('Error', 'No teachers found for your schools.\n\nRun Email Tools > Debug: Check Teacher Names for a diagnostic that explains why (most commonly: upstream source spreadsheet has empty Campus column for your school).', ui.ButtonSet.OK);
@@ -2284,8 +2314,20 @@ function runUnitTests() {
     ssb.indexOf('Work the room') !== -1 && ssb.indexOf('Ask better questions') !== -1 && ssb.indexOf('Celebrate small wins') !== -1, true);
   _testAssertEq(results, 'summerBody: contains Timeback callout', ssb.indexOf('Thursday = Timeback') !== -1, true);
   _testAssertEq(results, 'summerBody: embeds the data table', ssb.indexOf('Lessons Mastered (2 wks)') !== -1, true);
-  _testAssertEq(results, 'summerBody: no literal sun emoji', ssb.indexOf('\\u2600') === -1, true);
-  _testAssertEq(results, 'summerBody: no em dash (hard rule)', ssb.indexOf('\\u2014') === -1, true);
+  _testAssertEq(results, 'summerBody: no literal sun emoji', ssb.indexOf(String.fromCharCode(0x2600)) === -1, true);
+  _testAssertEq(results, 'summerBody: no em dash (hard rule)', ssb.indexOf(String.fromCharCode(0x2014)) === -1, true);
+
+  // v2.11.0: Summer School template registration (dropdown + routing flag)
+  _testAssertEq(results, 'summer template: registered in TEMPLATES',
+    !!TEMPLATES['Summer School Week 1+2'], true);
+  _testAssertEq(results, 'summer template: summerSchool routing flag set',
+    TEMPLATES['Summer School Week 1+2'] && TEMPLATES['Summer School Week 1+2'].summerSchool === true, true);
+  _testAssertEq(results, 'summer template: subject matches CONFIG.SUMMER_SCHOOL.SUBJECT',
+    TEMPLATES['Summer School Week 1+2'].subject, CONFIG.SUMMER_SCHOOL.SUBJECT);
+  _testAssertEq(results, 'summer template: appears in TEMPLATE_NAMES (dropdown)',
+    TEMPLATE_NAMES.indexOf('Summer School Week 1+2') !== -1, true);
+  _testAssertEq(results, 'summer template: requiresPdf false (no weekly PDF lookup)',
+    TEMPLATES['Summer School Week 1+2'].requiresPdf, false);
 
   // Render
   var pass = 0, fail = 0;
@@ -4263,8 +4305,7 @@ function generateSummerSchoolWeek12Body(teacher, dataRow) {
 
 // ---- Orchestration ----
 
-function generateSummerSchoolDrafts() { _runSummerSchool(false); }
-function generateSummerSchoolSmokeTest() { _runSummerSchool(true); }
+function generateSummerSchoolSmokeTest() { _runSummerSchool({ smokeMode: true }); }
 
 function _summerBlankToBanner(campus, teacher) {
   return '<div style="background-color:#fff3cd;padding:8px 10px;border-radius:6px;border:1px solid #ffe699;margin:0 0 10px 0;font-size:13px;">'
@@ -4310,9 +4351,8 @@ function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
   }
 }
 
-function _runSummerSchool(smokeMode) {
+function _runSummerSchool(opts) {
   var ui = SpreadsheetApp.getUi();
-  var NL = String.fromCharCode(10);
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(0)) {
     ui.alert('Already Running', 'Email generation is already in progress. Please wait for it to finish.', ui.ButtonSet.OK);
@@ -4320,110 +4360,150 @@ function _runSummerSchool(smokeMode) {
   }
   try {
     _runIdCache = null;
-    var operator = Session.getActiveUser().getEmail();
-
-    var roster = readSummerRoster();
-    var dataByTeacher = readSummerTeacherData();
-    var tree = traverseSummerPdfTree();
-
-    var folderKeys = Object.keys(tree.teachers);
-    if (folderKeys.length === 0 && tree.unassigned.length === 0 && Object.keys(roster).length === 0) {
-      ui.alert('Nothing to generate',
-        'Could not read any Summer School teacher folders, roster rows, or data. '
-        + 'Confirm you have access to the Public School Summer Camp folder plus the two source sheets '
-        + '(Email Tools > Debug: Drive Auth), then retry.',
-        ui.ButtonSet.OK);
-      return;
-    }
-
-    // Teacher universe = folder teachers UNION roster teachers, keyed by (campus, teacher).
-    var universe = {};
-    var k;
-    for (var fi = 0; fi < folderKeys.length; fi++) {
-      k = folderKeys[fi];
-      var info = tree.teachers[k];
-      universe[k] = {
-        campus: info.campus, teacher: info.teacher, pdfs: info.pdfs || [],
-        email: (roster[k] && roster[k].email) || '', dataRow: dataByTeacher[k] || null
-      };
-    }
-    var rosterKeys = Object.keys(roster);
-    for (var ri = 0; ri < rosterKeys.length; ri++) {
-      k = rosterKeys[ri];
-      if (universe[k]) continue;
-      var rinfo = roster[k];
-      universe[k] = {
-        campus: rinfo.campus, teacher: rinfo.displayName, pdfs: [],
-        email: rinfo.email || '', dataRow: dataByTeacher[k] || null
-      };
-    }
-    var universeKeys = Object.keys(universe).sort();
-
-    var nBlankTo = 0, nNoPdf = 0, nNoData = 0;
-    for (var c = 0; c < universeKeys.length; c++) {
-      var uu = universe[universeKeys[c]];
-      if (!uu.email) nBlankTo++;
-      if (!uu.pdfs.length) nNoPdf++;
-      if (!uu.dataRow) nNoData++;
-    }
-
-    var msg = (smokeMode ? 'SMOKE TEST: every draft goes to YOU (' + operator + ').' + NL + NL : '')
-      + 'Summer School Week 1+2:' + NL + NL
-      + 'Teacher/group drafts: ' + universeKeys.length + NL
-      + 'Unassigned drafts: ' + tree.unassigned.length + NL
-      + 'Blank To (no roster email): ' + nBlankTo + NL
-      + 'No PDF attached: ' + nNoPdf + NL
-      + 'No data table: ' + nNoData + NL + NL
-      + 'Drafts land in YOUR Gmail (' + operator + ').' + NL + 'Proceed?';
-    if (ui.alert('Confirm Summer School Generation', msg, ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
-
-    var success = 0, failC = 0, errors = [];
-    var subject = CONFIG.SUMMER_SCHOOL.SUBJECT;
-
-    for (var t = 0; t < universeKeys.length; t++) {
-      var u = universe[universeKeys[t]];
-      var teacherObj = { name: u.teacher, firstName: _summerFirstName(u.teacher), campus: u.campus };
-      try {
-        var body = generateSummerSchoolWeek12Body(teacherObj, u.dataRow);
-        var toEmail;
-        if (smokeMode) { toEmail = operator; }
-        else if (u.email) { toEmail = u.email; }
-        else { toEmail = ''; body = _summerBlankToBanner(u.campus, u.teacher) + body; }
-        var res = _createSummerDraft(toEmail, subject, body, u.pdfs, teacherObj);
-        if (res.success) success++;
-        else { failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + res.error); }
-      } catch (e) {
-        failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + (e.message || e));
-      }
-    }
-
-    for (var ua = 0; ua < tree.unassigned.length; ua++) {
-      var un = tree.unassigned[ua];
-      var unObj = { name: 'Unassigned (' + un.campus + ')', firstName: 'team', campus: un.campus };
-      try {
-        var unBody = _summerUnassignedBanner(un.campus) + generateSummerSchoolWeek12Body(unObj, null);
-        var unTo = smokeMode ? operator : '';
-        var unRes = _createSummerDraft(unTo, subject + ' (Unassigned: ' + un.campus + ')', unBody, un.pdfs, unObj);
-        if (unRes.success) success++;
-        else { failC++; errors.push('Unassigned / ' + un.campus + ': ' + unRes.error); }
-      } catch (e) {
-        failC++; errors.push('Unassigned / ' + un.campus + ': ' + (e.message || e));
-      }
-    }
-
-    var done = (smokeMode ? 'SMOKE TEST complete. ' : 'Summer School complete. ')
-      + success + ' drafts created in your Gmail, ' + failC + ' failed.';
-    if (errors.length > 0) {
-      var es = errors.join(' | ');
-      if (es.length > CONFIG.LIMITS.ERROR_MSG_TRUNCATE) {
-        console.log('Full summer-school error list:' + NL + errors.join(NL));
-        es = es.substring(0, CONFIG.LIMITS.ERROR_MSG_TRUNCATE) + '... (' + errors.length + ' total; see logs)';
-      }
-      done += NL + NL + 'Errors: ' + es;
-    }
-    done += NL + NL + 'Open Gmail Drafts to review the To, the two-week table, and the attached PDFs.';
-    ui.alert('Done', done, ui.ButtonSet.OK);
+    _runSummerSchoolCore(opts);
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Core Summer School generation (NO locking + NO run-id reset; the caller owns
+ * those). Called by _runSummerSchool (dedicated smoke test, all schools) and by
+ * generateDraftsForCurrentUser (Config Template path, scoped to the IM's
+ * School-IM Mapping schools).
+ *
+ * opts: { smokeMode: bool, allowedCampuses: {normalizedCampus -> true} | null }
+ *   - smokeMode true  -> every draft addressed to the operator.
+ *   - allowedCampuses -> only folders/Unassigned in those campuses are drafted
+ *     (null = every summer campus).
+ */
+function _runSummerSchoolCore(opts) {
+  var ui = SpreadsheetApp.getUi();
+  var NL = String.fromCharCode(10);
+  var operator = Session.getActiveUser().getEmail();
+  var smokeMode = !!(opts && opts.smokeMode);
+  var allowed = (opts && opts.allowedCampuses) || null;
+  function campusAllowed(campus) {
+    return !allowed || allowed[normalizeFolderName(campus)] === true;
+  }
+
+  var roster = readSummerRoster();
+  var dataByTeacher = readSummerTeacherData();
+  var tree = traverseSummerPdfTree();
+
+  // Teacher universe = folder teachers UNION roster teachers, keyed by
+  // (campus, teacher), filtered to allowedCampuses when scoped.
+  var universe = {};
+  var k;
+  var folderKeys = Object.keys(tree.teachers);
+  for (var fi = 0; fi < folderKeys.length; fi++) {
+    k = folderKeys[fi];
+    var info = tree.teachers[k];
+    if (!campusAllowed(info.campus)) continue;
+    universe[k] = {
+      campus: info.campus, teacher: info.teacher, pdfs: info.pdfs || [],
+      email: (roster[k] && roster[k].email) || '', dataRow: dataByTeacher[k] || null
+    };
+  }
+  var rosterKeys = Object.keys(roster);
+  for (var ri = 0; ri < rosterKeys.length; ri++) {
+    k = rosterKeys[ri];
+    if (universe[k]) continue;
+    var rinfo = roster[k];
+    if (!campusAllowed(rinfo.campus)) continue;
+    universe[k] = {
+      campus: rinfo.campus, teacher: rinfo.displayName, pdfs: [],
+      email: rinfo.email || '', dataRow: dataByTeacher[k] || null
+    };
+  }
+  var universeKeys = Object.keys(universe).sort();
+
+  var unassigned = [];
+  for (var uai = 0; uai < tree.unassigned.length; uai++) {
+    if (campusAllowed(tree.unassigned[uai].campus)) unassigned.push(tree.unassigned[uai]);
+  }
+
+  if (universeKeys.length === 0 && unassigned.length === 0) {
+    ui.alert('Nothing to generate',
+      'No Summer School teacher folders or roster rows matched'
+      + (allowed ? ' your assigned schools' : '')
+      + '. Confirm you have access to the Public School Summer Camp folder plus the two source sheets '
+      + '(Email Tools > Debug: Drive Auth), then retry.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  var nBlankTo = 0, nNoPdf = 0, nNoData = 0;
+  for (var c = 0; c < universeKeys.length; c++) {
+    var uu = universe[universeKeys[c]];
+    if (!uu.email) nBlankTo++;
+    if (!uu.pdfs.length) nNoPdf++;
+    if (!uu.dataRow) nNoData++;
+  }
+
+  var scopeLine = '';
+  if (allowed) {
+    var campusNames = {};
+    for (var scc = 0; scc < universeKeys.length; scc++) campusNames[universe[universeKeys[scc]].campus] = true;
+    for (var su = 0; su < unassigned.length; su++) campusNames[unassigned[su].campus] = true;
+    scopeLine = 'Your schools: ' + Object.keys(campusNames).sort().join('; ') + NL;
+  }
+
+  var msg = (smokeMode ? 'SMOKE TEST: every draft goes to YOU (' + operator + ').' + NL + NL : '')
+    + 'Summer School Week 1+2:' + NL + NL
+    + scopeLine
+    + 'Teacher/group drafts: ' + universeKeys.length + NL
+    + 'Unassigned drafts: ' + unassigned.length + NL
+    + 'Blank To (no roster email): ' + nBlankTo + NL
+    + 'No PDF attached: ' + nNoPdf + NL
+    + 'No data table: ' + nNoData + NL + NL
+    + 'Drafts land in YOUR Gmail (' + operator + ').' + NL + 'Proceed?';
+  if (ui.alert('Confirm Summer School Generation', msg, ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+
+  var success = 0, failC = 0, errors = [];
+  var subject = CONFIG.SUMMER_SCHOOL.SUBJECT;
+
+  for (var t = 0; t < universeKeys.length; t++) {
+    var u = universe[universeKeys[t]];
+    var teacherObj = { name: u.teacher, firstName: _summerFirstName(u.teacher), campus: u.campus };
+    try {
+      var body = generateSummerSchoolWeek12Body(teacherObj, u.dataRow);
+      var toEmail;
+      if (smokeMode) { toEmail = operator; }
+      else if (u.email) { toEmail = u.email; }
+      else { toEmail = ''; body = _summerBlankToBanner(u.campus, u.teacher) + body; }
+      var res = _createSummerDraft(toEmail, subject, body, u.pdfs, teacherObj);
+      if (res.success) success++;
+      else { failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + res.error); }
+    } catch (e) {
+      failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + (e.message || e));
+    }
+  }
+
+  for (var ua = 0; ua < unassigned.length; ua++) {
+    var un = unassigned[ua];
+    var unObj = { name: 'Unassigned (' + un.campus + ')', firstName: 'team', campus: un.campus };
+    try {
+      var unBody = _summerUnassignedBanner(un.campus) + generateSummerSchoolWeek12Body(unObj, null);
+      var unTo = smokeMode ? operator : '';
+      var unRes = _createSummerDraft(unTo, subject + ' (Unassigned: ' + un.campus + ')', unBody, un.pdfs, unObj);
+      if (unRes.success) success++;
+      else { failC++; errors.push('Unassigned / ' + un.campus + ': ' + unRes.error); }
+    } catch (e) {
+      failC++; errors.push('Unassigned / ' + un.campus + ': ' + (e.message || e));
+    }
+  }
+
+  var done = (smokeMode ? 'SMOKE TEST complete. ' : 'Summer School complete. ')
+    + success + ' drafts created in your Gmail, ' + failC + ' failed.';
+  if (errors.length > 0) {
+    var es = errors.join(' | ');
+    if (es.length > CONFIG.LIMITS.ERROR_MSG_TRUNCATE) {
+      console.log('Full summer-school error list:' + NL + errors.join(NL));
+      es = es.substring(0, CONFIG.LIMITS.ERROR_MSG_TRUNCATE) + '... (' + errors.length + ' total; see logs)';
+    }
+    done += NL + NL + 'Errors: ' + es;
+  }
+  done += NL + NL + 'Open Gmail Drafts to review the To, the two-week table, and the attached PDFs.';
+  ui.alert('Done', done, ui.ButtonSet.OK);
 }
