@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.10.0] - 2026-06-15
+
+### FEATURE: "Summer School Week 1+2" email - new external-source generation path
+
+Adds a summer-school email that is NOT part of the regular weekly pipeline. It reads THREE external Google resources (none in the email-automation spreadsheet) and drafts one email per teacher/group, each with a combined two-week data table and both weekly XP-report PDFs attached.
+
+External sources (`CONFIG.SUMMER_SCHOOL`):
+- Data: "Summer Performance Dashboard" (`1pbVCjxsn3t6r-jej0Kp00Y8avfxNW6G-mmICoR3Nrtw`), per-(campus, teacher, week) summary tab, weeks 2026-06-01 + 2026-06-08.
+- Roster: "MAP Master Roster for Public School SW Sales" (`1scEay0a8OR6vU3uJuxbHKWCEx_RVgSsRXF9naJh3XYw`), Summer School tab (Campus + Summer School Teacher + Summer School Teacher Email).
+- PDFs: "Public School Summer Camp" Drive folder (`1wY4sMo0YgHy3Q85FU1UIdrEhtgdSvM5y`), nested Camp -> School -> Teacher -> two PDFs, inside the existing ROOT_FOLDER_ID.
+
+Behavior:
+- Two new menu items: `Generate Summer School Drafts (Wk 1+2)` and `Summer School: Smoke Test (to me)`. Reached via its OWN path (`generateSummerSchoolDrafts` / `_runSummerSchool`), NOT the TEMPLATES dropdown loop, because the sources, roster shape, and recipient model all differ.
+- Teacher universe = the live PDF folder tree (every teacher/group folder across all 6 schools) UNION the roster summer-school teachers, keyed by normalized (campus, teacher).
+- To = roster email, or BLANK with a fill-in banner when a folder has no roster match (operator fills it manually). Each school's `Unassigned` folder gets one blank-To draft with that school's Unassigned PDFs.
+- Combined two-week data table: # Students (max weekly count), Avg Active Days/Wk (mean), Avg Minutes/Student/Wk (mean), Lessons Mastered (2 wks, sum). Yellow empty-state note when the dashboard has no matching row.
+- Body re-renders the supplied copy with no literal emoji (dotSpan colors + HTML entities) and no em dashes.
+
+New code (all in `Code.js`: a `CONFIG.SUMMER_SCHOOL` block + a hoisted section at end of file): `readSummerRoster`, `readSummerTeacherData` (with pure `_aggregateSummerTeacherRows`), `traverseSummerPdfTree`, `buildSummerSchoolTable`, `generateSummerSchoolWeek12Body`, `generateSummerSchoolDrafts` / `generateSummerSchoolSmokeTest` / `_runSummerSchool`, plus `getSheetByGid`, `_summerKey`, `_summerHeaderIndex`, `_summerFirstName`, `_createSummerDraft`, banner helpers, and tab-by-header-signature resolvers.
+
+### Live reconciliation (2026-06-15, against current sources)
+
+- 6 schools, 21 teacher/group folders + 2 `Unassigned` (JHMS, JRHS). All 6 campus strings are byte-identical across folders/roster/dashboard, so the normalized (campus, teacher) match holds.
+- 11 of 21 folders match a roster email; 10 draft blank-To by design (Queenie Henry + Mahogany Salisbury @ JHES, Janice Allen @ JHMS, and the 7 JRHS groups). All 21 have both 6/1 + 6/8 dashboard rows, so every draft gets a populated table.
+- Aggregate spot-checks confirmed: Roper Jackson @ AFES = 21 students, 2.6 active days/wk, 72.2 min/student/wk, 1193 lessons; Group 8A @ JRHS = 12 / 2.9 / 73.3 / 192.
+
+### Verified
+
+- `node test_runner.js`: 105/105 PASS (84 prior + 21 new Summer School cases).
+- Summer-school section scanned: 0 literal emoji / em dash.
+- Live draft creation runs in the operator's Apps Script session (run the smoke test first). NOT verified live from a non-Apps-Script context (architectural).
+
+### Files modified
+
+- `Code.js` (CONFIG.SUMMER_SCHOOL block + 2 menu items + 21 unit tests + the Summer School section)
+- `package.json` (2.9.2 to 2.10.0)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (v2.10.0 overview + template note + menu rows + drift markers)
+- `write_doc.py` (user-facing v2.10.0 summary)
+
 ## [v2.9.2] - 2026-05-28
 
 ### COPY: Spring 2026 MAP template prioritize-section + yellow-callout cleanup + new conclusion

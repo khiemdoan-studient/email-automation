@@ -16,6 +16,8 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **Critical drift markers (v2.9.0)**: the Spring 2026 MAP Scores template depends on the parent pipeline writing the `Spring 2026 MAP Scores` tab with the **8-column header** (`campus_name, teacher_name, student_name, subject, winter_rit, spring_rit, winter_to_spring_projected_growth, winter_to_spring_observed_growth`). If the parent renames the tab, changes the header, or removes the writer call from `generate_report_v3.py` Step 5, the email template silently renders zero teachers OR renders X Growth as "--" for every row. The `_probe_map_scores_tab_populated` validator catches header mismatch pre-cycle. X Growth is computed client-side in `buildMapScoresTable` using `observed_growth / max(projected_growth, 1)` - the floor-at-1 rule MUST stay in sync with parent `sheets_builder._compute_x_growth` (v3.43.7 + v3.44.1). Underlying BQ refresh remains manual NWEA CSV + `--full` build (no daily auto-ingest yet).
 
+**v2.10.0**: New "Summer School Week 1+2" email on a SEPARATE external-source path (not the TEMPLATES dropdown). Reads three external resources via `CONFIG.SUMMER_SCHOOL` (Summer Performance Dashboard + MAP Master Roster + the nested "Public School Summer Camp" Drive tree, the last inside `ROOT_FOLDER_ID`), and drafts one email per teacher/group across all 6 SC summer schools (combined two-week data table + both weekly XP PDFs attached). Matching is normalized (campus, teacher); To = roster email or BLANK with a fill-in banner when a folder has no roster match; one `Unassigned` draft per school. Menu items: `Generate Summer School Drafts (Wk 1+2)` + `Summer School: Smoke Test (to me)`. 2026-06-15 reconciliation: 21 teacher/group folders, 11 addressed + 10 blank-To, all 21 with both-week data. Test count: 84 -> 105.
+
 For full per-version implementation details + version-specific bug post-mortems, see `IMPLEMENTATION_NOTES.md`.
 
 ## Architecture
@@ -133,6 +135,8 @@ Bruna and Mark's Schools - Weekly Report/   <- ROOT_FOLDER_NAME / ROOT_FOLDER_ID
 | 4/27: Last Week of Motivention | Data crunch & point calculation complete: (+ 3 non-boring updates...) | No (also omits **trend alert** as of v2.3.0) |
 | SC Final Email: Growth & Hardwork = Results | Motivention Store Closing Friday (+ Impressive Results) | No (year-cumulative spotlights instead) |
 
+**Not in this dropdown:** "Summer School Week 1+2" (v2.10.0) runs on its OWN menu items (`Generate Summer School Drafts (Wk 1+2)` / `Summer School: Smoke Test (to me)`), reading external sources rather than the active spreadsheet. See the v2.10.0 overview + drift markers.
+
 ### Shared Components
 - `buildGreeting(teacher)` - "Hi {firstName},"
 - `buildMetricsTable(teacher, metricsArray)` - 5-column color-coded data table: **Teacher | Grade | Avg Active Days | Avg Minutes | Avg Lessons/Student**. Max width 640px.
@@ -185,11 +189,13 @@ Debug menu items - run when "Drive folders NOT FOUND" or "Service error: Drive" 
 | Debug: Drive Auth | `diagnoseDriveAuth` | Run FIRST when "Service error: Drive" appears (v2.4.2+) |
 | Debug: Validate All PDFs (Config week) | `validateAllPdfs` | System-wide PDF coverage check (v2.6.4+) |
 | Test Mode: Generate Smoke Test | `runSmokeTest` | ~6-8 drafts to current user's Gmail across districts (v2.6.0+) |
+| Generate Summer School Drafts (Wk 1+2) | `generateSummerSchoolDrafts` | Summer-school email: external sources, per-teacher drafts + 2-week table + 2 PDFs (v2.10.0+) |
+| Summer School: Smoke Test (to me) | `generateSummerSchoolSmokeTest` | Same run, but all drafts to the operator for QA (v2.10.0+) |
 | Retry Last Run's Failed Teachers | `retryFailedTeachers` | Reads Error Log for last run's ERROR rows (v2.6.0+) |
 | Set Date Range | `setDateRange` | Manual override for Config Date Range |
 | Set Template | `setTemplate` | Manual override for Config Template |
 | Refresh Template Dropdown | `setupTemplateDropdown` | Rebuilds Config Template data validation from `TEMPLATE_NAMES` |
-| Run Unit Tests | (test runner) | 52 test cases (v2.6.8) |
+| Run Unit Tests | (test runner) | 105 test cases (v2.10.0) |
 
 ## Important Implementation Details
 
@@ -216,3 +222,4 @@ For color thresholds, testing workflow, and troubleshooting recipes, see `IMPLEM
 - Sheet tab names + column letters (Y/Z/AA for Teacher Email)
 - Drive folder structure (school name format)
 - Related-project function names (changes upstream break this app)
+- **Summer School (v2.10.0)** `CONFIG.SUMMER_SCHOOL` IDs/gids: Data `1pbVCjxsn...` (gid 1749344035), Roster `1scEay0a...` (gid 1317754525), PDF Camp folder `1wY4sMo0...`. PDF tree is nested Camp -> School -> Teacher -> `{Teacher}_XP_Report_{YYYY-MM-DD}.pdf` (weeks `2026-06-01` + `2026-06-08`). Match key = normalized (campus, teacher). Roster columns matched by HEADER NAME (Campus / Summer School Teacher / Summer School Teacher Email); dashboard tab found by header signature (`teacher_name` + `avg_active_days` + `doom_loop_pct`). If the dashboard renames those headers or the roster drops the "Summer School Teacher Email" column, teachers silently draft blank-To / no-table. JHES teachers + JRHS groups have no roster email by design (blank-To).

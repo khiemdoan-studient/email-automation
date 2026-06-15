@@ -17,6 +17,21 @@ var CONFIG = {
   // v2.8.0: Spring 2026 MAP Scores tab for the new live-data MAP template.
   MAP_SCORES_SHEET_NAME: "Spring 2026 MAP Scores",
 
+  // v2.10.0: Summer School Week 1+2 template reads THREE EXTERNAL sources
+  // (NOT the active spreadsheet): a Summer Performance Dashboard, the MAP
+  // Master Roster, and a nested "Public School Summer Camp" Drive tree
+  // (Camp -> School -> Teacher -> two weekly XP-report PDFs). See the
+  // SUMMER SCHOOL WEEK 1+2 section near the end of this file.
+  SUMMER_SCHOOL: {
+    DATA_ID: "1pbVCjxsn3t6r-jej0Kp00Y8avfxNW6G-mmICoR3Nrtw",   // "Summer Performance Dashboard"
+    DATA_GID: 1749344035,                                       // user-linked tab (hint; tab resolved by header signature)
+    ROSTER_ID: "1scEay0a8OR6vU3uJuxbHKWCEx_RVgSsRXF9naJh3XYw",  // "MAP Master Roster for Public School SW Sales"
+    ROSTER_GID: 1317754525,                                     // Summer School roster tab
+    PDF_CAMP_FOLDER_ID: "1wY4sMo0YgHy3Q85FU1UIdrEhtgdSvM5y",    // "Public School Summer Camp" (inside ROOT_FOLDER_ID)
+    WEEK_STARTS: ["2026-06-01", "2026-06-08"],                  // the two weeks aggregated (6/1-6/14)
+    SUBJECT: "Studient: Week 2: Keep the Momentum Going"        // sun emoji dropped (no literal emoji in source)
+  },
+
   // Column indices in Teacher Emails sheet (0-indexed)
   CAMPUS_COL: 2,           // Column C: Campus
   TEACHER_FIRST_COL: 24,   // Column Y: Teacher 1 First Name
@@ -175,6 +190,9 @@ function onOpen() {
     .addItem('Retry Last Run\'s Failed Teachers', 'retryLastRunFailed')
     .addSeparator()
     .addItem('Test Mode: Generate Smoke Test (drafts to me)', 'generateSmokeTest')
+    .addSeparator()
+    .addItem('Generate Summer School Drafts (Wk 1+2)', 'generateSummerSchoolDrafts')
+    .addItem('Summer School: Smoke Test (to me)', 'generateSummerSchoolSmokeTest')
     .addSeparator()
     .addItem('Debug: Check Teacher Names (roster vs metrics)', 'checkTeacherNames')
     .addItem('Debug: Check Teacher Folders', 'checkTeacherFolders')
@@ -2228,6 +2246,47 @@ function runUnitTests() {
   _testAssertEq(results, 'lookupByName: 3-token roster name resolves to 2-token map key (john bradley apostol -> john apostol)',
     lookupByName(mockYearMap, 'John', 'Apostol', 'John Bradley Apostol') !== null, true);
 
+  // --- v2.10.0: Summer School Week 1+2 ---
+  _testAssertEq(results, 'summerKey: campus+teacher normalize (underscore = space)',
+    _summerKey('JHMS - Hardeeville', 'Janice_Allen'), _summerKey('jhms - hardeeville', 'janice allen'));
+  _testAssertEq(results, 'summerKey: group folder matches dashboard spacing',
+    _summerKey('JRHS', 'Group_8A'), _summerKey('JRHS', 'Group 8A'));
+  _testAssertEq(results, 'summerKey: different teacher differs',
+    _summerKey('JHMS', 'A') === _summerKey('JHMS', 'B'), false);
+  _testAssertEq(results, 'summerFirstName: first token for a person', _summerFirstName('Janice Allen'), 'Janice');
+  _testAssertEq(results, 'summerFirstName: single token kept', _summerFirstName('Morgan'), 'Morgan');
+  _testAssertEq(results, 'summerFirstName: group name kept whole', _summerFirstName('Group 8A'), 'Group 8A');
+  var shdr = _summerHeaderIndex(['week_start', 'campus_name', 'teacher_name', 'students', 'avg_active_days', 'total_minutes', 'lessons_mastered']);
+  _testAssertEq(results, 'summerHeaderIndex: normalized header -> index',
+    [shdr['week start'], shdr['teacher name'], shdr['avg active days'], shdr['lessons mastered']], [0, 2, 4, 6]);
+  var aggOut = _aggregateSummerTeacherRows([
+    { key: 'k1', week: '2026-06-01', students: 21, active: 1.5, mins: 210, lessons: 241 },
+    { key: 'k1', week: '2026-06-08', students: 21, active: 3.5, mins: 420, lessons: 759 }
+  ]);
+  _testAssertEq(results, 'aggregateSummer: students = max weekly count', aggOut.k1.students, 21);
+  _testAssertEq(results, 'aggregateSummer: avgActiveDays = mean of weeks', aggOut.k1.avgActiveDays, 2.5);
+  _testAssertEq(results, 'aggregateSummer: avgMinsPerStudent = mean weekly per-student', aggOut.k1.avgMinsPerStudent, 15);
+  _testAssertEq(results, 'aggregateSummer: lessons = 2-week sum', aggOut.k1.lessonsMastered, 1000);
+  _testAssertEq(results, 'aggregateSummer: single week uses that week only',
+    _aggregateSummerTeacherRows([{ key: 's', week: '2026-06-01', students: 10, active: 4, mins: 1000, lessons: 50 }]).s.avgMinsPerStudent, 100);
+  var sst = buildSummerSchoolTable({ students: 18, avgActiveDays: 4.2, avgMinsPerStudent: 105, lessonsMastered: 320 });
+  _testAssertEq(results, 'summerTable: 4-col header',
+    sst.indexOf('# Students') !== -1 && sst.indexOf('Avg Active Days/Wk') !== -1
+      && sst.indexOf('Avg Minutes/Student/Wk') !== -1 && sst.indexOf('Lessons Mastered (2 wks)') !== -1, true);
+  _testAssertEq(results, 'summerTable: renders values',
+    sst.indexOf('>18<') !== -1 && sst.indexOf('4.2') !== -1 && sst.indexOf('105.0') !== -1 && sst.indexOf('>320<') !== -1, true);
+  _testAssertEq(results, 'summerTable: null dataRow -> fallback note',
+    buildSummerSchoolTable(null).indexOf('summary not available') !== -1, true);
+  var ssb = generateSummerSchoolWeek12Body({ name: 'Janice Allen', firstName: 'Janice' },
+    { students: 12, avgActiveDays: 3, avgMinsPerStudent: 80, lessonsMastered: 100 });
+  _testAssertEq(results, 'summerBody: greets teacher', ssb.indexOf('Hi Janice,') !== -1, true);
+  _testAssertEq(results, 'summerBody: contains the 3 moves',
+    ssb.indexOf('Work the room') !== -1 && ssb.indexOf('Ask better questions') !== -1 && ssb.indexOf('Celebrate small wins') !== -1, true);
+  _testAssertEq(results, 'summerBody: contains Timeback callout', ssb.indexOf('Thursday = Timeback') !== -1, true);
+  _testAssertEq(results, 'summerBody: embeds the data table', ssb.indexOf('Lessons Mastered (2 wks)') !== -1, true);
+  _testAssertEq(results, 'summerBody: no literal sun emoji', ssb.indexOf('\\u2600') === -1, true);
+  _testAssertEq(results, 'summerBody: no em dash (hard rule)', ssb.indexOf('\\u2014') === -1, true);
+
   // Render
   var pass = 0, fail = 0;
   var lines = [];
@@ -3836,4 +3895,535 @@ function debugDriveAccess() {
 
   var html = HtmlService.createHtmlOutput(report).setWidth(900).setHeight(700);
   ui.showModalDialog(html, 'Drive Access Diagnostic');
+}
+
+// ============================================
+// v2.10.0 - SUMMER SCHOOL WEEK 1+2 (separate external-source generation path)
+// ============================================
+//
+// The summer-school cohort is NOT in this spreadsheet, the School-IM Mapping,
+// or the regular weekly Drive tree. It lives in THREE external resources
+// (CONFIG.SUMMER_SCHOOL): a Summer Performance Dashboard, the MAP Master
+// Roster, and a nested "Public School Summer Camp" Drive folder
+// (Camp -> School -> Teacher -> two weekly XP-report PDFs). This block reads
+// those live each run and drafts one email per teacher/group (combined two-week
+// data table + both XP PDFs attached), plus one Unassigned draft per school.
+//
+// Recipient model: drafts land in the Gmail of whoever runs the menu item.
+// To = roster email, or BLANK when there is no roster match (operator fills it
+// in manually); Unassigned drafts are blank-To with a banner. Reached via its
+// own menu items, NOT the TEMPLATES-driven generateDraftsForCurrentUser loop.
+
+/** Cross-source join key: normalized (campus, teacher). */
+function _summerKey(campus, teacher) {
+  return normalizeFolderName(campus) + '||' + normalizeFolderName(teacher);
+}
+
+/** First name for the greeting. Group folders ("Group 8A") are kept whole. */
+function _summerFirstName(name) {
+  var n = String(name || '').trim();
+  var low = n.toLowerCase();
+  if (low.indexOf('group ') === 0 || low.indexOf('group_') === 0) return n;
+  return n.split(' ')[0] || n;
+}
+
+/** Map a header row to { normalizedHeaderName -> columnIndex } (first wins). */
+function _summerHeaderIndex(headerRow) {
+  var map = {};
+  for (var i = 0; i < headerRow.length; i++) {
+    var key = normalizeFolderName(headerRow[i]);
+    if (key && !(key in map)) map[key] = i;
+  }
+  return map;
+}
+
+/** Select a sheet/tab by its gid (getSheetId), or null. */
+function getSheetByGid(ss, gid) {
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getSheetId() === gid) return sheets[i];
+  }
+  return null;
+}
+
+/** Minimal HTML-escape for values interpolated into banners. */
+function _esc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ---- External readers (called live inside the orchestrator) ----
+
+function _isSummerRosterTab(sheet) {
+  try {
+    var lastCol = sheet.getLastColumn();
+    if (lastCol < 1) return false;
+    var idx = _summerHeaderIndex(sheet.getRange(1, 1, 1, lastCol).getValues()[0]);
+    return (idx['summer school teacher email'] != null)
+      && (idx['summer school teacher'] != null)
+      && (idx['campus'] != null);
+  } catch (e) { return false; }
+}
+
+function _findSummerRosterTab(ss) {
+  var hinted = getSheetByGid(ss, CONFIG.SUMMER_SCHOOL.ROSTER_GID);
+  if (hinted && _isSummerRosterTab(hinted)) return hinted;
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (_isSummerRosterTab(sheets[i])) return sheets[i];
+  }
+  return hinted || null;
+}
+
+/**
+ * Read the MAP Master Roster Summer School tab into a (campus, teacher)-keyed
+ * map of { campus, displayName, email }. Only rows with Summer School == TRUE
+ * and a non-blank teacher are kept. Fail-soft: any access error returns {}.
+ */
+function readSummerRoster() {
+  var out = {};
+  var ss;
+  try { ss = SpreadsheetApp.openById(CONFIG.SUMMER_SCHOOL.ROSTER_ID); }
+  catch (e) { logError('ERROR', 'readSummerRoster', null, 'openById roster failed: ' + (e.message || e), ''); return out; }
+  var sheet = _findSummerRosterTab(ss);
+  if (!sheet) { logError('ERROR', 'readSummerRoster', null, 'roster tab (gid ' + CONFIG.SUMMER_SCHOOL.ROSTER_GID + ' / header signature) not found', ''); return out; }
+  var data;
+  try { data = sheet.getDataRange().getValues(); }
+  catch (e) { logError('ERROR', 'readSummerRoster', null, 'roster getValues failed: ' + (e.message || e), ''); return out; }
+  if (data.length < 2) return out;
+  var idx = _summerHeaderIndex(data[0]);
+  var cCampus = idx['campus'], cTeacher = idx['summer school teacher'],
+      cEmail = idx['summer school teacher email'], cFlag = idx['summer school'];
+  if (cCampus == null || cTeacher == null || cEmail == null) {
+    logError('ERROR', 'readSummerRoster', null, 'roster header missing Campus / Summer School Teacher / Email', '');
+    return out;
+  }
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    if (cFlag != null) {
+      var flag = String(row[cFlag] == null ? '' : row[cFlag]).trim().toLowerCase();
+      if (flag !== 'true' && flag !== 'yes' && flag !== '1') continue;
+    }
+    var campus = String(row[cCampus] || '').trim();
+    var teacher = String(row[cTeacher] || '').trim();
+    if (!campus || !teacher) continue;
+    var email = String(row[cEmail] || '').trim();
+    var key = _summerKey(campus, teacher);
+    if (!out[key]) out[key] = { campus: campus, displayName: teacher, email: email };
+    else if (!out[key].email && email) out[key].email = email;
+  }
+  return out;
+}
+
+/** Header signature that uniquely identifies the per-(campus,teacher,week) summary tab. */
+function _isSummerTeacherTab(sheet) {
+  try {
+    var lastCol = sheet.getLastColumn();
+    if (lastCol < 1) return false;
+    var idx = _summerHeaderIndex(sheet.getRange(1, 1, 1, lastCol).getValues()[0]);
+    return (idx['teacher name'] != null) && (idx['avg active days'] != null)
+      && (idx['campus name'] != null) && (idx['week start'] != null)
+      && ((idx['doom loop pct'] != null) || (idx['total active student days'] != null));
+  } catch (e) { return false; }
+}
+
+function _findSummerDataTab(ss) {
+  var hinted = getSheetByGid(ss, CONFIG.SUMMER_SCHOOL.DATA_GID);
+  if (hinted && _isSummerTeacherTab(hinted)) return hinted;
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (_isSummerTeacherTab(sheets[i])) return sheets[i];
+  }
+  return null;
+}
+
+/**
+ * Aggregate per-(campus,teacher,week) rows into one combined 6/1-6/14 figure per
+ * (campus, teacher). PURE (no Apps Script API) so it is unit-tested directly.
+ *   # Students        = max weekly student count
+ *   avgActiveDays     = mean of the weekly avg_active_days
+ *   avgMinsPerStudent = mean of the weekly (total_minutes / students)
+ *   lessonsMastered   = sum of the weekly lessons_mastered
+ */
+function _aggregateSummerTeacherRows(rows) {
+  var acc = {};
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!acc[r.key]) acc[r.key] = {};
+    acc[r.key][r.week] = { students: r.students, active: r.active, mins: r.mins, lessons: r.lessons };
+  }
+  var out = {};
+  for (var key in acc) {
+    var wk = acc[key];
+    var weeks = Object.keys(wk);
+    var maxStudents = 0, activeSum = 0, minsPerSum = 0, n = 0, lessons = 0;
+    for (var w = 0; w < weeks.length; w++) {
+      var d = wk[weeks[w]];
+      if (d.students > maxStudents) maxStudents = d.students;
+      activeSum += d.active;
+      minsPerSum += (d.students > 0 ? d.mins / d.students : 0);
+      lessons += d.lessons;
+      n++;
+    }
+    out[key] = {
+      students: maxStudents,
+      avgActiveDays: n ? activeSum / n : 0,
+      avgMinsPerStudent: n ? minsPerSum / n : 0,
+      lessonsMastered: lessons
+    };
+  }
+  return out;
+}
+
+/**
+ * Read the Summer Performance Dashboard teacher-weekly-summary tab and return a
+ * (campus, teacher)-keyed combined two-week figure. Fail-soft: returns {}.
+ */
+function readSummerTeacherData() {
+  var out = {};
+  var ss;
+  try { ss = SpreadsheetApp.openById(CONFIG.SUMMER_SCHOOL.DATA_ID); }
+  catch (e) { logError('ERROR', 'readSummerTeacherData', null, 'openById data failed: ' + (e.message || e), ''); return out; }
+  var sheet = _findSummerDataTab(ss);
+  if (!sheet) { logError('ERROR', 'readSummerTeacherData', null, 'teacher-weekly-summary tab not found by signature', ''); return out; }
+  var data;
+  try { data = sheet.getDataRange().getValues(); }
+  catch (e) { logError('ERROR', 'readSummerTeacherData', null, 'data getValues failed: ' + (e.message || e), ''); return out; }
+  if (data.length < 2) return out;
+  var idx = _summerHeaderIndex(data[0]);
+  var cWeek = idx['week start'], cCampus = idx['campus name'], cTeacher = idx['teacher name'];
+  var cStudents = (idx['students'] != null) ? idx['students'] : idx['n students'];
+  var cActive = idx['avg active days'], cMins = idx['total minutes'];
+  var cLessons = (idx['lessons mastered'] != null) ? idx['lessons mastered'] : idx['sum lessons'];
+  if (cWeek == null || cCampus == null || cTeacher == null || cActive == null || cMins == null) {
+    logError('ERROR', 'readSummerTeacherData', null, 'data tab missing week_start/campus_name/teacher_name/avg_active_days/total_minutes', '');
+    return out;
+  }
+  var weeks = CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
+  var rows = [];
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    var ws = cellToDateString(row[cWeek]);
+    if (weeks.indexOf(ws) === -1) continue;
+    var campus = String(row[cCampus] || '').trim();
+    var teacher = String(row[cTeacher] || '').trim();
+    if (!campus || !teacher) continue;
+    rows.push({
+      key: _summerKey(campus, teacher),
+      week: ws,
+      students: (cStudents != null) ? (parseFloat(row[cStudents]) || 0) : 0,
+      active: parseFloat(row[cActive]) || 0,
+      mins: parseFloat(row[cMins]) || 0,
+      lessons: (cLessons != null) ? (parseFloat(row[cLessons]) || 0) : 0
+    });
+  }
+  return _aggregateSummerTeacherRows(rows);
+}
+
+// ---- PDF tree traversal (Camp -> School -> Teacher -> PDFs) ----
+
+function _collectSummerPdfs(folder) {
+  var pdfs = [];
+  var weeks = CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
+  var it;
+  try { it = folder.getFiles(); } catch (e) { return pdfs; }
+  while (true) {
+    var has;
+    try { has = it.hasNext(); } catch (e) { break; }
+    if (!has) break;
+    var f;
+    try { f = it.next(); } catch (e) { continue; }
+    var name;
+    try { name = f.getName(); } catch (e) { continue; }
+    if (name.toUpperCase().indexOf('.PDF') === -1) continue;
+    if (name.indexOf('XP_Report') === -1) continue;
+    var matchesWeek = false;
+    for (var w = 0; w < weeks.length; w++) { if (name.indexOf(weeks[w]) !== -1) { matchesWeek = true; break; } }
+    if (!matchesWeek) continue;
+    pdfs.push(f);
+  }
+  pdfs.sort(function (a, b) {
+    var an, bn;
+    try { an = a.getName(); } catch (e) { an = ''; }
+    try { bn = b.getName(); } catch (e) { bn = ''; }
+    return an < bn ? -1 : (an > bn ? 1 : 0);
+  });
+  return pdfs;
+}
+
+/**
+ * Walk the Public School Summer Camp tree. Returns
+ *   { teachers: { key(campus,teacher) -> {campus, teacher, pdfs[]} },
+ *     unassigned: [ {campus, pdfs[]} ] }
+ * Every Drive iterator step is wrapped (shared-with-me permission safety).
+ */
+function traverseSummerPdfTree() {
+  var result = { teachers: {}, unassigned: [] };
+  var camp;
+  try { camp = DriveApp.getFolderById(CONFIG.SUMMER_SCHOOL.PDF_CAMP_FOLDER_ID); }
+  catch (e) { logError('ERROR', 'traverseSummerPdfTree', null, 'getFolderById camp failed: ' + (e.message || e), ''); return result; }
+  var schoolIt;
+  try { schoolIt = camp.getFolders(); }
+  catch (e) { logError('ERROR', 'traverseSummerPdfTree', null, 'camp.getFolders failed: ' + (e.message || e), ''); return result; }
+  while (true) {
+    var hasS;
+    try { hasS = schoolIt.hasNext(); } catch (e) { break; }
+    if (!hasS) break;
+    var school;
+    try { school = schoolIt.next(); } catch (e) { continue; }
+    var campus;
+    try { campus = school.getName(); } catch (e) { continue; }
+    var teacherIt;
+    try { teacherIt = school.getFolders(); } catch (e) { continue; }
+    while (true) {
+      var hasT;
+      try { hasT = teacherIt.hasNext(); } catch (e) { break; }
+      if (!hasT) break;
+      var tfolder;
+      try { tfolder = teacherIt.next(); } catch (e) { continue; }
+      var tname;
+      try { tname = tfolder.getName(); } catch (e) { continue; }
+      var pdfs = _collectSummerPdfs(tfolder);
+      if (normalizeFolderName(tname) === 'unassigned') {
+        result.unassigned.push({ campus: campus, pdfs: pdfs });
+      } else {
+        var displayTeacher = String(tname).replace(/_/g, ' ');
+        result.teachers[_summerKey(campus, displayTeacher)] = { campus: campus, teacher: displayTeacher, pdfs: pdfs };
+      }
+    }
+  }
+  return result;
+}
+
+// ---- Rendering ----
+
+function buildSummerSchoolTable(dataRow) {
+  if (!dataRow) {
+    return '<div style="background-color:#fff3cd;padding:10px;border-radius:6px;border:1px solid #ffe699;margin:8px 0;">'
+      + '<p style="margin:0;"><em>Two-week summary not available for this teacher. See the attached weekly reports for the student-level detail.</em></p>'
+      + '</div>';
+  }
+  var students = Number(dataRow.students || 0);
+  var activeDays = Number(dataRow.avgActiveDays || 0);
+  var avgMins = Number(dataRow.avgMinsPerStudent || 0);
+  var lessons = Number(dataRow.lessonsMastered || 0);
+  var daysColor = activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN ? '#d9ead3'
+    : (activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW ? '#fff2cc' : '#f4cccc');
+  var minsColor = avgMins >= CONFIG.THRESHOLDS.AVG_MINS_GREEN ? '#d9ead3'
+    : (avgMins >= CONFIG.THRESHOLDS.AVG_MINS_YELLOW ? '#fff2cc' : '#f4cccc');
+  var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:640px;">';
+  html += '<tr style="background-color:#f3f3f3;">'
+    + '<th style="padding:8px;"># Students</th>'
+    + '<th style="padding:8px;">Avg Active Days/Wk</th>'
+    + '<th style="padding:8px;">Avg Minutes/Student/Wk</th>'
+    + '<th style="padding:8px;">Lessons Mastered (2 wks)</th></tr>';
+  html += '<tr>'
+    + '<td style="padding:8px;">' + students + '</td>'
+    + '<td style="padding:8px;background-color:' + daysColor + ';">' + activeDays.toFixed(1) + '</td>'
+    + '<td style="padding:8px;background-color:' + minsColor + ';">' + avgMins.toFixed(1) + '</td>'
+    + '<td style="padding:8px;">' + lessons + '</td></tr>';
+  html += '</table>';
+  return html;
+}
+
+function generateSummerSchoolWeek12Body(teacher, dataRow) {
+  var greenDot = dotSpan('#2e7d32');
+  var checklist = ['Asking questions.', 'Keeping energy high.', 'Helping students push through frustration.', 'More coaching in the room.'];
+  var checkHtml = '<ul style="list-style:none;padding-left:0;margin:8px 0;">';
+  for (var i = 0; i < checklist.length; i++) checkHtml += '<li style="margin:4px 0;">' + greenDot + checklist[i] + '</li>';
+  checkHtml += '</ul>';
+
+  var questions = ["What are you working on?", "What's your goal today?", "What's slowing you down?", "Show me your progress."];
+  var qHtml = '<ul style="margin:6px 0 0 0;padding-left:18px;">';
+  for (var q = 0; q < questions.length; q++) qHtml += '<li style="margin:2px 0;">&rarr; ' + questions[q] + '</li>';
+  qHtml += '</ul>';
+
+  var movesHtml = '<ol style="padding-left:20px;margin:8px 0;">'
+    + '<li style="margin:10px 0;"><strong>Work the room.</strong><br>Be visible. Walk around. Spot frustration early. Help before students check out.</li>'
+    + '<li style="margin:10px 0;"><strong>Ask better questions.</strong><br>Skip: "Are you working?"<br>Ask:' + qHtml + '</li>'
+    + '<li style="margin:10px 0;"><strong>Celebrate small wins.</strong><br>Finished a lesson? Celebrate it. Focused longer? Call it out. Kept going when it got hard? Recognize it. Small wins build momentum.</li>'
+    + '</ol>';
+
+  var timebackBox = '<div style="background-color:#e7f0fe;padding:12px;border-radius:6px;margin:14px 0;border:1px solid #b6d0f7;">'
+    + '<p style="margin:0 0 6px 0;">' + dotSpan('#1565c0') + '<strong>Thursday = Timeback</strong></p>'
+    + '<p style="margin:0;">Reminders all week: Stay focused. Hit your goals. Earn your Timeback activity.</p>'
+    + '</div>';
+
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+    buildSummerSchoolTable(dataRow),
+    '<p style="margin:14px 0 4px 0;font-size:16px;">' + dotSpan('#DAA520') + "<strong>Weekly Focus: Coach, don't monitor.</strong></p>",
+    '<p style="margin:0 0 8px 0;">Students know the routine now. This week is about staying present.</p>',
+    checkHtml,
+    '<p style="margin:12px 0 4px 0;">' + "<strong>This week's moves:</strong></p>",
+    movesHtml,
+    timebackBox,
+    '<p style="margin:12px 0 0 0;">' + "Let's keep the energy high and the excuses low." + '</p>'
+  ]);
+}
+
+// ---- Orchestration ----
+
+function generateSummerSchoolDrafts() { _runSummerSchool(false); }
+function generateSummerSchoolSmokeTest() { _runSummerSchool(true); }
+
+function _summerBlankToBanner(campus, teacher) {
+  return '<div style="background-color:#fff3cd;padding:8px 10px;border-radius:6px;border:1px solid #ffe699;margin:0 0 10px 0;font-size:13px;">'
+    + '<strong>To: (fill in).</strong> No email on file for ' + _esc(teacher) + ' (' + _esc(campus) + '). Add the recipient before sending.'
+    + '</div>';
+}
+
+function _summerUnassignedBanner(campus) {
+  return '<div style="background-color:#fff3cd;padding:8px 10px;border-radius:6px;border:1px solid #ffe699;margin:0 0 10px 0;font-size:13px;">'
+    + '<strong>Unassigned students at ' + _esc(campus) + '.</strong> This draft attaches the Unassigned weekly reports. Choose the recipient(s) manually before sending.'
+    + '</div>';
+}
+
+/**
+ * Create one summer-school draft. Attempts the given To (which may be blank);
+ * if Gmail rejects an empty recipient, falls back to a draft addressed to the
+ * operator (the body already carries a fill-in banner).
+ */
+function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
+  var attachments = [];
+  for (var i = 0; i < (pdfs || []).length; i++) attachments.push(pdfs[i]);
+  var opts = { htmlBody: htmlBody };
+  if (attachments.length > 0) opts.attachments = attachments;
+  var to = toEmail || '';
+  try {
+    withGmailRetry(function () { GmailApp.createDraft(to, subject, '', opts); });
+    return { success: true };
+  } catch (e) {
+    var msg = String(e && e.message || e);
+    if (!to && /recipient|email|address|empty|invalid/i.test(msg)) {
+      try {
+        var operator = Session.getActiveUser().getEmail();
+        withGmailRetry(function () { GmailApp.createDraft(operator, subject, '', opts); });
+        logError('WARN', '_createSummerDraft', teacherObj, 'empty To rejected; drafted to operator with fill-in banner instead', '');
+        return { success: true };
+      } catch (e2) {
+        logError('ERROR', '_createSummerDraft', teacherObj, 'createDraft empty-To fallback failed: ' + (e2.message || e2), '');
+        return { success: false, error: (e2.message || e2) };
+      }
+    }
+    logError('ERROR', '_createSummerDraft', teacherObj, 'createDraft failed: ' + msg, e.stack || '');
+    return { success: false, error: msg };
+  }
+}
+
+function _runSummerSchool(smokeMode) {
+  var ui = SpreadsheetApp.getUi();
+  var NL = String.fromCharCode(10);
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) {
+    ui.alert('Already Running', 'Email generation is already in progress. Please wait for it to finish.', ui.ButtonSet.OK);
+    return;
+  }
+  try {
+    _runIdCache = null;
+    var operator = Session.getActiveUser().getEmail();
+
+    var roster = readSummerRoster();
+    var dataByTeacher = readSummerTeacherData();
+    var tree = traverseSummerPdfTree();
+
+    var folderKeys = Object.keys(tree.teachers);
+    if (folderKeys.length === 0 && tree.unassigned.length === 0 && Object.keys(roster).length === 0) {
+      ui.alert('Nothing to generate',
+        'Could not read any Summer School teacher folders, roster rows, or data. '
+        + 'Confirm you have access to the Public School Summer Camp folder plus the two source sheets '
+        + '(Email Tools > Debug: Drive Auth), then retry.',
+        ui.ButtonSet.OK);
+      return;
+    }
+
+    // Teacher universe = folder teachers UNION roster teachers, keyed by (campus, teacher).
+    var universe = {};
+    var k;
+    for (var fi = 0; fi < folderKeys.length; fi++) {
+      k = folderKeys[fi];
+      var info = tree.teachers[k];
+      universe[k] = {
+        campus: info.campus, teacher: info.teacher, pdfs: info.pdfs || [],
+        email: (roster[k] && roster[k].email) || '', dataRow: dataByTeacher[k] || null
+      };
+    }
+    var rosterKeys = Object.keys(roster);
+    for (var ri = 0; ri < rosterKeys.length; ri++) {
+      k = rosterKeys[ri];
+      if (universe[k]) continue;
+      var rinfo = roster[k];
+      universe[k] = {
+        campus: rinfo.campus, teacher: rinfo.displayName, pdfs: [],
+        email: rinfo.email || '', dataRow: dataByTeacher[k] || null
+      };
+    }
+    var universeKeys = Object.keys(universe).sort();
+
+    var nBlankTo = 0, nNoPdf = 0, nNoData = 0;
+    for (var c = 0; c < universeKeys.length; c++) {
+      var uu = universe[universeKeys[c]];
+      if (!uu.email) nBlankTo++;
+      if (!uu.pdfs.length) nNoPdf++;
+      if (!uu.dataRow) nNoData++;
+    }
+
+    var msg = (smokeMode ? 'SMOKE TEST: every draft goes to YOU (' + operator + ').' + NL + NL : '')
+      + 'Summer School Week 1+2:' + NL + NL
+      + 'Teacher/group drafts: ' + universeKeys.length + NL
+      + 'Unassigned drafts: ' + tree.unassigned.length + NL
+      + 'Blank To (no roster email): ' + nBlankTo + NL
+      + 'No PDF attached: ' + nNoPdf + NL
+      + 'No data table: ' + nNoData + NL + NL
+      + 'Drafts land in YOUR Gmail (' + operator + ').' + NL + 'Proceed?';
+    if (ui.alert('Confirm Summer School Generation', msg, ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+
+    var success = 0, failC = 0, errors = [];
+    var subject = CONFIG.SUMMER_SCHOOL.SUBJECT;
+
+    for (var t = 0; t < universeKeys.length; t++) {
+      var u = universe[universeKeys[t]];
+      var teacherObj = { name: u.teacher, firstName: _summerFirstName(u.teacher), campus: u.campus };
+      try {
+        var body = generateSummerSchoolWeek12Body(teacherObj, u.dataRow);
+        var toEmail;
+        if (smokeMode) { toEmail = operator; }
+        else if (u.email) { toEmail = u.email; }
+        else { toEmail = ''; body = _summerBlankToBanner(u.campus, u.teacher) + body; }
+        var res = _createSummerDraft(toEmail, subject, body, u.pdfs, teacherObj);
+        if (res.success) success++;
+        else { failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + res.error); }
+      } catch (e) {
+        failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + (e.message || e));
+      }
+    }
+
+    for (var ua = 0; ua < tree.unassigned.length; ua++) {
+      var un = tree.unassigned[ua];
+      var unObj = { name: 'Unassigned (' + un.campus + ')', firstName: 'team', campus: un.campus };
+      try {
+        var unBody = _summerUnassignedBanner(un.campus) + generateSummerSchoolWeek12Body(unObj, null);
+        var unTo = smokeMode ? operator : '';
+        var unRes = _createSummerDraft(unTo, subject + ' (Unassigned: ' + un.campus + ')', unBody, un.pdfs, unObj);
+        if (unRes.success) success++;
+        else { failC++; errors.push('Unassigned / ' + un.campus + ': ' + unRes.error); }
+      } catch (e) {
+        failC++; errors.push('Unassigned / ' + un.campus + ': ' + (e.message || e));
+      }
+    }
+
+    var done = (smokeMode ? 'SMOKE TEST complete. ' : 'Summer School complete. ')
+      + success + ' drafts created in your Gmail, ' + failC + ' failed.';
+    if (errors.length > 0) {
+      var es = errors.join(' | ');
+      if (es.length > CONFIG.LIMITS.ERROR_MSG_TRUNCATE) {
+        console.log('Full summer-school error list:' + NL + errors.join(NL));
+        es = es.substring(0, CONFIG.LIMITS.ERROR_MSG_TRUNCATE) + '... (' + errors.length + ' total; see logs)';
+      }
+      done += NL + NL + 'Errors: ' + es;
+    }
+    done += NL + NL + 'Open Gmail Drafts to review the To, the two-week table, and the attached PDFs.';
+    ui.alert('Done', done, ui.ButtonSet.OK);
+  } finally {
+    lock.releaseLock();
+  }
 }
