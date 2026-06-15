@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.11.1] - 2026-06-15
+
+### CHANGE: Summer School data table split into Week 1 + Week 2 rows
+
+The Summer School Week 1+2 email previously showed ONE combined row aggregating both weeks. Per request, it now shows TWO labeled rows so IMs see each week separately: rows "Week 1 (6/1-6/7)" and "Week 2 (6/8-6/14)", with columns Week, # Students, Avg Active Days, Avg Minutes/Student, Lessons Mastered.
+
+- `readSummerTeacherData` now returns per-(campus, teacher) PER-WEEK metrics (renamed `_aggregateSummerTeacherRows` -> `_summerWeeklyByTeacher`), keyed by week_start, instead of one combined figure.
+- `buildSummerSchoolTable` renders the 5-column, 2-row table from `CONFIG.SUMMER_SCHOOL.WEEK_STARTS` + new `WEEK_LABELS`. A week with no dashboard row renders dashes; same green/yellow/red color bands on Active Days + Minutes, now applied per week.
+- Per-week metrics: # Students = that week's count; Avg Active Days = that week's avg_active_days; Avg Minutes/Student = that week's total_minutes / students; Lessons Mastered = that week's lessons_mastered.
+
+### Verified
+
+- `node test_runner.js`: 111/111 PASS (grouper + table + body tests updated for the per-week shape).
+
+### Files modified
+
+- `Code.js` (CONFIG.WEEK_LABELS + `_summerWeeklyByTeacher` + per-week `buildSummerSchoolTable` + tests)
+- `package.json` (2.11.0 to 2.11.1)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (test count + per-week table note)
+
 ## [v2.11.0] - 2026-06-15
 
 ### FEATURE: Summer School Week 1+2 selectable in the Config Template dropdown (IM one-button flow)

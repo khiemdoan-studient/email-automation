@@ -20,6 +20,8 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.11.0**: Wired Summer School Week 1+2 into the standard Config Template + "Generate My Email Drafts" path so non-technical IMs use the same one-button flow as every other template, scoped to their School-IM Mapping schools (drafts addressed to teacher emails, landing in the IM's Gmail). Registered in TEMPLATES with a `summerSchool` routing flag; `generateDraftsForCurrentUser` short-circuits to a school-scoped `_runSummerSchoolCore` (the old `_runSummerSchool` is now a thin locking wrapper around that core). Removed the all-schools "Generate Summer School Drafts (Wk 1+2)" menu item (footgun); kept "Summer School: Smoke Test (to me)" for admin preview. Test count: 105 -> 110.
 
+**v2.11.1**: Split the Summer School data table into two labeled rows, Week 1 (6/1-6/7) and Week 2 (6/8-6/14), instead of one combined row. `readSummerTeacherData` now returns per-week metrics per (campus, teacher) (`_summerWeeklyByTeacher`), and `buildSummerSchoolTable` renders a 5-column, 2-row table from `CONFIG.SUMMER_SCHOOL.WEEK_STARTS` + `WEEK_LABELS` (a missing week shows dashes). Test count: 110 -> 111.
+
 For full per-version implementation details + version-specific bug post-mortems, see `IMPLEMENTATION_NOTES.md`.
 
 ## Architecture
@@ -197,7 +199,7 @@ Debug menu items - run when "Drive folders NOT FOUND" or "Service error: Drive" 
 | Set Date Range | `setDateRange` | Manual override for Config Date Range |
 | Set Template | `setTemplate` | Manual override for Config Template |
 | Refresh Template Dropdown | `setupTemplateDropdown` | Rebuilds Config Template data validation from `TEMPLATE_NAMES` |
-| Run Unit Tests | (test runner) | 110 test cases (v2.11.0) |
+| Run Unit Tests | (test runner) | 111 test cases (v2.11.1) |
 
 ## Important Implementation Details
 

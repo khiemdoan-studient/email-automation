@@ -28,7 +28,8 @@ var CONFIG = {
     ROSTER_ID: "1scEay0a8OR6vU3uJuxbHKWCEx_RVgSsRXF9naJh3XYw",  // "MAP Master Roster for Public School SW Sales"
     ROSTER_GID: 1317754525,                                     // Summer School roster tab
     PDF_CAMP_FOLDER_ID: "1wY4sMo0YgHy3Q85FU1UIdrEhtgdSvM5y",    // "Public School Summer Camp" (inside ROOT_FOLDER_ID)
-    WEEK_STARTS: ["2026-06-01", "2026-06-08"],                  // the two weeks aggregated (6/1-6/14)
+    WEEK_STARTS: ["2026-06-01", "2026-06-08"],                  // the two weeks shown (6/1-6/14)
+    WEEK_LABELS: ["Week 1 (6/1-6/7)", "Week 2 (6/8-6/14)"],     // data-table row labels, paired with WEEK_STARTS
     SUBJECT: "Studient: Week 2: Keep the Momentum Going"        // sun emoji dropped (no literal emoji in source)
   },
 
@@ -2289,31 +2290,42 @@ function runUnitTests() {
   var shdr = _summerHeaderIndex(['week_start', 'campus_name', 'teacher_name', 'students', 'avg_active_days', 'total_minutes', 'lessons_mastered']);
   _testAssertEq(results, 'summerHeaderIndex: normalized header -> index',
     [shdr['week start'], shdr['teacher name'], shdr['avg active days'], shdr['lessons mastered']], [0, 2, 4, 6]);
-  var aggOut = _aggregateSummerTeacherRows([
+  var wk = _summerWeeklyByTeacher([
     { key: 'k1', week: '2026-06-01', students: 21, active: 1.5, mins: 210, lessons: 241 },
-    { key: 'k1', week: '2026-06-08', students: 21, active: 3.5, mins: 420, lessons: 759 }
+    { key: 'k1', week: '2026-06-08', students: 20, active: 3.5, mins: 420, lessons: 759 }
   ]);
-  _testAssertEq(results, 'aggregateSummer: students = max weekly count', aggOut.k1.students, 21);
-  _testAssertEq(results, 'aggregateSummer: avgActiveDays = mean of weeks', aggOut.k1.avgActiveDays, 2.5);
-  _testAssertEq(results, 'aggregateSummer: avgMinsPerStudent = mean weekly per-student', aggOut.k1.avgMinsPerStudent, 15);
-  _testAssertEq(results, 'aggregateSummer: lessons = 2-week sum', aggOut.k1.lessonsMastered, 1000);
-  _testAssertEq(results, 'aggregateSummer: single week uses that week only',
-    _aggregateSummerTeacherRows([{ key: 's', week: '2026-06-01', students: 10, active: 4, mins: 1000, lessons: 50 }]).s.avgMinsPerStudent, 100);
-  var sst = buildSummerSchoolTable({ students: 18, avgActiveDays: 4.2, avgMinsPerStudent: 105, lessonsMastered: 320 });
-  _testAssertEq(results, 'summerTable: 4-col header',
-    sst.indexOf('# Students') !== -1 && sst.indexOf('Avg Active Days/Wk') !== -1
-      && sst.indexOf('Avg Minutes/Student/Wk') !== -1 && sst.indexOf('Lessons Mastered (2 wks)') !== -1, true);
-  _testAssertEq(results, 'summerTable: renders values',
-    sst.indexOf('>18<') !== -1 && sst.indexOf('4.2') !== -1 && sst.indexOf('105.0') !== -1 && sst.indexOf('>320<') !== -1, true);
+  _testAssertEq(results, 'summerWeekly: week 1 metrics (students/active/minsPerStudent/lessons)',
+    [wk.k1['2026-06-01'].students, wk.k1['2026-06-01'].activeDays, wk.k1['2026-06-01'].minsPerStudent, wk.k1['2026-06-01'].lessons], [21, 1.5, 10, 241]);
+  _testAssertEq(results, 'summerWeekly: week 2 metrics (students/active/minsPerStudent/lessons)',
+    [wk.k1['2026-06-08'].students, wk.k1['2026-06-08'].activeDays, wk.k1['2026-06-08'].minsPerStudent, wk.k1['2026-06-08'].lessons], [20, 3.5, 21, 759]);
+  _testAssertEq(results, 'summerWeekly: minsPerStudent guards divide-by-zero',
+    _summerWeeklyByTeacher([{ key: 'z', week: '2026-06-01', students: 0, active: 0, mins: 0, lessons: 0 }]).z['2026-06-01'].minsPerStudent, 0);
+  var sst = buildSummerSchoolTable({
+    '2026-06-01': { students: 18, activeDays: 4.2, minsPerStudent: 105, lessons: 120 },
+    '2026-06-08': { students: 17, activeDays: 3.1, minsPerStudent: 88, lessons: 200 }
+  });
+  _testAssertEq(results, 'summerTable: 5-col per-week header',
+    sst.indexOf('>Week</th>') !== -1 && sst.indexOf('# Students') !== -1 && sst.indexOf('Avg Active Days') !== -1
+      && sst.indexOf('Avg Minutes/Student') !== -1 && sst.indexOf('Lessons Mastered') !== -1, true);
+  _testAssertEq(results, 'summerTable: labels both weeks',
+    sst.indexOf('Week 1 (6/1-6/7)') !== -1 && sst.indexOf('Week 2 (6/8-6/14)') !== -1, true);
+  _testAssertEq(results, 'summerTable: renders week-1 and week-2 values',
+    sst.indexOf('>18<') !== -1 && sst.indexOf('4.2') !== -1 && sst.indexOf('105.0') !== -1 && sst.indexOf('>120<') !== -1
+      && sst.indexOf('>17<') !== -1 && sst.indexOf('3.1') !== -1 && sst.indexOf('88.0') !== -1 && sst.indexOf('>200<') !== -1, true);
+  _testAssertEq(results, 'summerTable: missing week renders dashes',
+    (buildSummerSchoolTable({ '2026-06-01': { students: 5, activeDays: 2, minsPerStudent: 30, lessons: 4 } }).match(/>--</g) || []).length, 4);
   _testAssertEq(results, 'summerTable: null dataRow -> fallback note',
     buildSummerSchoolTable(null).indexOf('summary not available') !== -1, true);
+  _testAssertEq(results, 'summerTable: empty object -> fallback note',
+    buildSummerSchoolTable({}).indexOf('summary not available') !== -1, true);
   var ssb = generateSummerSchoolWeek12Body({ name: 'Janice Allen', firstName: 'Janice' },
-    { students: 12, avgActiveDays: 3, avgMinsPerStudent: 80, lessonsMastered: 100 });
+    { '2026-06-01': { students: 12, activeDays: 3, minsPerStudent: 80, lessons: 100 },
+      '2026-06-08': { students: 12, activeDays: 4, minsPerStudent: 95, lessons: 130 } });
   _testAssertEq(results, 'summerBody: greets teacher', ssb.indexOf('Hi Janice,') !== -1, true);
   _testAssertEq(results, 'summerBody: contains the 3 moves',
     ssb.indexOf('Work the room') !== -1 && ssb.indexOf('Ask better questions') !== -1 && ssb.indexOf('Celebrate small wins') !== -1, true);
   _testAssertEq(results, 'summerBody: contains Timeback callout', ssb.indexOf('Thursday = Timeback') !== -1, true);
-  _testAssertEq(results, 'summerBody: embeds the data table', ssb.indexOf('Lessons Mastered (2 wks)') !== -1, true);
+  _testAssertEq(results, 'summerBody: embeds the per-week data table', ssb.indexOf('Lessons Mastered') !== -1 && ssb.indexOf('Week 1 (6/1-6/7)') !== -1, true);
   _testAssertEq(results, 'summerBody: no literal sun emoji', ssb.indexOf(String.fromCharCode(0x2600)) === -1, true);
   _testAssertEq(results, 'summerBody: no em dash (hard rule)', ssb.indexOf(String.fromCharCode(0x2014)) === -1, true);
 
@@ -4079,38 +4091,21 @@ function _findSummerDataTab(ss) {
 }
 
 /**
- * Aggregate per-(campus,teacher,week) rows into one combined 6/1-6/14 figure per
- * (campus, teacher). PURE (no Apps Script API) so it is unit-tested directly.
- *   # Students        = max weekly student count
- *   avgActiveDays     = mean of the weekly avg_active_days
- *   avgMinsPerStudent = mean of the weekly (total_minutes / students)
- *   lessonsMastered   = sum of the weekly lessons_mastered
+ * Group per-(campus,teacher,week) rows into PER-WEEK metrics per (campus,
+ * teacher). PURE (no Apps Script API) so it is unit-tested directly. Returns:
+ *   { key -> { weekStart -> { students, activeDays, minsPerStudent, lessons } } }
+ * Last row wins per (key, week); the dashboard tab is one row per teacher/week.
  */
-function _aggregateSummerTeacherRows(rows) {
-  var acc = {};
+function _summerWeeklyByTeacher(rows) {
+  var out = {};
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
-    if (!acc[r.key]) acc[r.key] = {};
-    acc[r.key][r.week] = { students: r.students, active: r.active, mins: r.mins, lessons: r.lessons };
-  }
-  var out = {};
-  for (var key in acc) {
-    var wk = acc[key];
-    var weeks = Object.keys(wk);
-    var maxStudents = 0, activeSum = 0, minsPerSum = 0, n = 0, lessons = 0;
-    for (var w = 0; w < weeks.length; w++) {
-      var d = wk[weeks[w]];
-      if (d.students > maxStudents) maxStudents = d.students;
-      activeSum += d.active;
-      minsPerSum += (d.students > 0 ? d.mins / d.students : 0);
-      lessons += d.lessons;
-      n++;
-    }
-    out[key] = {
-      students: maxStudents,
-      avgActiveDays: n ? activeSum / n : 0,
-      avgMinsPerStudent: n ? minsPerSum / n : 0,
-      lessonsMastered: lessons
+    if (!out[r.key]) out[r.key] = {};
+    out[r.key][r.week] = {
+      students: r.students,
+      activeDays: r.active,
+      minsPerStudent: (r.students > 0 ? r.mins / r.students : 0),
+      lessons: r.lessons
     };
   }
   return out;
@@ -4118,7 +4113,7 @@ function _aggregateSummerTeacherRows(rows) {
 
 /**
  * Read the Summer Performance Dashboard teacher-weekly-summary tab and return a
- * (campus, teacher)-keyed combined two-week figure. Fail-soft: returns {}.
+ * (campus, teacher)-keyed PER-WEEK metrics object. Fail-soft: returns {}.
  */
 function readSummerTeacherData() {
   var out = {};
@@ -4158,7 +4153,7 @@ function readSummerTeacherData() {
       lessons: (cLessons != null) ? (parseFloat(row[cLessons]) || 0) : 0
     });
   }
-  return _aggregateSummerTeacherRows(rows);
+  return _summerWeeklyByTeacher(rows);
 }
 
 // ---- PDF tree traversal (Camp -> School -> Teacher -> PDFs) ----
@@ -4238,31 +4233,48 @@ function traverseSummerPdfTree() {
 
 // ---- Rendering ----
 
-function buildSummerSchoolTable(dataRow) {
-  if (!dataRow) {
+function buildSummerSchoolTable(weekData) {
+  if (!weekData || Object.keys(weekData).length === 0) {
     return '<div style="background-color:#fff3cd;padding:10px;border-radius:6px;border:1px solid #ffe699;margin:8px 0;">'
       + '<p style="margin:0;"><em>Two-week summary not available for this teacher. See the attached weekly reports for the student-level detail.</em></p>'
       + '</div>';
   }
-  var students = Number(dataRow.students || 0);
-  var activeDays = Number(dataRow.avgActiveDays || 0);
-  var avgMins = Number(dataRow.avgMinsPerStudent || 0);
-  var lessons = Number(dataRow.lessonsMastered || 0);
-  var daysColor = activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN ? '#d9ead3'
-    : (activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW ? '#fff2cc' : '#f4cccc');
-  var minsColor = avgMins >= CONFIG.THRESHOLDS.AVG_MINS_GREEN ? '#d9ead3'
-    : (avgMins >= CONFIG.THRESHOLDS.AVG_MINS_YELLOW ? '#fff2cc' : '#f4cccc');
-  var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:640px;">';
+  var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:680px;">';
   html += '<tr style="background-color:#f3f3f3;">'
+    + '<th style="padding:8px;text-align:left;">Week</th>'
     + '<th style="padding:8px;"># Students</th>'
-    + '<th style="padding:8px;">Avg Active Days/Wk</th>'
-    + '<th style="padding:8px;">Avg Minutes/Student/Wk</th>'
-    + '<th style="padding:8px;">Lessons Mastered (2 wks)</th></tr>';
-  html += '<tr>'
-    + '<td style="padding:8px;">' + students + '</td>'
-    + '<td style="padding:8px;background-color:' + daysColor + ';">' + activeDays.toFixed(1) + '</td>'
-    + '<td style="padding:8px;background-color:' + minsColor + ';">' + avgMins.toFixed(1) + '</td>'
-    + '<td style="padding:8px;">' + lessons + '</td></tr>';
+    + '<th style="padding:8px;">Avg Active Days</th>'
+    + '<th style="padding:8px;">Avg Minutes/Student</th>'
+    + '<th style="padding:8px;">Lessons Mastered</th></tr>';
+  var weeks = CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
+  var labels = CONFIG.SUMMER_SCHOOL.WEEK_LABELS;
+  for (var wi = 0; wi < weeks.length; wi++) {
+    var label = labels[wi] || ('Week ' + (wi + 1));
+    var d = weekData[weeks[wi]];
+    if (!d) {
+      html += '<tr>'
+        + '<td style="padding:8px;text-align:left;">' + label + '</td>'
+        + '<td style="padding:8px;">--</td>'
+        + '<td style="padding:8px;">--</td>'
+        + '<td style="padding:8px;">--</td>'
+        + '<td style="padding:8px;">--</td></tr>';
+      continue;
+    }
+    var students = Number(d.students || 0);
+    var activeDays = Number(d.activeDays || 0);
+    var avgMins = Number(d.minsPerStudent || 0);
+    var lessons = Number(d.lessons || 0);
+    var daysColor = activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN ? '#d9ead3'
+      : (activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW ? '#fff2cc' : '#f4cccc');
+    var minsColor = avgMins >= CONFIG.THRESHOLDS.AVG_MINS_GREEN ? '#d9ead3'
+      : (avgMins >= CONFIG.THRESHOLDS.AVG_MINS_YELLOW ? '#fff2cc' : '#f4cccc');
+    html += '<tr>'
+      + '<td style="padding:8px;text-align:left;">' + label + '</td>'
+      + '<td style="padding:8px;">' + students + '</td>'
+      + '<td style="padding:8px;background-color:' + daysColor + ';">' + activeDays.toFixed(1) + '</td>'
+      + '<td style="padding:8px;background-color:' + minsColor + ';">' + avgMins.toFixed(1) + '</td>'
+      + '<td style="padding:8px;">' + lessons + '</td></tr>';
+  }
   html += '</table>';
   return html;
 }
