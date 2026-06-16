@@ -30,6 +30,7 @@ var CONFIG = {
     PDF_CAMP_FOLDER_ID: "1wY4sMo0YgHy3Q85FU1UIdrEhtgdSvM5y",    // "Public School Summer Camp" (inside ROOT_FOLDER_ID)
     WEEK_STARTS: ["2026-06-01", "2026-06-08"],                  // the two weeks shown (6/1-6/14)
     WEEK_LABELS: ["Week 1 (6/1-6/7)", "Week 2 (6/8-6/14)"],     // data-table row labels, paired with WEEK_STARTS
+    CONSOLIDATE_CAMPUSES: ["JRHS - Ridgeland Secondary Academy of Excellence"], // campuses where ALL groups go in ONE email (one teacher runs them all)
     SUBJECT: "Studient: Week 2: Keep the Momentum Going"        // sun emoji dropped (no literal emoji in source)
   },
 
@@ -2329,6 +2330,34 @@ function runUnitTests() {
   _testAssertEq(results, 'summerBody: no literal sun emoji', ssb.indexOf(String.fromCharCode(0x2600)) === -1, true);
   _testAssertEq(results, 'summerBody: no em dash (hard rule)', ssb.indexOf(String.fromCharCode(0x2014)) === -1, true);
 
+  // v2.12.0: JRHS-style consolidation (one email, all groups, Group x Week table)
+  _testAssertEq(results, 'isConsolidated: JRHS true',
+    _summerIsConsolidated('JRHS - Ridgeland Secondary Academy of Excellence'), true);
+  _testAssertEq(results, 'isConsolidated: JRHS underscored true',
+    _summerIsConsolidated('JRHS_-_Ridgeland_Secondary_Academy_of_Excellence'), true);
+  _testAssertEq(results, 'isConsolidated: other school false',
+    _summerIsConsolidated('JHMS - Hardeeville Junior Senior High School'), false);
+  var cons = buildSummerConsolidatedTable([
+    { teacher: 'Group 6B', dataRow: { '2026-06-01': { students: 9, activeDays: 2, minsPerStudent: 40, lessons: 11 }, '2026-06-08': { students: 9, activeDays: 4, minsPerStudent: 90, lessons: 22 } } },
+    { teacher: 'Group 6A', dataRow: { '2026-06-01': { students: 10, activeDays: 1, minsPerStudent: 30, lessons: 5 }, '2026-06-08': { students: 12, activeDays: 4, minsPerStudent: 100, lessons: 18 } } }
+  ]);
+  _testAssertEq(results, 'consolidatedTable: Group + Week header',
+    cons.indexOf('>Group</th>') !== -1 && cons.indexOf('>Week</th>') !== -1 && cons.indexOf('Lessons Mastered') !== -1, true);
+  _testAssertEq(results, 'consolidatedTable: sorts groups (6A before 6B)',
+    cons.indexOf('Group 6A') < cons.indexOf('Group 6B'), true);
+  _testAssertEq(results, 'consolidatedTable: both weeks labeled per group',
+    (cons.split('Week 1 (6/1-6/7)').length - 1) === 2 && (cons.split('Week 2 (6/8-6/14)').length - 1) === 2, true);
+  _testAssertEq(results, 'consolidatedTable: renders week values',
+    cons.indexOf('>10<') !== -1 && cons.indexOf('100.0') !== -1 && cons.indexOf('>18<') !== -1, true);
+  _testAssertEq(results, 'consolidatedTable: missing week renders dashes',
+    (buildSummerConsolidatedTable([{ teacher: 'Group 7A', dataRow: { '2026-06-01': { students: 3, activeDays: 1, minsPerStudent: 20, lessons: 2 } } }]).match(/>--</g) || []).length, 4);
+  var cbody = generateSummerSchoolConsolidatedBody('JRHS - Ridgeland Secondary Academy of Excellence', [
+    { teacher: 'Group 8A', dataRow: { '2026-06-01': { students: 10, activeDays: 1.6, minsPerStudent: 38, lessons: 79 } } }
+  ]);
+  _testAssertEq(results, 'consolidatedBody: greets + Group table + the 3 moves',
+    cbody.indexOf('Hi team,') !== -1 && cbody.indexOf('>Group</th>') !== -1 && cbody.indexOf('Work the room') !== -1, true);
+  _testAssertEq(results, 'consolidatedBody: no em dash', cbody.indexOf(String.fromCharCode(0x2014)) === -1, true);
+
   // v2.11.0: Summer School template registration (dropdown + routing flag)
   _testAssertEq(results, 'summer template: registered in TEMPLATES',
     !!TEMPLATES['Summer School Week 1+2'], true);
@@ -4279,7 +4308,9 @@ function buildSummerSchoolTable(weekData) {
   return html;
 }
 
-function generateSummerSchoolWeek12Body(teacher, dataRow) {
+// The shared copy (focus + checklist + 3 moves + Timeback + closing) used by both
+// the per-teacher body and the consolidated (JRHS) body. Returns section strings.
+function _summerBodyCopySections() {
   var greenDot = dotSpan('#2e7d32');
   var checklist = ['Asking questions.', 'Keeping energy high.', 'Helping students push through frustration.', 'More coaching in the room.'];
   var checkHtml = '<ul style="list-style:none;padding-left:0;margin:8px 0;">';
@@ -4302,9 +4333,7 @@ function generateSummerSchoolWeek12Body(teacher, dataRow) {
     + '<p style="margin:0;">Reminders all week: Stay focused. Hit your goals. Earn your Timeback activity.</p>'
     + '</div>';
 
-  return wrapEmailHtml([
-    buildGreeting(teacher),
-    buildSummerSchoolTable(dataRow),
+  return [
     '<p style="margin:14px 0 4px 0;font-size:16px;">' + dotSpan('#DAA520') + "<strong>Weekly Focus: Coach, don't monitor.</strong></p>",
     '<p style="margin:0 0 8px 0;">Students know the routine now. This week is about staying present.</p>',
     checkHtml,
@@ -4312,12 +4341,88 @@ function generateSummerSchoolWeek12Body(teacher, dataRow) {
     movesHtml,
     timebackBox,
     '<p style="margin:12px 0 0 0;">' + "Let's keep the energy high and the excuses low." + '</p>'
-  ]);
+  ];
+}
+
+function generateSummerSchoolWeek12Body(teacher, dataRow) {
+  return wrapEmailHtml([buildGreeting(teacher), buildSummerSchoolTable(dataRow)].concat(_summerBodyCopySections()));
+}
+
+// v2.12.0: consolidated body for a campus where one teacher runs every group
+// (CONFIG.SUMMER_SCHOOL.CONSOLIDATE_CAMPUSES). One Group x Week table + same copy.
+function generateSummerSchoolConsolidatedBody(campus, entries) {
+  return wrapEmailHtml([buildGreeting({ firstName: 'team' }), buildSummerConsolidatedTable(entries)].concat(_summerBodyCopySections()));
+}
+
+// v2.12.0: one table for ALL groups of a consolidated campus -- a row per group
+// per week (Group, Week, # Students, Avg Active Days, Avg Minutes/Student, Lessons).
+function buildSummerConsolidatedTable(entries) {
+  var weeks = CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
+  var labels = CONFIG.SUMMER_SCHOOL.WEEK_LABELS;
+  var sorted = entries.slice().sort(function (a, b) {
+    var an = a.teacher || '', bn = b.teacher || '';
+    return an < bn ? -1 : (an > bn ? 1 : 0);
+  });
+  var html = '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;width:100%;max-width:760px;">';
+  html += '<tr style="background-color:#f3f3f3;">'
+    + '<th style="padding:8px;text-align:left;">Group</th>'
+    + '<th style="padding:8px;text-align:left;">Week</th>'
+    + '<th style="padding:8px;"># Students</th>'
+    + '<th style="padding:8px;">Avg Active Days</th>'
+    + '<th style="padding:8px;">Avg Minutes/Student</th>'
+    + '<th style="padding:8px;">Lessons Mastered</th></tr>';
+  for (var e = 0; e < sorted.length; e++) {
+    var entry = sorted[e];
+    var weekData = entry.dataRow || {};
+    for (var wi = 0; wi < weeks.length; wi++) {
+      var label = labels[wi] || ('Week ' + (wi + 1));
+      var d = weekData[weeks[wi]];
+      if (!d) {
+        html += '<tr>'
+          + '<td style="padding:8px;text-align:left;">' + entry.teacher + '</td>'
+          + '<td style="padding:8px;text-align:left;">' + label + '</td>'
+          + '<td style="padding:8px;">--</td><td style="padding:8px;">--</td><td style="padding:8px;">--</td><td style="padding:8px;">--</td></tr>';
+        continue;
+      }
+      var students = Number(d.students || 0);
+      var activeDays = Number(d.activeDays || 0);
+      var avgMins = Number(d.minsPerStudent || 0);
+      var lessons = Number(d.lessons || 0);
+      var daysColor = activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN ? '#d9ead3' : (activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW ? '#fff2cc' : '#f4cccc');
+      var minsColor = avgMins >= CONFIG.THRESHOLDS.AVG_MINS_GREEN ? '#d9ead3' : (avgMins >= CONFIG.THRESHOLDS.AVG_MINS_YELLOW ? '#fff2cc' : '#f4cccc');
+      html += '<tr>'
+        + '<td style="padding:8px;text-align:left;">' + entry.teacher + '</td>'
+        + '<td style="padding:8px;text-align:left;">' + label + '</td>'
+        + '<td style="padding:8px;">' + students + '</td>'
+        + '<td style="padding:8px;background-color:' + daysColor + ';">' + activeDays.toFixed(1) + '</td>'
+        + '<td style="padding:8px;background-color:' + minsColor + ';">' + avgMins.toFixed(1) + '</td>'
+        + '<td style="padding:8px;">' + lessons + '</td></tr>';
+    }
+  }
+  html += '</table>';
+  return html;
 }
 
 // ---- Orchestration ----
 
 function generateSummerSchoolSmokeTest() { _runSummerSchool({ smokeMode: true }); }
+
+// v2.12.0: campuses in CONFIG.SUMMER_SCHOOL.CONSOLIDATE_CAMPUSES get ONE email
+// for all their groups (one teacher runs them), not one draft per group.
+function _summerIsConsolidated(campus) {
+  var list = CONFIG.SUMMER_SCHOOL.CONSOLIDATE_CAMPUSES || [];
+  var nc = normalizeFolderName(campus);
+  for (var i = 0; i < list.length; i++) {
+    if (normalizeFolderName(list[i]) === nc) return true;
+  }
+  return false;
+}
+
+function _summerConsolidatedBanner(campus) {
+  return '<div style="background-color:#fff3cd;padding:8px 10px;border-radius:6px;border:1px solid #ffe699;margin:0 0 10px 0;font-size:13px;">'
+    + '<strong>To: (fill in).</strong> This email consolidates every group at ' + _esc(campus) + ' (one teacher runs them all). Add the teacher address before sending.'
+    + '</div>';
+}
 
 function _summerBlankToBanner(campus, teacher) {
   return '<div style="background-color:#fff3cd;padding:8px 10px;border-radius:6px;border:1px solid #ffe699;margin:0 0 10px 0;font-size:13px;">'
@@ -4430,6 +4535,23 @@ function _runSummerSchoolCore(opts) {
   }
   var universeKeys = Object.keys(universe).sort();
 
+  // v2.12.0: split out CONSOLIDATE_CAMPUSES (e.g. JRHS) -- one email per such
+  // campus with all its group PDFs + a single Group x Week table, instead of one
+  // draft per group. Everything else stays one draft per teacher/group.
+  var consolidated = {};
+  var normalKeys = [];
+  for (var pk = 0; pk < universeKeys.length; pk++) {
+    var pe = universe[universeKeys[pk]];
+    if (_summerIsConsolidated(pe.campus)) {
+      var cck = normalizeFolderName(pe.campus);
+      if (!consolidated[cck]) consolidated[cck] = { campus: pe.campus, entries: [] };
+      consolidated[cck].entries.push(pe);
+    } else {
+      normalKeys.push(universeKeys[pk]);
+    }
+  }
+  var consolidatedCampuses = Object.keys(consolidated);
+
   var unassigned = [];
   for (var uai = 0; uai < tree.unassigned.length; uai++) {
     if (campusAllowed(tree.unassigned[uai].campus)) unassigned.push(tree.unassigned[uai]);
@@ -4446,11 +4568,22 @@ function _runSummerSchoolCore(opts) {
   }
 
   var nBlankTo = 0, nNoPdf = 0, nNoData = 0;
-  for (var c = 0; c < universeKeys.length; c++) {
-    var uu = universe[universeKeys[c]];
+  for (var c = 0; c < normalKeys.length; c++) {
+    var uu = universe[normalKeys[c]];
     if (!uu.email) nBlankTo++;
     if (!uu.pdfs.length) nNoPdf++;
     if (!uu.dataRow) nNoData++;
+  }
+  for (var cci = 0; cci < consolidatedCampuses.length; cci++) {
+    var cg0 = consolidated[consolidatedCampuses[cci]];
+    nBlankTo++;  // consolidated emails are always blank-To (groups have no roster email)
+    var anyPdf = false, anyData = false;
+    for (var ce0 = 0; ce0 < cg0.entries.length; ce0++) {
+      if (cg0.entries[ce0].pdfs && cg0.entries[ce0].pdfs.length) anyPdf = true;
+      if (cg0.entries[ce0].dataRow) anyData = true;
+    }
+    if (!anyPdf) nNoPdf++;
+    if (!anyData) nNoData++;
   }
 
   var scopeLine = '';
@@ -4464,7 +4597,8 @@ function _runSummerSchoolCore(opts) {
   var msg = (smokeMode ? 'SMOKE TEST: every draft goes to YOU (' + operator + ').' + NL + NL : '')
     + 'Summer School Week 1+2:' + NL + NL
     + scopeLine
-    + 'Teacher/group drafts: ' + universeKeys.length + NL
+    + 'Teacher/group drafts: ' + (normalKeys.length + consolidatedCampuses.length)
+      + (consolidatedCampuses.length ? ' (incl. ' + consolidatedCampuses.length + ' consolidated school email(s))' : '') + NL
     + 'Unassigned drafts: ' + unassigned.length + NL
     + 'Blank To (no roster email): ' + nBlankTo + NL
     + 'No PDF attached: ' + nNoPdf + NL
@@ -4475,8 +4609,8 @@ function _runSummerSchoolCore(opts) {
   var success = 0, failC = 0, errors = [];
   var subject = CONFIG.SUMMER_SCHOOL.SUBJECT;
 
-  for (var t = 0; t < universeKeys.length; t++) {
-    var u = universe[universeKeys[t]];
+  for (var t = 0; t < normalKeys.length; t++) {
+    var u = universe[normalKeys[t]];
     var teacherObj = { name: u.teacher, firstName: _summerFirstName(u.teacher), campus: u.campus };
     try {
       var body = generateSummerSchoolWeek12Body(teacherObj, u.dataRow);
@@ -4489,6 +4623,31 @@ function _runSummerSchoolCore(opts) {
       else { failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + res.error); }
     } catch (e) {
       failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + (e.message || e));
+    }
+  }
+
+  for (var ci = 0; ci < consolidatedCampuses.length; ci++) {
+    var cgrp = consolidated[consolidatedCampuses[ci]];
+    var cObj = { name: cgrp.campus + ' (all groups)', firstName: 'team', campus: cgrp.campus };
+    try {
+      var cEntries = cgrp.entries.slice().sort(function (a, b) {
+        var an = a.teacher || '', bn = b.teacher || '';
+        return an < bn ? -1 : (an > bn ? 1 : 0);
+      });
+      var cPdfs = [];
+      for (var cee = 0; cee < cEntries.length; cee++) {
+        var ep = cEntries[cee].pdfs || [];
+        for (var ppi = 0; ppi < ep.length; ppi++) cPdfs.push(ep[ppi]);
+      }
+      var cBody = generateSummerSchoolConsolidatedBody(cgrp.campus, cEntries);
+      var cTo;
+      if (smokeMode) { cTo = operator; }
+      else { cTo = ''; cBody = _summerConsolidatedBanner(cgrp.campus) + cBody; }
+      var cRes = _createSummerDraft(cTo, subject + ' (' + cgrp.campus + ' - all groups)', cBody, cPdfs, cObj);
+      if (cRes.success) success++;
+      else { failC++; errors.push('Consolidated / ' + cgrp.campus + ': ' + cRes.error); }
+    } catch (e) {
+      failC++; errors.push('Consolidated / ' + cgrp.campus + ': ' + (e.message || e));
     }
   }
 

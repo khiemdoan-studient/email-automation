@@ -1,6 +1,6 @@
 {
   "name": "email-automation",
-  "version": "2.11.1",
+  "version": "2.12.0",
   "description": "Apps Script email automation for teacher weekly reports.",
   "private": true,
   "engines": {

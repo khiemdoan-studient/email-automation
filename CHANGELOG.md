@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.12.0] - 2026-06-15
+
+### FEATURE: JRHS groups consolidated into one email (one teacher runs all groups)
+
+JRHS (Ridgeland Secondary Academy of Excellence) runs every student group under a single teacher, so per request it now gets ONE consolidated email instead of one draft per group: all the JRHS group PDFs attached together, plus a single table with a row per group per week (Group, Week, # Students, Avg Active Days, Avg Minutes/Student, Lessons Mastered).
+
+- New `CONFIG.SUMMER_SCHOOL.CONSOLIDATE_CAMPUSES` (default `["JRHS - Ridgeland Secondary Academy of Excellence"]`). Add a campus here to consolidate it; everything else stays one-email-per-teacher.
+- `_runSummerSchoolCore` partitions consolidate-campus entries out of the normal per-teacher loop and emits one draft per such campus: all the groups' PDFs gathered (sorted by group, then date), a `buildSummerConsolidatedTable` Group x Week table, blank-To with a fill-in banner (groups have no roster email; the IM adds the single teacher).
+- `Unassigned` stays its own separate draft. The consolidated subject gets a " (<campus> - all groups)" suffix.
+- Refactored the shared body copy (focus + checklist + 3 moves + Timeback + closing) into `_summerBodyCopySections`, used by both the per-teacher body and the new `generateSummerSchoolConsolidatedBody`.
+- The confirmation dialog's "Teacher/group drafts" count now reflects consolidated school emails (JRHS's 7 group folders collapse to 1).
+
+### Verified
+
+- `node test_runner.js`: 121/121 PASS (+10 consolidation tests: routing flag, Group x Week table sort/labels/values/dashes, consolidated body).
+
+### Files modified
+
+- `Code.js` (CONSOLIDATE_CAMPUSES + `_summerIsConsolidated` + `buildSummerConsolidatedTable` + `generateSummerSchoolConsolidatedBody` + `_summerBodyCopySections` refactor + `_summerConsolidatedBanner` + `_runSummerSchoolCore` partition/loops + tests)
+- `package.json` (2.11.1 to 2.12.0)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (test count + consolidation note)
+
 ## [v2.11.1] - 2026-06-15
 
 ### CHANGE: Summer School data table split into Week 1 + Week 2 rows
