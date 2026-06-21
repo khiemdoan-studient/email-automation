@@ -694,6 +694,14 @@ function processRetry(selectedTeacherStrs) {
     return '<span style="color:#c62828;">Another generation is in progress. Wait and try again.</span>';
   }
   try {
+    _runIdCache = null;
+    // Reset cross-template caches so processRetry reads fresh sheet data,
+    // not values cached by a prior generateDraftsForCurrentUser call in the
+    // same warm Apps Script V8 process. Mirrors generateDraftsForCurrentUser
+    // lines 803-807 and generateSmokeTest lines 472-477.
+    _yearTotalsCache = null;
+    _studentHighlightsCache = null;
+    _mapScoresCache = null;
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var currentUserEmail = Session.getActiveUser().getEmail().toLowerCase();
     var mySchools = getMySchools(currentUserEmail);
@@ -867,13 +875,15 @@ function generateDraftsForCurrentUser() {
 
   // Validate metrics data exists for selected week
   var weekStart = dateRange.split('_to_')[0];
-  var metricsExist = checkMetricsExistForWeek(weekStart);
-
   // v2.7.0: Load data BEFORE the confirmation dialog so we can show accurate
   // draft-vs-skip counts. Previously metrics were loaded post-confirmation +
   // looked up inside the per-teacher loop, which meant the dialog couldn't
   // distinguish "22 teachers in roster" from "12 of those will get drafts".
-  var teacherMetrics = metricsExist ? getTeacherMetricsForWeek(weekStart) : {};
+  // getTeacherMetricsForWeek returns {} when the sheet is absent or has no
+  // matching rows, so one read is sufficient — no need for a separate
+  // checkMetricsExistForWeek pre-flight that reads the same tab.
+  var teacherMetrics = getTeacherMetricsForWeek(weekStart);
+  var metricsExist = Object.keys(teacherMetrics).length > 0;
   var allWinners = getStudentWinners();
 
   // v2.7.0 + v2.8.0: Branch on template. SC Final Email uses year-cumulative
@@ -2538,8 +2548,8 @@ function getOverallTrendColor(metricsArray) {
     totalActiveDays += parseFloat(metricsArray[i].activeDays) || 0;
   }
   var avg = totalActiveDays / metricsArray.length;
-  if (avg >= 3.95) return 'green';
-  if (avg >= 2.95) return 'yellow';
+  if (avg >= CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN) return 'green';
+  if (avg >= CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW) return 'yellow';
   return 'red';
 }
 
@@ -2697,7 +2707,7 @@ function buildYearKpiStrip(totals) {
  * v2.6.5: SC Final Email — 2 student spotlight cards.
  * `highlights` is the per-teacher array from getStudentYearHighlights.
  * Narrative templates by leading_metric:
- *   'grade_levels': "<student> mastered <N> grade levels in <subject> this year, showing exceptional growth through Motivention."
+ *   'grade_levels': "<student> mastered <N> grade levels this year, showing exceptional growth through Motivention."
  *   'lessons':     "<student> worked diligently to master <N> lessons this year, leading the class."
  */
 function buildStudentSpotlights(highlights) {

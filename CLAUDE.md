@@ -22,7 +22,7 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.11.1**: Split the Summer School data table into two labeled rows, Week 1 (6/1-6/7) and Week 2 (6/8-6/14), instead of one combined row. `readSummerTeacherData` now returns per-week metrics per (campus, teacher) (`_summerWeeklyByTeacher`), and `buildSummerSchoolTable` renders a 5-column, 2-row table from `CONFIG.SUMMER_SCHOOL.WEEK_STARTS` + `WEEK_LABELS` (a missing week shows dashes). Test count: 110 -> 111.
 
-**v2.12.0**: JRHS (and any campus in `CONFIG.SUMMER_SCHOOL.CONSOLIDATE_CAMPUSES`) now gets ONE consolidated Summer School email for all its groups (one teacher runs them) instead of one draft per group: every group PDF attached + a single Group x Week table (`buildSummerConsolidatedTable` / `generateSummerSchoolConsolidatedBody`), blank-To with a fill-in banner. `_runSummerSchoolCore` partitions consolidate-campuses out of the per-teacher loop; the shared body copy was extracted to `_summerBodyCopySections`. Test count: 111 -> 121.
+**v2.12.0**: JRHS (and any campus in `CONFIG.SUMMER_SCHOOL.CONSOLIDATE_CAMPUSES`) now gets ONE consolidated Summer School email for all its groups (one teacher runs them) instead of one draft per group: every group PDF attached + a single Group x Week table (`buildSummerConsolidatedTable` / `generateSummerSchoolConsolidatedBody`), blank-To with a fill-in banner. `_runSummerSchoolCore` partitions consolidate-campuses out of the per-teacher loop; the shared body copy was extracted to `_summerBodyCopySections`. Test count: 111 -> 122.
 
 For full per-version implementation details + version-specific bug post-mortems, see `IMPLEMENTATION_NOTES.md`.
 
