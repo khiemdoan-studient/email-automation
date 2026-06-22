@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.13.0] - 2026-06-22
+
+### FEATURE: "Summer School Week 3" template (per-district: Jasper vs Allendale)
+
+Adds a second summer template alongside "Summer School Week 1+2". Week 3 is per-district: Jasper schools (JHMS, JHES, JRHS, JRES) get a "Finish Strong" body + subject "Studient - Week 4: Finish Strong"; Allendale schools (AFMS, AFES) get a "Push Through the Slump" body + subject "Studient - Week 3: Push Through the Slump". Single week (6/15-6/21); one data row labeled "Week of 6/15 (6/15-6/21)"; each teacher's 6/15 PDF attached. JRHS still consolidated (Jasper body). Same external-source flow, School-IM scoping, blank-To rules.
+
+Made the summer flow TEMPLATE-DRIVEN so both templates share one core:
+- Each summer TEMPLATES entry carries a `summerConfig`: `weekStarts`, `weekLabels`, and either a single `variant` (subject + copy) or `byDistrict` `variants` (jasper/allendale). `CONFIG.SUMMER_SCHOOL.WEEK_STARTS/WEEK_LABELS/SUBJECT` stay as the Week 1+2 defaults; added `JASPER_CAMPUSES`.
+- `_runSummerSchoolCore(opts.templateName)` resolves the config and, per teacher / consolidated campus / unassigned campus, picks the subject + body copy by `_summerDistrict(campus)`. The readers + table builders (`readSummerTeacherData`, `traverseSummerPdfTree`, `_collectSummerPdfs`, `buildSummerSchoolTable`, `buildSummerConsolidatedTable`) now take an optional `weekStarts`/`weekLabels` (defaulting to CONFIG, so Week 1+2 output is byte-identical).
+- New helpers: `_summerDistrict`, `_summerTemplateConfig`, `_summerVariant`, `_summerComposeBody`, `_summerWeek3JasperCopy`, `_summerWeek3AllendaleCopy`.
+- The PDF traversal now skips non-school folders whose name contains "archive" (a new "ZZARCHIVE (Wrong Title PDF Report)" folder appeared under the camp root).
+- `generateSummerSchoolSmokeTest` smoke-tests whichever summer template is selected in Config (defaults to Week 1+2).
+
+### Verified
+
+- `node test_runner.js`: 139/139 PASS (+18: district routing, per-template config, variant subjects, both Week 3 copies with no em-dash/sun, single-week table, archive-skip, Week 3 registration). Existing Week 1+2 tests unchanged + green.
+- Camp root unchanged (`1wY4sMo...`); 6/15 PDFs confirmed present for every teacher/group this session.
+- Live draft creation runs in the operator's Apps Script session (operator-run).
+
+### Files modified
+
+- `Code.js` (CONFIG JASPER_CAMPUSES + parameterized readers/table + template-driven core + 2 Week 3 bodies + helpers + Week 3 registration + tests)
+- `package.json` (2.12.0 to 2.13.0)
+- `CHANGELOG.md` (this entry)
+- `CLAUDE.md` (Week 3 template row + v2.13.0 note + test count)
+- `write_doc.py` (Week 3 mention)
+
 ## [v2.12.0] - 2026-06-15
 
 ### FEATURE: JRHS groups consolidated into one email (one teacher runs all groups)

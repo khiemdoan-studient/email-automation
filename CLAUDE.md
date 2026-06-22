@@ -4,7 +4,7 @@
 
 Google Apps Script email automation system that generates weekly Gmail drafts for teachers with performance metrics tables and PDF attachments. Built for non-technical Implementation Managers (IMs) to run via a custom menu in Google Sheets.
 
-**v2.0**: IMs can select any available week and any email template before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks. (Originally launched with 10 templates: Week 0-8 + Wrap Up. Now 15.)
+**v2.0**: IMs can select any available week and any email template before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks. (Originally launched with 10 templates: Week 0-8 + Wrap Up. Now 16.)
 
 **v2.0.3**: Bulletproof root folder lookup via folder ID + comprehensive Drive diagnostic. Drive structure verified against live production Drive (April 2026).
 
@@ -23,6 +23,8 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 **v2.11.1**: Split the Summer School data table into two labeled rows, Week 1 (6/1-6/7) and Week 2 (6/8-6/14), instead of one combined row. `readSummerTeacherData` now returns per-week metrics per (campus, teacher) (`_summerWeeklyByTeacher`), and `buildSummerSchoolTable` renders a 5-column, 2-row table from `CONFIG.SUMMER_SCHOOL.WEEK_STARTS` + `WEEK_LABELS` (a missing week shows dashes). Test count: 110 -> 111.
 
 **v2.12.0**: JRHS (and any campus in `CONFIG.SUMMER_SCHOOL.CONSOLIDATE_CAMPUSES`) now gets ONE consolidated Summer School email for all its groups (one teacher runs them) instead of one draft per group: every group PDF attached + a single Group x Week table (`buildSummerConsolidatedTable` / `generateSummerSchoolConsolidatedBody`), blank-To with a fill-in banner. `_runSummerSchoolCore` partitions consolidate-campuses out of the per-teacher loop; the shared body copy was extracted to `_summerBodyCopySections`. Test count: 111 -> 122.
+
+**v2.13.0**: Added a second summer template, "Summer School Week 3", that is PER-DISTRICT: Jasper schools (JHMS/JHES/JRHS/JRES) get a "Finish Strong" body + subject, Allendale schools (AFMS/AFES) get "Push Through the Slump". Single week 6/15-6/21. Generalized the summer flow to be TEMPLATE-DRIVEN: each summer TEMPLATES entry carries a `summerConfig` (`weekStarts`/`weekLabels` + a single `variant` or `byDistrict` `variants`); `_runSummerSchoolCore(opts.templateName)` resolves it and picks subject+copy by `_summerDistrict(campus)` (via `CONFIG.SUMMER_SCHOOL.JASPER_CAMPUSES`). Readers/table builders take optional `weekStarts`/`weekLabels` (default to CONFIG so Week 1+2 is byte-identical). Traversal skips camp folders whose name contains "archive". New: `_summerWeek3JasperCopy`, `_summerWeek3AllendaleCopy`, `_summerComposeBody`, `_summerVariant`, `_summerTemplateConfig`. Test count: 121 -> 139.
 
 For full per-version implementation details + version-specific bug post-mortems, see `IMPLEMENTATION_NOTES.md`.
 
@@ -55,7 +57,7 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
 1. **Config** (A1:B4)
    - `Date Range` - dropdown from Available Weeks tab (e.g., `2026-03-30_to_2026-04-05`)
    - `Root Folder Name` - informational only; code uses hardcoded constants
-   - `Template` - dropdown of 15 templates (incl. Summer School Week 1+2, v2.11.0). Refresh via `Email Tools > Refresh Template Dropdown` after Code.gs changes.
+   - `Template` - dropdown of 16 templates (incl. Summer School Week 1+2 + Week 3, v2.11-v2.13). Refresh via `Email Tools > Refresh Template Dropdown` after Code.gs changes.
 
 2. **School-IM Mapping** (A1:C11)
    - Column A: School Folder Name (legacy underscored form - kept for backward compat)
@@ -141,6 +143,7 @@ Bruna and Mark's Schools - Weekly Report/   <- ROOT_FOLDER_NAME / ROOT_FOLDER_ID
 | 4/27: Last Week of Motivention | Data crunch & point calculation complete: (+ 3 non-boring updates...) | No (also omits **trend alert** as of v2.3.0) |
 | SC Final Email: Growth & Hardwork = Results | Motivention Store Closing Friday (+ Impressive Results) | No (year-cumulative spotlights instead) |
 | Summer School Week 1+2 | Studient: Week 2: Keep the Momentum Going | No (external sources, scoped per School-IM Mapping) |
+| Summer School Week 3 | Studient - Week 4: Finish Strong (Jasper) / Week 3: Push Through the Slump (Allendale) | No (per-district; external sources) |
 
 **Summer School Week 1+2** (v2.10.0; dropdown-integrated in v2.11.0) is selectable here like any other template: set Config Template to it and run "Generate My Email Drafts", and it drafts that IM's School-IM-Mapping summer schools from EXTERNAL sources (Summer Performance Dashboard + MAP Master Roster + the Public School Summer Camp Drive tree), not the active spreadsheet. The `summerSchool` flag routes `generateDraftsForCurrentUser` to `_runSummerSchoolCore`, bypassing the normal metrics/PDF loop. "Summer School: Smoke Test (to me)" remains for an all-schools admin preview.
 
@@ -201,7 +204,7 @@ Debug menu items - run when "Drive folders NOT FOUND" or "Service error: Drive" 
 | Set Date Range | `setDateRange` | Manual override for Config Date Range |
 | Set Template | `setTemplate` | Manual override for Config Template |
 | Refresh Template Dropdown | `setupTemplateDropdown` | Rebuilds Config Template data validation from `TEMPLATE_NAMES` |
-| Run Unit Tests | (test runner) | 121 test cases (v2.12.0) |
+| Run Unit Tests | (test runner) | 139 test cases (v2.13.0) |
 
 ## Important Implementation Details
 
@@ -228,4 +231,4 @@ For color thresholds, testing workflow, and troubleshooting recipes, see `IMPLEM
 - Sheet tab names + column letters (Y/Z/AA for Teacher Email)
 - Drive folder structure (school name format)
 - Related-project function names (changes upstream break this app)
-- **Summer School (v2.10.0)** `CONFIG.SUMMER_SCHOOL` IDs/gids: Data `1pbVCjxsn...` (gid 1749344035), Roster `1scEay0a...` (gid 1317754525), PDF Camp folder `1wY4sMo0...`. PDF tree is nested Camp -> School -> Teacher -> `{Teacher}_XP_Report_{YYYY-MM-DD}.pdf` (weeks `2026-06-01` + `2026-06-08`). Match key = normalized (campus, teacher). Roster columns matched by HEADER NAME (Campus / Summer School Teacher / Summer School Teacher Email); dashboard tab found by header signature (`teacher_name` + `avg_active_days` + `doom_loop_pct`). If the dashboard renames those headers or the roster drops the "Summer School Teacher Email" column, teachers silently draft blank-To / no-table. JHES teachers + JRHS groups have no roster email by design (blank-To).
+- **Summer School (v2.10.0+)** `CONFIG.SUMMER_SCHOOL` IDs/gids: Data `1pbVCjxsn...` (gid 1749344035), Roster `1scEay0a...` (gid 1317754525), PDF Camp folder `1wY4sMo0...`. PDF tree is nested Camp -> School -> Teacher -> `{Teacher}_XP_Report_{YYYY-MM-DD}.pdf`; traversal skips camp subfolders whose name contains "archive". The week window + subject + body copy are PER-TEMPLATE (each summer TEMPLATES entry's `summerConfig`): Week 1+2 = weeks `2026-06-01`+`2026-06-08`; Week 3 = week `2026-06-15`, per-district via `JASPER_CAMPUSES` (Jasper "Finish Strong" vs Allendale "Push Through the Slump"). Match key = normalized (campus, teacher). Roster columns matched by HEADER NAME (Campus / Summer School Teacher / Summer School Teacher Email); dashboard tab found by header signature (`teacher_name` + `avg_active_days` + `doom_loop_pct`). If the dashboard renames those headers or the roster drops the "Summer School Teacher Email" column, teachers silently draft blank-To / no-table. JHES teachers + JRHS groups have no roster email by design (blank-To).

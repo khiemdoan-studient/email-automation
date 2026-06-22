@@ -31,7 +31,15 @@ var CONFIG = {
     WEEK_STARTS: ["2026-06-01", "2026-06-08"],                  // the two weeks shown (6/1-6/14)
     WEEK_LABELS: ["Week 1 (6/1-6/7)", "Week 2 (6/8-6/14)"],     // data-table row labels, paired with WEEK_STARTS
     CONSOLIDATE_CAMPUSES: ["JRHS - Ridgeland Secondary Academy of Excellence"], // campuses where ALL groups go in ONE email (one teacher runs them all)
-    SUBJECT: "Studient: Week 2: Keep the Momentum Going"        // sun emoji dropped (no literal emoji in source)
+    // v2.13.0: Jasper County campuses (jcsd.net). _summerDistrict returns 'jasper'
+    // for these, else 'allendale' -> picks the per-district body/subject (Week 3).
+    JASPER_CAMPUSES: [
+      "JHMS - Hardeeville Junior Senior High School",
+      "JHES - Hardeeville Elementary School",
+      "JRHS - Ridgeland Secondary Academy of Excellence",
+      "JRES - Ridgeland Elementary School"
+    ],
+    SUBJECT: "Studient: Week 2: Keep the Momentum Going"        // default (Week 1+2); per-template subjects live in summerConfig
   },
 
   // Column indices in Teacher Emails sheet (0-indexed)
@@ -160,10 +168,35 @@ var TEMPLATES = {
   // _runSummerSchoolCore instead of the normal metrics/PDF loop; buildBody is
   // the summer body builder (invoked by the core, not the normal loop).
   'Summer School Week 1+2': {
-    subject: CONFIG.SUMMER_SCHOOL.SUBJECT,
+    subject: 'Studient: Week 2: Keep the Momentum Going',
     buildBody: generateSummerSchoolWeek12Body,
     summerSchool: true,
-    requiresPdf: false
+    requiresPdf: false,
+    summerConfig: {
+      weekStarts: ['2026-06-01', '2026-06-08'],
+      weekLabels: ['Week 1 (6/1-6/7)', 'Week 2 (6/8-6/14)'],
+      byDistrict: false,
+      variant: { subject: 'Studient: Week 2: Keep the Momentum Going', copy: _summerBodyCopySections }
+    }
+  },
+  // v2.13.0: Summer School Week 3 -- per-district. Jasper schools get the "Finish
+  // Strong" body/subject; Allendale schools get "Push Through the Slump". Single
+  // week (6/15-6/21). Same external-source flow; _runSummerSchoolCore reads
+  // summerConfig for the week window + per-district subject + copy.
+  'Summer School Week 3': {
+    subject: 'Studient - Week 3: Push Through the Slump',
+    buildBody: generateSummerSchoolWeek12Body,
+    summerSchool: true,
+    requiresPdf: false,
+    summerConfig: {
+      weekStarts: ['2026-06-15'],
+      weekLabels: ['Week of 6/15 (6/15-6/21)'],
+      byDistrict: true,
+      variants: {
+        jasper: { subject: 'Studient - Week 4: Finish Strong', copy: _summerWeek3JasperCopy },
+        allendale: { subject: 'Studient - Week 3: Push Through the Slump', copy: _summerWeek3AllendaleCopy }
+      }
+    }
   }
 };
 
@@ -840,7 +873,7 @@ function generateDraftsForCurrentUser() {
   if (TEMPLATES[templateName].summerSchool) {
     var ssAllowed = {};
     for (var si = 0; si < mySchools.length; si++) ssAllowed[normalizeFolderName(mySchools[si].displayName)] = true;
-    _runSummerSchoolCore({ smokeMode: false, allowedCampuses: ssAllowed });
+    _runSummerSchoolCore({ smokeMode: false, allowedCampuses: ssAllowed, templateName: templateName });
     return;
   }
 
@@ -2367,6 +2400,41 @@ function runUnitTests() {
   _testAssertEq(results, 'consolidatedBody: greets + Group table + the 3 moves',
     cbody.indexOf('Hi team,') !== -1 && cbody.indexOf('>Group</th>') !== -1 && cbody.indexOf('Work the room') !== -1, true);
   _testAssertEq(results, 'consolidatedBody: no em dash', cbody.indexOf(String.fromCharCode(0x2014)) === -1, true);
+
+  // v2.13.0: Week 3 per-district + template-driven config
+  _testAssertEq(results, 'summerDistrict: JHMS -> jasper', _summerDistrict('JHMS - Hardeeville Junior Senior High School'), 'jasper');
+  _testAssertEq(results, 'summerDistrict: JRES -> jasper', _summerDistrict('JRES - Ridgeland Elementary School'), 'jasper');
+  _testAssertEq(results, 'summerDistrict: AFMS -> allendale', _summerDistrict('AFMS - Allendale Fairfax Middle School'), 'allendale');
+  _testAssertEq(results, 'summerDistrict: AFES -> allendale', _summerDistrict('AFES - Allendale Fairfax Elementary School'), 'allendale');
+  var sc3 = _summerTemplateConfig('Summer School Week 3');
+  _testAssertEq(results, 'templateConfig: Week 3 single week 6/15', sc3.weekStarts, ['2026-06-15']);
+  _testAssertEq(results, 'templateConfig: Week 3 byDistrict', sc3.byDistrict, true);
+  _testAssertEq(results, 'summerVariant: Week 3 Jasper subject',
+    _summerVariant(sc3, 'JHMS - Hardeeville Junior Senior High School').subject, 'Studient - Week 4: Finish Strong');
+  _testAssertEq(results, 'summerVariant: Week 3 Allendale subject',
+    _summerVariant(sc3, 'AFMS - Allendale Fairfax Middle School').subject, 'Studient - Week 3: Push Through the Slump');
+  _testAssertEq(results, 'summerVariant: Week 1+2 single subject',
+    _summerVariant(_summerTemplateConfig('Summer School Week 1+2'), 'AFMS').subject, 'Studient: Week 2: Keep the Momentum Going');
+  var jasperCopy = _summerWeek3JasperCopy().join('');
+  _testAssertEq(results, 'week3 Jasper copy: distinctive lines',
+    jasperCopy.indexOf('Accountability + celebration') !== -1 && jasperCopy.indexOf('Keep urgency high') !== -1 && jasperCopy.indexOf('Final push') !== -1, true);
+  _testAssertEq(results, 'week3 Jasper copy: no em dash / sun',
+    jasperCopy.indexOf(String.fromCharCode(0x2014)) === -1 && jasperCopy.indexOf(String.fromCharCode(0x2600)) === -1, true);
+  var allenCopy = _summerWeek3AllendaleCopy().join('');
+  _testAssertEq(results, 'week3 Allendale copy: distinctive lines',
+    allenCopy.indexOf('Motivation &gt; compliance') !== -1 && allenCopy.indexOf('Coach through frustration') !== -1 && allenCopy.indexOf('Thursday = Timeback') !== -1, true);
+  _testAssertEq(results, 'week3 Allendale copy: no em dash / sun',
+    allenCopy.indexOf(String.fromCharCode(0x2014)) === -1 && allenCopy.indexOf(String.fromCharCode(0x2600)) === -1, true);
+  var t1wk = buildSummerSchoolTable({ '2026-06-15': { students: 9, activeDays: 3, minsPerStudent: 70, lessons: 40 } }, ['2026-06-15'], ['Week of 6/15 (6/15-6/21)']);
+  _testAssertEq(results, 'singleWeekTable: one labeled row with values',
+    t1wk.indexOf('Week of 6/15 (6/15-6/21)') !== -1 && t1wk.indexOf('>9<') !== -1 && t1wk.indexOf('70.0') !== -1 && t1wk.indexOf('>40<') !== -1, true);
+  _testAssertEq(results, 'singleWeekTable: exactly one data row', (t1wk.split('<tr>').length - 1), 1);
+  _testAssertEq(results, 'archive skip: normalized archive name detected',
+    normalizeFolderName('ZZARCHIVE (Wrong Title PDF Report)').indexOf('archive') !== -1, true);
+  _testAssertEq(results, 'summer template: Week 3 registered + summerSchool',
+    !!TEMPLATES['Summer School Week 3'] && TEMPLATES['Summer School Week 3'].summerSchool === true, true);
+  _testAssertEq(results, 'summer template: Week 3 in TEMPLATE_NAMES',
+    TEMPLATE_NAMES.indexOf('Summer School Week 3') !== -1, true);
 
   // v2.11.0: Summer School template registration (dropdown + routing flag)
   _testAssertEq(results, 'summer template: registered in TEMPLATES',
@@ -4154,7 +4222,7 @@ function _summerWeeklyByTeacher(rows) {
  * Read the Summer Performance Dashboard teacher-weekly-summary tab and return a
  * (campus, teacher)-keyed PER-WEEK metrics object. Fail-soft: returns {}.
  */
-function readSummerTeacherData() {
+function readSummerTeacherData(weekStarts) {
   var out = {};
   var ss;
   try { ss = SpreadsheetApp.openById(CONFIG.SUMMER_SCHOOL.DATA_ID); }
@@ -4174,7 +4242,7 @@ function readSummerTeacherData() {
     logError('ERROR', 'readSummerTeacherData', null, 'data tab missing week_start/campus_name/teacher_name/avg_active_days/total_minutes', '');
     return out;
   }
-  var weeks = CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
+  var weeks = weekStarts || CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
   var rows = [];
   for (var i = 1; i < data.length; i++) {
     var row = data[i];
@@ -4197,9 +4265,9 @@ function readSummerTeacherData() {
 
 // ---- PDF tree traversal (Camp -> School -> Teacher -> PDFs) ----
 
-function _collectSummerPdfs(folder) {
+function _collectSummerPdfs(folder, weekStarts) {
   var pdfs = [];
-  var weeks = CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
+  var weeks = weekStarts || CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
   var it;
   try { it = folder.getFiles(); } catch (e) { return pdfs; }
   while (true) {
@@ -4232,7 +4300,7 @@ function _collectSummerPdfs(folder) {
  *     unassigned: [ {campus, pdfs[]} ] }
  * Every Drive iterator step is wrapped (shared-with-me permission safety).
  */
-function traverseSummerPdfTree() {
+function traverseSummerPdfTree(weekStarts) {
   var result = { teachers: {}, unassigned: [] };
   var camp;
   try { camp = DriveApp.getFolderById(CONFIG.SUMMER_SCHOOL.PDF_CAMP_FOLDER_ID); }
@@ -4248,6 +4316,8 @@ function traverseSummerPdfTree() {
     try { school = schoolIt.next(); } catch (e) { continue; }
     var campus;
     try { campus = school.getName(); } catch (e) { continue; }
+    // v2.13.0: skip non-school folders (e.g. "ZZARCHIVE (Wrong Title PDF Report)").
+    if (normalizeFolderName(campus).indexOf('archive') !== -1) continue;
     var teacherIt;
     try { teacherIt = school.getFolders(); } catch (e) { continue; }
     while (true) {
@@ -4258,7 +4328,7 @@ function traverseSummerPdfTree() {
       try { tfolder = teacherIt.next(); } catch (e) { continue; }
       var tname;
       try { tname = tfolder.getName(); } catch (e) { continue; }
-      var pdfs = _collectSummerPdfs(tfolder);
+      var pdfs = _collectSummerPdfs(tfolder, weekStarts);
       if (normalizeFolderName(tname) === 'unassigned') {
         result.unassigned.push({ campus: campus, pdfs: pdfs });
       } else {
@@ -4272,7 +4342,7 @@ function traverseSummerPdfTree() {
 
 // ---- Rendering ----
 
-function buildSummerSchoolTable(weekData) {
+function buildSummerSchoolTable(weekData, weekStarts, weekLabels) {
   if (!weekData || Object.keys(weekData).length === 0) {
     return '<div style="background-color:#fff3cd;padding:10px;border-radius:6px;border:1px solid #ffe699;margin:8px 0;">'
       + '<p style="margin:0;"><em>Two-week summary not available for this teacher. See the attached weekly reports for the student-level detail.</em></p>'
@@ -4285,8 +4355,8 @@ function buildSummerSchoolTable(weekData) {
     + '<th style="padding:8px;">Avg Active Days</th>'
     + '<th style="padding:8px;">Avg Minutes/Student</th>'
     + '<th style="padding:8px;">Lessons Mastered</th></tr>';
-  var weeks = CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
-  var labels = CONFIG.SUMMER_SCHOOL.WEEK_LABELS;
+  var weeks = weekStarts || CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
+  var labels = weekLabels || CONFIG.SUMMER_SCHOOL.WEEK_LABELS;
   for (var wi = 0; wi < weeks.length; wi++) {
     var label = labels[wi] || ('Week ' + (wi + 1));
     var d = weekData[weeks[wi]];
@@ -4354,6 +4424,84 @@ function _summerBodyCopySections() {
   ];
 }
 
+// v2.13.0: compose a summer body from greeting + a table + the per-template copy
+// sections. Used by the core for both per-teacher and consolidated drafts.
+function _summerComposeBody(teacher, tableHtml, copySections) {
+  return wrapEmailHtml([buildGreeting(teacher), tableHtml].concat(copySections));
+}
+
+// v2.13.0: Summer School Week 3 - Jasper "Finish Strong" copy.
+function _summerWeek3JasperCopy() {
+  var progressList = '<ul style="margin:6px 0 0 0;padding-left:18px;">'
+    + '<li style="margin:2px 0;">Completed lessons</li>'
+    + '<li style="margin:2px 0;">Improved attendance</li>'
+    + '<li style="margin:2px 0;">Academic growth</li>'
+    + '</ul>';
+  var movesHtml = '<ol style="padding-left:20px;margin:8px 0;">'
+    + '<li style="margin:10px 0;"><strong>Keep urgency high.</strong><br>' + "Remind students: We're not done yet." + '</li>'
+    + '<li style="margin:10px 0;"><strong>Highlight progress.</strong><br>' + "Show students how far they've come." + progressList + 'Make it visible.</li>'
+    + '<li style="margin:10px 0;"><strong>End strong.</strong><br>Push students to finish what they started. Strong finish &gt; slow fade.</li>'
+    + '</ol>';
+  var finalPushBox = '<div style="background-color:#fff3cd;padding:12px;border-radius:6px;margin:14px 0;border:1px solid #ffe699;">'
+    + '<p style="margin:0 0 6px 0;">' + dotSpan('#DAA520') + '<strong>Final push</strong></p>'
+    + '<p style="margin:0;">Help students finish proud.</p>'
+    + '</div>';
+  return [
+    '<p style="margin:14px 0 4px 0;font-size:16px;">' + dotSpan('#DAA520') + '<strong>Weekly Focus: Accountability + celebration</strong></p>',
+    '<p style="margin:0 0 8px 0;">' + "The finish line is close. Students may coast. Don't let them." + '</p>',
+    '<p style="margin:12px 0 4px 0;">' + "<strong>This week's moves:</strong></p>",
+    movesHtml,
+    finalPushBox,
+    '<p style="margin:12px 0 0 0;">' + "Let's close out summer strong." + '</p>'
+  ];
+}
+
+// v2.13.0: Summer School Week 3 - Allendale "Push Through the Slump" copy.
+function _summerWeek3AllendaleCopy() {
+  var qHtml = '<ul style="margin:6px 0 0 0;padding-left:18px;">'
+    + '<li style="margin:2px 0;">&rarr; ' + "What's feeling hard right now?" + '</li>'
+    + '<li style="margin:2px 0;">&rarr; ' + "What's one step you can take next?" + '</li>'
+    + '<li style="margin:2px 0;">&rarr; Need help getting unstuck?</li>'
+    + '</ul>';
+  var movesHtml = '<ol style="padding-left:20px;margin:8px 0;">'
+    + '<li style="margin:10px 0;"><strong>Check progress early and often.</strong><br>' + "Don't wait until the end of class. Know who's on pace. Know who's falling behind. Intervene early." + '</li>'
+    + '<li style="margin:10px 0;"><strong>Coach through frustration.</strong><br>When students stall:' + qHtml + 'Be a problem solver.</li>'
+    + '<li style="margin:10px 0;"><strong>Keep goals visible.</strong><br>' + "Remind students what they're working toward. Progress. Completion. Rewards. Growth." + '</li>'
+    + '</ol>';
+  var timebackBox = '<div style="background-color:#e7f0fe;padding:12px;border-radius:6px;margin:14px 0;border:1px solid #b6d0f7;">'
+    + '<p style="margin:0 0 6px 0;">' + dotSpan('#1565c0') + '<strong>Thursday = Timeback</strong></p>'
+    + '<p style="margin:0;">Stay focused now &rarr; enjoy Timeback later.</p>'
+    + '</div>';
+  return [
+    '<p style="margin:14px 0 4px 0;font-size:16px;">' + dotSpan('#DAA520') + '<strong>Weekly Focus: Motivation &gt; compliance</strong></p>',
+    '<p style="margin:0 0 8px 0;">' + "This is where energy can dip. Your role: keep students engaged, goals visible, and momentum moving." + '</p>',
+    '<p style="margin:12px 0 4px 0;">' + "<strong>This week's moves:</strong></p>",
+    movesHtml,
+    timebackBox
+  ];
+}
+
+// v2.13.0: district + per-template summerConfig resolution.
+function _summerDistrict(campus) {
+  var list = CONFIG.SUMMER_SCHOOL.JASPER_CAMPUSES || [];
+  var nc = normalizeFolderName(campus);
+  for (var i = 0; i < list.length; i++) {
+    if (normalizeFolderName(list[i]) === nc) return 'jasper';
+  }
+  return 'allendale';
+}
+
+function _summerTemplateConfig(templateName) {
+  var t = templateName && TEMPLATES[templateName];
+  if (t && t.summerConfig) return t.summerConfig;
+  return TEMPLATES['Summer School Week 1+2'].summerConfig;
+}
+
+function _summerVariant(scfg, campus) {
+  if (scfg && scfg.byDistrict) return scfg.variants[_summerDistrict(campus)] || scfg.variants.allendale;
+  return (scfg && scfg.variant) || { subject: CONFIG.SUMMER_SCHOOL.SUBJECT, copy: _summerBodyCopySections };
+}
+
 function generateSummerSchoolWeek12Body(teacher, dataRow) {
   return wrapEmailHtml([buildGreeting(teacher), buildSummerSchoolTable(dataRow)].concat(_summerBodyCopySections()));
 }
@@ -4366,9 +4514,9 @@ function generateSummerSchoolConsolidatedBody(campus, entries) {
 
 // v2.12.0: one table for ALL groups of a consolidated campus -- a row per group
 // per week (Group, Week, # Students, Avg Active Days, Avg Minutes/Student, Lessons).
-function buildSummerConsolidatedTable(entries) {
-  var weeks = CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
-  var labels = CONFIG.SUMMER_SCHOOL.WEEK_LABELS;
+function buildSummerConsolidatedTable(entries, weekStarts, weekLabels) {
+  var weeks = weekStarts || CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
+  var labels = weekLabels || CONFIG.SUMMER_SCHOOL.WEEK_LABELS;
   var sorted = entries.slice().sort(function (a, b) {
     var an = a.teacher || '', bn = b.teacher || '';
     return an < bn ? -1 : (an > bn ? 1 : 0);
@@ -4415,7 +4563,11 @@ function buildSummerConsolidatedTable(entries) {
 
 // ---- Orchestration ----
 
-function generateSummerSchoolSmokeTest() { _runSummerSchool({ smokeMode: true }); }
+function generateSummerSchoolSmokeTest() {
+  var tpl = getConfigValue('Template');
+  if (!tpl || !TEMPLATES[tpl] || !TEMPLATES[tpl].summerSchool) tpl = 'Summer School Week 1+2';
+  _runSummerSchool({ smokeMode: true, templateName: tpl });
+}
 
 // v2.12.0: campuses in CONFIG.SUMMER_SCHOOL.CONSOLIDATE_CAMPUSES get ONE email
 // for all their groups (one teacher runs them), not one draft per group.
@@ -4514,9 +4666,12 @@ function _runSummerSchoolCore(opts) {
     return !allowed || allowed[normalizeFolderName(campus)] === true;
   }
 
+  var scfg = _summerTemplateConfig(opts && opts.templateName);
+  var weekStarts = scfg.weekStarts, weekLabels = scfg.weekLabels;
+
   var roster = readSummerRoster();
-  var dataByTeacher = readSummerTeacherData();
-  var tree = traverseSummerPdfTree();
+  var dataByTeacher = readSummerTeacherData(weekStarts);
+  var tree = traverseSummerPdfTree(weekStarts);
 
   // Teacher universe = folder teachers UNION roster teachers, keyed by
   // (campus, teacher), filtered to allowedCampuses when scoped.
@@ -4605,7 +4760,7 @@ function _runSummerSchoolCore(opts) {
   }
 
   var msg = (smokeMode ? 'SMOKE TEST: every draft goes to YOU (' + operator + ').' + NL + NL : '')
-    + 'Summer School Week 1+2:' + NL + NL
+    + (((opts && opts.templateName) || 'Summer School') + ':') + NL + NL
     + scopeLine
     + 'Teacher/group drafts: ' + (normalKeys.length + consolidatedCampuses.length)
       + (consolidatedCampuses.length ? ' (incl. ' + consolidatedCampuses.length + ' consolidated school email(s))' : '') + NL
@@ -4617,18 +4772,18 @@ function _runSummerSchoolCore(opts) {
   if (ui.alert('Confirm Summer School Generation', msg, ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
 
   var success = 0, failC = 0, errors = [];
-  var subject = CONFIG.SUMMER_SCHOOL.SUBJECT;
 
   for (var t = 0; t < normalKeys.length; t++) {
     var u = universe[normalKeys[t]];
     var teacherObj = { name: u.teacher, firstName: _summerFirstName(u.teacher), campus: u.campus };
     try {
-      var body = generateSummerSchoolWeek12Body(teacherObj, u.dataRow);
+      var v = _summerVariant(scfg, u.campus);
+      var body = _summerComposeBody(teacherObj, buildSummerSchoolTable(u.dataRow, weekStarts, weekLabels), v.copy());
       var toEmail;
       if (smokeMode) { toEmail = operator; }
       else if (u.email) { toEmail = u.email; }
       else { toEmail = ''; body = _summerBlankToBanner(u.campus, u.teacher) + body; }
-      var res = _createSummerDraft(toEmail, subject, body, u.pdfs, teacherObj);
+      var res = _createSummerDraft(toEmail, v.subject, body, u.pdfs, teacherObj);
       if (res.success) success++;
       else { failC++; errors.push(u.campus + ' / ' + u.teacher + ': ' + res.error); }
     } catch (e) {
@@ -4649,11 +4804,12 @@ function _runSummerSchoolCore(opts) {
         var ep = cEntries[cee].pdfs || [];
         for (var ppi = 0; ppi < ep.length; ppi++) cPdfs.push(ep[ppi]);
       }
-      var cBody = generateSummerSchoolConsolidatedBody(cgrp.campus, cEntries);
+      var cv = _summerVariant(scfg, cgrp.campus);
+      var cBody = _summerComposeBody(cObj, buildSummerConsolidatedTable(cEntries, weekStarts, weekLabels), cv.copy());
       var cTo;
       if (smokeMode) { cTo = operator; }
       else { cTo = ''; cBody = _summerConsolidatedBanner(cgrp.campus) + cBody; }
-      var cRes = _createSummerDraft(cTo, subject + ' (' + cgrp.campus + ' - all groups)', cBody, cPdfs, cObj);
+      var cRes = _createSummerDraft(cTo, cv.subject + ' (' + cgrp.campus + ' - all groups)', cBody, cPdfs, cObj);
       if (cRes.success) success++;
       else { failC++; errors.push('Consolidated / ' + cgrp.campus + ': ' + cRes.error); }
     } catch (e) {
@@ -4665,9 +4821,10 @@ function _runSummerSchoolCore(opts) {
     var un = unassigned[ua];
     var unObj = { name: 'Unassigned (' + un.campus + ')', firstName: 'team', campus: un.campus };
     try {
-      var unBody = _summerUnassignedBanner(un.campus) + generateSummerSchoolWeek12Body(unObj, null);
+      var uv = _summerVariant(scfg, un.campus);
+      var unBody = _summerUnassignedBanner(un.campus) + _summerComposeBody(unObj, buildSummerSchoolTable(null, weekStarts, weekLabels), uv.copy());
       var unTo = smokeMode ? operator : '';
-      var unRes = _createSummerDraft(unTo, subject + ' (Unassigned: ' + un.campus + ')', unBody, un.pdfs, unObj);
+      var unRes = _createSummerDraft(unTo, uv.subject + ' (Unassigned: ' + un.campus + ')', unBody, un.pdfs, unObj);
       if (unRes.success) success++;
       else { failC++; errors.push('Unassigned / ' + un.campus + ': ' + unRes.error); }
     } catch (e) {
@@ -4685,6 +4842,6 @@ function _runSummerSchoolCore(opts) {
     }
     done += NL + NL + 'Errors: ' + es;
   }
-  done += NL + NL + 'Open Gmail Drafts to review the To, the two-week table, and the attached PDFs.';
+  done += NL + NL + 'Open Gmail Drafts to review the To, the data table, and the attached PDFs.';
   ui.alert('Done', done, ui.ButtonSet.OK);
 }
