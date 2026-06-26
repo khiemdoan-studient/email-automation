@@ -479,11 +479,14 @@ def _probe_year_totals_match_weekly_dashboard(sheets, bq_client):
         print("  ✗ Year Teacher Totals: empty tab")
         return False
 
-    # Query BQ for ground truth (no whitelist filter — match the writer's scope)
+    # Query BQ for ground truth (no whitelist filter -- match the writer's scope)
+    # Upper bound mirrors dashboard YEAR_END_DATE cap (2026-05-29) so June weeks
+    # do not cause false-FAIL once they arrive in weekly_dashboard.
     sql = """
     SELECT teacher_name, IFNULL(SUM(lessons_mastered), 0) AS total_lessons
     FROM `studient-flat-exports-doan.studient_analytics.weekly_dashboard`
     WHERE week_start >= DATE '2025-09-01'
+      AND week_start <= DATE '2026-05-29'
       AND teacher_name IS NOT NULL AND TRIM(teacher_name) != ''
     GROUP BY teacher_name
     """
@@ -743,11 +746,14 @@ def _probe_highlights_within_actuals(sheets, bq_client):
         print("  ✗ Student Year Highlights: empty tab")
         return False
 
-    # Single BQ query for actual per-(teacher, student) lessons
+    # Single BQ query for actual per-(teacher, student) lessons.
+    # Upper bound mirrors dashboard YEAR_END_DATE cap (2026-05-29) so June weeks
+    # do not cause false-FAIL once they arrive in weekly_dashboard.
     sql = """
     SELECT teacher_name, student_name, IFNULL(SUM(lessons_mastered), 0) AS actual_lessons
     FROM `studient-flat-exports-doan.studient_analytics.weekly_dashboard`
     WHERE week_start >= DATE '2025-09-01'
+      AND week_start <= DATE '2026-05-29'
       AND teacher_name IS NOT NULL AND TRIM(teacher_name) != ''
       AND student_name IS NOT NULL AND TRIM(student_name) != ''
     GROUP BY 1, 2
