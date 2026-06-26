@@ -112,7 +112,14 @@ global.SpreadsheetApp.getUi = () => ({
 });
 
 // ── Run the test cases (this evaluates each _testAssertEq call) ──
-runUnitTests();
+try {
+  runUnitTests();
+} catch (e) {
+  console.error('');
+  console.error('[FAIL] runUnitTests threw before completing: ' + (e && e.stack ? e.stack : e));
+  console.error('This is a TEST FAILURE (the suite did not finish). Fix the error above.');
+  process.exit(1);
+}
 
 // ── Render results to stdout ──
 const passed = allResults.filter(r => r.pass).length;

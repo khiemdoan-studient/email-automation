@@ -828,7 +828,7 @@ def _probe_student_year_highlights(sheets):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--week", default="2026-04-20", help="ISO date (default: 2026-04-20)"
+        "--week", required=True, help="ISO week_start date, e.g. 2026-06-15 (required, no default)"
     )
     parser.add_argument(
         "--strict", action="store_true", help="Exit 1 if any mismatch found"

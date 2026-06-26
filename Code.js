@@ -745,6 +745,7 @@ function processRetry(selectedTeacherStrs) {
     }
 
     var dateRange = getConfigValue('Date Range');
+    if (!dateRange) return '<span style="color:#c62828;">Date Range not set in Config. Pick a week, then retry.</span>';
     var templateName = getConfigValue('Template') || '4/27: Last Week of Motivention';
     var template = TEMPLATES[templateName];
     if (!template) return '<span style="color:#c62828;">Unknown template: ' + templateName + '</span>';
@@ -4132,7 +4133,11 @@ function _findSummerRosterTab(ss) {
   for (var i = 0; i < sheets.length; i++) {
     if (_isSummerRosterTab(sheets[i])) return sheets[i];
   }
-  return hinted || null;
+  // Reached only when neither the gid-hinted tab nor any sheet passed the
+  // roster-signature check. `hinted` here is definitionally a NON-roster tab
+  // (a valid hint would have returned at the top), so return null and let the
+  // caller log a clean "not found" rather than handing back the wrong tab.
+  return null;
 }
 
 /**
@@ -4242,6 +4247,11 @@ function readSummerTeacherData(weekStarts) {
     logError('ERROR', 'readSummerTeacherData', null, 'data tab missing week_start/campus_name/teacher_name/avg_active_days/total_minutes', '');
     return out;
   }
+  // Non-fatal: Students / Lessons Mastered are read fail-soft (default 0 when
+  // the column is absent). Warn so a header rename that silently zeroes these
+  // KPIs surfaces in the log instead of shipping zeros into the data table.
+  if (cStudents == null) logError('WARN', 'readSummerTeacherData', null, 'Students / N Students column not found - student counts read 0', '');
+  if (cLessons == null) logError('WARN', 'readSummerTeacherData', null, 'Lessons Mastered / Sum Lessons column not found - lessons read 0', '');
   var weeks = weekStarts || CONFIG.SUMMER_SCHOOL.WEEK_STARTS;
   var rows = [];
   for (var i = 1; i < data.length; i++) {
@@ -4279,7 +4289,7 @@ function _collectSummerPdfs(folder, weekStarts) {
     var name;
     try { name = f.getName(); } catch (e) { continue; }
     if (name.toUpperCase().indexOf('.PDF') === -1) continue;
-    if (name.indexOf('XP_Report') === -1) continue;
+    if (name.toUpperCase().indexOf('XP_REPORT') === -1) continue;
     var matchesWeek = false;
     for (var w = 0; w < weeks.length; w++) { if (name.indexOf(weeks[w]) !== -1) { matchesWeek = true; break; } }
     if (!matchesWeek) continue;

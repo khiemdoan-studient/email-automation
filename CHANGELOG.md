@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.13.1] - 2026-06-26
+
+### FIX: audit hardening (6 defensive fixes, no happy-path behavior change)
+
+Follow-up to the full `/audit` of this repo (0 CRITICAL / 0 HIGH found). Applied the safe, no-metric-change subset:
+
+- `test_runner.js`: wrapped `runUnitTests()` in try/catch so a throw mid-suite is an explicit "[FAIL] ... suite did not finish" + exit 1, not a raw stack trace that could be misread as "tests didn't run = fine". The gate already exited 1 on assert-failures + uncaught throws; this hardens the crash path + defends against future error-swallowing.
+- `_collectSummerPdfs`: the `XP_Report` filename filter is now case-insensitive (`toUpperCase`), matching the `.PDF` check one line up. Prevents a silent skip of a differently-cased PDF name.
+- `_findSummerRosterTab`: returns `null` instead of a gid-hinted tab that already FAILED the roster-signature check, so the caller logs a clean "not found" rather than reading the wrong tab. (`_findSummerDataTab` already did this.)
+- `processRetry`: guards a null `Date Range` Config value before `dateRange.split('_to_')` (`getConfigValue` returns null when the row is absent), returning a clear message instead of a TypeError.
+- `readSummerTeacherData`: non-fatal WARN when the Students or Lessons Mastered column is absent (those read fail-soft to 0), so a header rename surfaces in the Error Log instead of silently zeroing the KPIs.
+- `scripts/check_email_data.py`: `--week` is now required (dropped the stale `2026-04-20` default) so the diagnostic can't silently audit a 10-week-old week.
+
+### Verified
+
+- `node test_runner.js`: 139/139 PASS (no new tests; the fixes are defensive IO-path guards, not pure functions). `python -m py_compile scripts/check_email_data.py`: clean.
+
+### Considered + intentionally skipped (not active bugs)
+
+- `schoolFolderMap` built from all mapping rows (vs the IM's schools): the draft loop only looks up the IM's own schools and displayNames are unique, so no collision.
+- Adding Students/Lessons to the FATAL header guard in `readSummerTeacherData`: would regress the intended fail-soft. Warn instead.
+- `write_doc.py:496` version-string `len()`: a 1-char paragraph-style offset in a generated Doc; the coupled body line lives in a source md. Low value.
+- Student name in `check_email_data` over-examples: FERPA hard-rule disabled per direction (2026-06-01) + the name has real diagnostic value (which spotlight over-counted) in ephemeral stdout.
+- 69 em-dashes in `Code.js` comments: cosmetic, comments-only; the body-generation tests already assert no em-dash in generated output.
+
+### Files modified
+
+- `Code.js` (4 defensive guards)
+- `test_runner.js` (crash-path gate hardening)
+- `scripts/check_email_data.py` (required `--week`)
+- `package.json` (2.13.0 to 2.13.1)
+- `CHANGELOG.md` + `CLAUDE.md` (this entry)
+
 ## [v2.13.0] - 2026-06-22
 
 ### FEATURE: "Summer School Week 3" template (per-district: Jasper vs Allendale)
