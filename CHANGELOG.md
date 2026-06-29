@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.14.0] - 2026-06-26
+
+### FEATURE: "Summer School Final Week" template (all campuses + student awards)
+
+Adds a third summer template, "Summer School Final Week" (subject "Studient - Final Week: You Made It"), for ALL summer campuses (Jasper + Allendale), week of 6/22. Unlike the prior summer templates it celebrates individual high-achieving students.
+
+- New `summerConfig`: `weekStarts ['2026-06-22']`, `weekLabels ['Week of 6/22 (6/22-6/28)']`, `byDistrict false`, `showStudentAwards true`, single "You Made It" variant. No campus restriction - applies to every summer school the IM is assigned.
+- New Student Achievement Awards section (Week-6 style categorized shout-outs): "Hit Fidelity Goal" (authoritative At-fidelity status), "125+ Minutes", "High Accuracy (90%+)". Names per bucket; empty bucket renders "--"; no qualifying students renders a fallback note.
+- New reader `readSummerStudentFidelity()` reads the live Summer Performance Dashboard helper tabs: `_SummerFAData` (clean headers -> cumulative minutes/days, accuracy = correct_q / total_q x100) + `_SummerFAStud` (no headers -> authoritative At-fidelity status in column 7, joined by student_id, sanity-checked by position). The VISIBLE "Summer Fidelity" tab is filter-dependent (Campus/Teacher dropdowns) so it is deliberately NOT used. Returns `{ byKey (per campus+teacher), byCampus (for consolidated JRHS) }`. Fail-soft: any miss -> empty section.
+- Wired into `_runSummerSchoolCore` per-teacher path (byKey) AND consolidated JRHS path (byCampus), guarded by `showStudentAwards`. Week 1+2 / Week 3 produce byte-identical output (flag absent).
+- New helpers: `readSummerStudentFidelity`, `buildSummerStudentAwards`, `_summerFinalWeekCopy`.
+
+### Verified
+
+- `node test_runner.js`: 153/153 PASS (+14: Final Week config/variant/copy, awards bucketing + fallback + no em-dash, registration). Week 1+2 / Week 3 tests unchanged + green.
+- Live join validated against the real dashboard (timeback SA read): 389 students, 23 per-teacher groups across all 7 campuses, status sanity 5/5, JRHS consolidated rollup = 140 students; per-teacher buckets populate with real names.
+- Coverage note: only AASP / AFES / AFMS / JRES have a week-of-6/22 teacher-summary row (+ presumably 6/22 PDFs); JHMS / JHES / JRHS ended 6/15. The cumulative awards + "You Made It" copy still populate for all 7 campuses; for the three 6/15-ending campuses the 6/22 weekly table shows the fallback note and no 6/22 PDF attaches. Operators review drafts before sending.
+
+### Files modified
+
+- `Code.js` (Final Week template + `readSummerStudentFidelity` + `buildSummerStudentAwards` + `_summerFinalWeekCopy` + core wiring + 14 tests)
+- `package.json` (2.13.1 to 2.14.0)
+- `CHANGELOG.md` + `CLAUDE.md` (this entry)
+- `write_doc.py` (Final Week mention in the in-sheet guide)
+
 ## [v2.13.1] - 2026-06-26
 
 ### FIX: audit hardening (6 defensive fixes, no happy-path behavior change)

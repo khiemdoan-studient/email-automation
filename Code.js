@@ -197,6 +197,23 @@ var TEMPLATES = {
         allendale: { subject: 'Studient - Week 3: Push Through the Slump', copy: _summerWeek3AllendaleCopy }
       }
     }
+  },
+  // v2.14.0: Summer School Final Week - "You Made It" wrap-up for ALL summer
+  // campuses (Jasper + Allendale). Single week 6/22; no campus restriction.
+  // Adds a per-teacher (and per-campus, for consolidated JRHS) Student
+  // Achievement Awards section sourced from the live Summer Fidelity helper tabs.
+  'Summer School Final Week': {
+    subject: 'Studient - Final Week: You Made It',
+    buildBody: generateSummerSchoolWeek12Body,
+    summerSchool: true,
+    requiresPdf: false,
+    summerConfig: {
+      weekStarts: ['2026-06-22'],
+      weekLabels: ['Week of 6/22 (6/22-6/28)'],
+      byDistrict: false,
+      showStudentAwards: true,
+      variant: { subject: 'Studient - Final Week: You Made It', copy: _summerFinalWeekCopy }
+    }
   }
 };
 
@@ -2437,6 +2454,39 @@ function runUnitTests() {
   _testAssertEq(results, 'summer template: Week 3 in TEMPLATE_NAMES',
     TEMPLATE_NAMES.indexOf('Summer School Week 3') !== -1, true);
 
+  // v2.14.0: Summer School Final Week (all campuses + student awards)
+  var scF = _summerTemplateConfig('Summer School Final Week');
+  _testAssertEq(results, 'finalWeek config: single week 6/22', scF.weekStarts, ['2026-06-22']);
+  _testAssertEq(results, 'finalWeek config: showStudentAwards true', scF.showStudentAwards, true);
+  _testAssertEq(results, 'finalWeek config: not byDistrict (universal)', !!scF.byDistrict, false);
+  _testAssertEq(results, 'finalWeek variant: You Made It subject (Jasper campus)',
+    _summerVariant(scF, 'JHMS - Hardeeville Junior Senior High School').subject, 'Studient - Final Week: You Made It');
+  _testAssertEq(results, 'finalWeek variant: same subject (Allendale campus)',
+    _summerVariant(scF, 'AFMS - Allendale Fairfax Middle School').subject, 'Studient - Final Week: You Made It');
+  var fwCopy = _summerFinalWeekCopy().join('');
+  _testAssertEq(results, 'finalWeek copy: distinctive lines',
+    fwCopy.indexOf('You made it') !== -1 && fwCopy.indexOf('Celebrate the finish') !== -1 && fwCopy.indexOf('Thank you') !== -1, true);
+  _testAssertEq(results, 'finalWeek copy: no em dash / sun',
+    fwCopy.indexOf(String.fromCharCode(0x2014)) === -1 && fwCopy.indexOf(String.fromCharCode(0x2600)) === -1, true);
+  var awTest = buildSummerStudentAwards([
+    { name: 'Ava Stone', minutes: 460, days: 12, accuracy: 94, status: 'At fidelity' },
+    { name: 'Ben Cole', minutes: 130, days: 6, accuracy: 70, status: 'Below fidelity' },
+    { name: 'Cara Lin', minutes: 40, days: 2, accuracy: 95, status: 'Not started' }
+  ]);
+  _testAssertEq(results, 'awards: Hit Fidelity Goal bucket present + names at-fidelity student',
+    awTest.indexOf('Hit Fidelity Goal') !== -1 && awTest.indexOf('Ava Stone') !== -1, true);
+  _testAssertEq(results, 'awards: 125+ Minutes bucket present',
+    awTest.indexOf('125+ Minutes') !== -1, true);
+  _testAssertEq(results, 'awards: High Accuracy bucket present',
+    awTest.indexOf('High Accuracy (90%+)') !== -1, true);
+  _testAssertEq(results, 'awards: empty list -> fallback note',
+    buildSummerStudentAwards([]).indexOf('No student achievement data') !== -1, true);
+  _testAssertEq(results, 'awards: no em dash', awTest.indexOf(String.fromCharCode(0x2014)) === -1, true);
+  _testAssertEq(results, 'finalWeek template: registered + summerSchool',
+    !!TEMPLATES['Summer School Final Week'] && TEMPLATES['Summer School Final Week'].summerSchool === true, true);
+  _testAssertEq(results, 'finalWeek template: in TEMPLATE_NAMES',
+    TEMPLATE_NAMES.indexOf('Summer School Final Week') !== -1, true);
+
   // v2.11.0: Summer School template registration (dropdown + routing flag)
   _testAssertEq(results, 'summer template: registered in TEMPLATES',
     !!TEMPLATES['Summer School Week 1+2'], true);
@@ -4203,6 +4253,108 @@ function _findSummerDataTab(ss) {
 }
 
 /**
+ * v2.14.0: Read student-level summer fidelity for the "Final Week" awards.
+ * Sources (Summer Performance Dashboard, rebuilt hourly by the timeback pipeline):
+ *   _SummerFAData (clean headers: week_start, campus_name, student_id,
+ *     student_name, teacher_name, grade, total_minutes, days_active, total_xp,
+ *     correct_q, total_q) -> cumulative minutes/days/accuracy per student.
+ *   _SummerFAStud (NO header row, one row per student) -> the authoritative
+ *     "At fidelity" status in column 7 (0-indexed), joined by student_id (col 0).
+ * The VISIBLE "Summer Fidelity" tab is filter-dependent (Campus/Teacher dropdowns)
+ * so it is deliberately NOT used. Fail-soft: any miss -> empty groups.
+ * Returns { byKey: { _summerKey(campus,teacher): [student...] },
+ *           byCampus: { normalizeFolderName(campus): [student...] } },
+ *   student = { name, teacher, campus, minutes, days, accuracy, status }.
+ */
+function readSummerStudentFidelity() {
+  var empty = { byKey: {}, byCampus: {} };
+  var ss;
+  try { ss = SpreadsheetApp.openById(CONFIG.SUMMER_SCHOOL.DATA_ID); }
+  catch (e) { logError('ERROR', 'readSummerStudentFidelity', null, 'openById data failed: ' + (e.message || e), ''); return empty; }
+
+  // 1. _SummerFAData -> per-student cumulative minutes/days/accuracy + identity.
+  var dataSheet = ss.getSheetByName('_SummerFAData');
+  if (!dataSheet) { logError('WARN', 'readSummerStudentFidelity', null, '_SummerFAData tab not found - no awards section', ''); return empty; }
+  var d;
+  try { d = dataSheet.getDataRange().getValues(); }
+  catch (e) { logError('ERROR', 'readSummerStudentFidelity', null, '_SummerFAData getValues failed: ' + (e.message || e), ''); return empty; }
+  if (d.length < 2) return empty;
+  var di = _summerHeaderIndex(d[0]);
+  var cId = di['student id'], cName = di['student name'], cTeach = di['teacher name'],
+      cCamp = di['campus name'], cMin = di['total minutes'], cDays = di['days active'],
+      cCorr = di['correct q'], cTot = di['total q'];
+  if (cId == null || cName == null || cCamp == null) {
+    logError('WARN', 'readSummerStudentFidelity', null, '_SummerFAData header missing student_id/student_name/campus_name', '');
+    return empty;
+  }
+  var byId = {};
+  for (var i = 1; i < d.length; i++) {
+    var row = d[i];
+    var sid = String(row[cId] == null ? '' : row[cId]).trim();
+    if (!sid) continue;
+    var rec = byId[sid];
+    if (!rec) {
+      rec = byId[sid] = {
+        name: String(row[cName] || '').trim(),
+        teacher: (cTeach != null) ? String(row[cTeach] || '').trim() : '',
+        campus: String(row[cCamp] || '').trim(),
+        minutes: 0, days: 0, correct: 0, total: 0, status: ''
+      };
+    }
+    if (cMin != null) rec.minutes += parseFloat(row[cMin]) || 0;
+    if (cDays != null) rec.days += parseFloat(row[cDays]) || 0;
+    if (cCorr != null) rec.correct += parseFloat(row[cCorr]) || 0;
+    if (cTot != null) rec.total += parseFloat(row[cTot]) || 0;
+  }
+
+  // 2. _SummerFAStud (NO header row) -> authoritative status by POSITION
+  // (col 0 student_id, col 7 status). Sanity-check the layout before trusting it.
+  var studSheet = ss.getSheetByName('_SummerFAStud');
+  if (studSheet) {
+    var s = null;
+    try { s = studSheet.getDataRange().getValues(); }
+    catch (e) { logError('WARN', 'readSummerStudentFidelity', null, '_SummerFAStud getValues failed: ' + (e.message || e), ''); }
+    if (s && s.length) {
+      var STATUS_OK = { 'at fidelity': 1, 'below fidelity': 1, 'not started': 1 };
+      var sane = 0, checked = 0;
+      for (var c = 0; c < s.length && checked < 6; c++) {
+        if (s[c].length > 7 && String(s[c][0]).trim()) {
+          checked++;
+          if (STATUS_OK[String(s[c][7]).trim().toLowerCase()]) sane++;
+        }
+      }
+      if (checked > 0 && sane >= Math.ceil(checked / 2)) {
+        for (var r2 = 0; r2 < s.length; r2++) {
+          var sr = s[r2];
+          if (sr.length <= 7) continue;
+          var sid2 = String(sr[0] == null ? '' : sr[0]).trim();
+          if (sid2 && byId[sid2]) byId[sid2].status = String(sr[7] || '').trim();
+        }
+      } else {
+        logError('WARN', 'readSummerStudentFidelity', null, '_SummerFAStud layout sanity check failed (col 7 not a status) - fidelity bucket skipped', '');
+      }
+    }
+  }
+
+  // 3. finalize accuracy (0-100) + group by (campus,teacher) and by campus.
+  var byKey = {}, byCampus = {};
+  var ids = Object.keys(byId);
+  for (var x = 0; x < ids.length; x++) {
+    var rr = byId[ids[x]];
+    rr.accuracy = (rr.total > 0) ? (rr.correct / rr.total * 100) : 0;
+    var nc = normalizeFolderName(rr.campus);
+    if (!byCampus[nc]) byCampus[nc] = [];
+    byCampus[nc].push(rr);
+    if (rr.teacher) {
+      var key = _summerKey(rr.campus, rr.teacher);
+      if (!byKey[key]) byKey[key] = [];
+      byKey[key].push(rr);
+    }
+  }
+  return { byKey: byKey, byCampus: byCampus };
+}
+
+/**
  * Group per-(campus,teacher,week) rows into PER-WEEK metrics per (campus,
  * teacher). PURE (no Apps Script API) so it is unit-tested directly. Returns:
  *   { key -> { weekStart -> { students, activeDays, minsPerStudent, lessons } } }
@@ -4491,6 +4643,62 @@ function _summerWeek3AllendaleCopy() {
   ];
 }
 
+// v2.14.0: Summer School Final Week - universal "You Made It" wrap-up copy (all
+// campuses). Celebrates finishing the summer + the students named in the awards
+// section above. dotSpan colors + HTML entities, NO literal emoji, NO em dash.
+function _summerFinalWeekCopy() {
+  var movesHtml = '<ol style="padding-left:20px;margin:8px 0;">'
+    + '<li style="margin:10px 0;"><strong>Celebrate every name.</strong><br>' + "Read the shout-outs above out loud. Every student on that list earned it." + '</li>'
+    + '<li style="margin:10px 0;"><strong>Make the wins visible.</strong><br>' + "Post the list. Send it home. Let students see what they built this summer." + '</li>'
+    + '<li style="margin:10px 0;"><strong>Send them off proud.</strong><br>' + "End on a high note so they walk away wanting to come back." + '</li>'
+    + '</ol>';
+  var thanksBox = '<div style="background-color:#e8f5e9;padding:12px;border-radius:6px;margin:14px 0;border:1px solid #a5d6a7;">'
+    + '<p style="margin:0 0 6px 0;">' + dotSpan('#2e7d32') + '<strong>Thank you</strong></p>'
+    + '<p style="margin:0;">' + "You showed up all summer. Your students did too. That is the whole game." + '</p>'
+    + '</div>';
+  return [
+    '<p style="margin:14px 0 4px 0;font-size:16px;">' + dotSpan('#2e7d32') + '<strong>Weekly Focus: Celebrate the finish</strong></p>',
+    '<p style="margin:0 0 8px 0;">' + "You made it. The students above hit their goals because you kept them going. Time to celebrate it." + '</p>',
+    '<p style="margin:12px 0 4px 0;"><strong>Close it out:</strong></p>',
+    movesHtml,
+    thanksBox
+  ];
+}
+
+// v2.14.0: categorized student shout-outs for the Final Week wrap-up, mirroring
+// buildWinnersHtml styling (dark header, dot icons, alternating rows). 2-column
+// (Achievement | Students). students = [{ name, minutes, days, accuracy, status }].
+// Empty bucket -> "--"; no students -> the same italic fallback note. PURE fn.
+function buildSummerStudentAwards(students) {
+  if (!students || students.length === 0) {
+    return '<p style="color:#666;font-style:italic;">No student achievement data available for this summer.</p>';
+  }
+  function names(pred) {
+    var out = [];
+    for (var i = 0; i < students.length; i++) {
+      if (pred(students[i]) && students[i].name) out.push(students[i].name);
+    }
+    out.sort();
+    return out.length ? out.join(', ') : '--';
+  }
+  var rows = [
+    { cat: 'Hit Fidelity Goal', dot: '#FFD700', val: names(function (s) { return String(s.status || '').trim().toLowerCase() === 'at fidelity'; }) },
+    { cat: '125+ Minutes', dot: '#ef6c00', val: names(function (s) { return (s.minutes || 0) >= 125; }) },
+    { cat: 'High Accuracy (90%+)', dot: '#2e7d32', val: names(function (s) { return (s.accuracy || 0) >= 90; }) }
+  ];
+  var smallDot = function (c) { return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c + ';margin-right:4px;vertical-align:middle;"></span>'; };
+  var html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;max-width:560px;font-size:13px;">';
+  html += '<tr style="background-color:#1a1a1a;color:#fff;"><th style="padding:8px;text-align:left;">Achievement</th><th style="padding:8px;text-align:left;">Students</th></tr>';
+  for (var j = 0; j < rows.length; j++) {
+    var bg = j % 2 === 0 ? '#f9f9f9' : '#ffffff';
+    html += '<tr style="background-color:' + bg + ';">'
+      + '<td style="padding:6px 8px;font-weight:bold;white-space:nowrap;">' + smallDot(rows[j].dot) + ' ' + rows[j].cat + '</td>'
+      + '<td style="padding:6px 8px;">' + rows[j].val + '</td></tr>';
+  }
+  html += '</table>';
+  return html;
+}
+
 // v2.13.0: district + per-template summerConfig resolution.
 function _summerDistrict(campus) {
   var list = CONFIG.SUMMER_SCHOOL.JASPER_CAMPUSES || [];
@@ -4681,6 +4889,9 @@ function _runSummerSchoolCore(opts) {
 
   var roster = readSummerRoster();
   var dataByTeacher = readSummerTeacherData(weekStarts);
+  // v2.14.0: student-level awards (Final Week only). Cumulative summer fidelity,
+  // grouped per (campus,teacher) and per campus. Empty groups when not enabled.
+  var fid = scfg.showStudentAwards ? readSummerStudentFidelity() : { byKey: {}, byCampus: {} };
   var tree = traverseSummerPdfTree(weekStarts);
 
   // Teacher universe = folder teachers UNION roster teachers, keyed by
@@ -4788,7 +4999,10 @@ function _runSummerSchoolCore(opts) {
     var teacherObj = { name: u.teacher, firstName: _summerFirstName(u.teacher), campus: u.campus };
     try {
       var v = _summerVariant(scfg, u.campus);
-      var body = _summerComposeBody(teacherObj, buildSummerSchoolTable(u.dataRow, weekStarts, weekLabels), v.copy());
+      var copySections = scfg.showStudentAwards
+        ? ['<h3 style="color:#1a1a1a;margin:16px 0 4px 0;">Summer Achievement Awards</h3>', buildSummerStudentAwards(fid.byKey[normalKeys[t]] || [])].concat(v.copy())
+        : v.copy();
+      var body = _summerComposeBody(teacherObj, buildSummerSchoolTable(u.dataRow, weekStarts, weekLabels), copySections);
       var toEmail;
       if (smokeMode) { toEmail = operator; }
       else if (u.email) { toEmail = u.email; }
@@ -4815,7 +5029,10 @@ function _runSummerSchoolCore(opts) {
         for (var ppi = 0; ppi < ep.length; ppi++) cPdfs.push(ep[ppi]);
       }
       var cv = _summerVariant(scfg, cgrp.campus);
-      var cBody = _summerComposeBody(cObj, buildSummerConsolidatedTable(cEntries, weekStarts, weekLabels), cv.copy());
+      var cCopy = scfg.showStudentAwards
+        ? ['<h3 style="color:#1a1a1a;margin:16px 0 4px 0;">Summer Achievement Awards</h3>', buildSummerStudentAwards(fid.byCampus[normalizeFolderName(cgrp.campus)] || [])].concat(cv.copy())
+        : cv.copy();
+      var cBody = _summerComposeBody(cObj, buildSummerConsolidatedTable(cEntries, weekStarts, weekLabels), cCopy);
       var cTo;
       if (smokeMode) { cTo = operator; }
       else { cTo = ''; cBody = _summerConsolidatedBanner(cgrp.campus) + cBody; }
