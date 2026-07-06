@@ -118,9 +118,12 @@ curl -s -L -o /dev/null -w "%{http_code}\n" \
 
 ### End-to-end test (drafts to yourself, no teacher touched)
 1. Reload the spreadsheet, then **Email Tools > Test Mode: Generate Smoke Test (drafts to me)**. This drafts ~6-8 emails to your own Gmail.
-2. Open one draft: the weekly PDF is a blue **"View your weekly report (PDF)"** button (no attachment), and body links point at `script.google.com/macros/s/.../exec?e=...`.
-3. Click the PDF button -> the report PDF **downloads** (v2.17.0: the web app serves the bytes itself; no Drive page appears). Click one body link -> it redirects to the real destination.
+2. Open one draft: the weekly PDF is a blue **"View your weekly report (PDF)"** button (no attachment), and all tracked links point at `khiemdoan-studient.github.io/email-automation/r.html#e=...` (v2.18.0 shim).
+3. Click the PDF button -> a small "Preparing your report..." page appears and the PDF **downloads** (the shim fetches the tracker cookie-lessly and delivers the bytes; no Drive page, no Google account routing). Click one body link -> the shim redirects to the real destination.
 4. **Email Tools > Engagement: Rebuild Click Dashboard** -> your test row shows `Clicked PDF = Y`, and the `Engagement Log` tab has your click rows.
+
+### GitHub Pages shim (v2.18.0)
+`docs/r.html` is served by GitHub Pages (repo Settings already configured: source = main branch, `/docs` folder) at `https://khiemdoan-studient.github.io/email-automation/r.html`. It is excluded from `clasp push` by the `.claspignore` whitelist. Editing it = commit + `git push` (Pages rebuilds in ~1 min). If the web-app deployment id ever changes, update the `EXEC` constant inside `r.html` AND `CONFIG.TRACKING_WEBAPP_URL`/`TRACKING_SHIM_URL` in `Code.js` together.
 
 `TRACKING_HMAC_SECRET` auto-generates in Script Properties on the first draft - no action needed. Do NOT rotate it, or links in already-sent emails stop verifying. If `CONFIG.TRACKING_WEBAPP_URL` is ever blanked and no Script Property is set, `buildTrackedUrl` fails open: links go out untracked and emails still send.
 

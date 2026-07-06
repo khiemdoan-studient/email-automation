@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.18.0] - 2026-07-06
+
+### FIX (actual root cause): cookie-less GitHub Pages shim defeats Google's /macros/u/N account routing
+
+The Engagement Log proved the remaining failures never reached our code: clicks from a multi-account browser get rewritten to `script.google.com/macros/u/N/...` and KILLED by Google's front-end before `doGet` runs (0 log rows for the failed clicks; the `/u/3/` URL form reproduces the kill even cookie-less, while the plain `/exec` form works cookie-less 100% of the time). No server-side Apps Script change can fix a request that never arrives.
+
+**Fix**: generated links now point at a static shim on GitHub Pages (`docs/r.html` -> `https://khiemdoan-studient.github.io/email-automation/r.html#e=<token>`). The signed token rides the URL fragment (never sent to GitHub). The shim fetches `/exec?fmt=json` with `{credentials:'omit'}` - no cookies means Google cannot account-route the request - and downloads the returned PDF client-side (base64 -> Blob -> auto-download + button). Non-PDF links return `{kind:'redirect'}` and are followed with `location.replace`. Any fetch failure falls back to direct `/exec` navigation (v2.17.0 behavior).
+
+- `doGet` gains a `fmt=json` mode (`_jsonOut`, ContentService JSON; CORS `Access-Control-Allow-Origin: *` comes standard on anonymous ContentService GETs). HTML serve mode kept.
+- `CONFIG.TRACKING_SHIM_URL` (+ Script Property `TRACKING_SHIM_URL` override, `''` = link straight to /exec); `buildTrackedUrl` emits the shim fragment form.
+- GitHub Pages enabled on the (already public) repo, source main `/docs`.
+- Existing drafts' links still point at `/exec` directly - REGENERATE drafts to get shim links.
+
+### Verified
+- Harness 12/12 (JSON kinds, byte-exact b64 roundtrip, invalid-not-logged, shim URL form, no double-wrap) + 153/153 regression + `node --check`.
+- LIVE, cookie-less, on the user's exact failing Verenice token: `exec?fmt=json` returned `kind:pdf`, correct filename, 78,114-byte `%PDF-1.4` payload, `Access-Control-Allow-Origin: *` (deployment @7). Pages URL serves the shim (HTTP 200) with the correct exec id, `credentials:'omit'`, `fmt=json`.
+
 ## [v2.17.0] - 2026-07-06
 
 ### FIX (root): serve PDF bytes FROM the web app - Drive removed from the click path
