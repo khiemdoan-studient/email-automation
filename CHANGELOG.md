@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.15.1] - 2026-07-06
+
+### FIX: tracking redirect landed the destination inside the sandbox iframe
+
+The v2.15.0 `doGet` redirected via `window.location.replace(...)`, but Apps Script serves web-app HTML inside a sandboxed iframe - so that only navigated the iframe, and the real destination (a Drive PDF) loaded FRAMED and errored with Drive's "Sorry, unable to open the file at this time." Symptom: the tracked link worked (click logged, redirect fired) but the PDF wouldn't render.
+
+- Redirect the TOP window instead: `window.top.location.href = <dest>` (cross-origin navigation is allowed) + a `target="_top"` fallback link. Dropped the `<meta refresh>` (can't retarget top from an iframe anyway).
+- Hardened the inline `<script>`: escape `<` in the JSON-encoded dest so a signed destination can never break out of the script block.
+- No token/logging/link-generation change - the already-sent links keep working, they just land in the top window now.
+
+Deployed to the same web app (`clasp deploy -i AKfycbzx...`, @3), same `/exec` URL. `node --check` clean; 153/153 tests green.
+
 ## [v2.15.0] - 2026-07-06
 
 ### FEATURE: Central click-through tracking (who clicked + PDF click-through rate)

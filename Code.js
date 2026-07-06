@@ -1905,14 +1905,22 @@ function doGet(e) {
     event: 'click', week: meta.week, email: meta.email, campus: meta.campus,
     teacher: '', linkType: meta.linkType, dest: meta.dest
   });
+  // v2.15.1: Apps Script serves doGet HTML inside a sandboxed iframe, so
+  // window.location only navigates the iframe - the real destination (Drive,
+  // etc.) then loads FRAMED and errors ("unable to open the file"). Redirect the
+  // TOP window instead (window.top.location, allowed cross-origin for
+  // navigation) and make the fallback link target _top. JSON.stringify escapes
+  // the URL as a JS string literal; also escape "<" so a signed dest can never
+  // break out of the <script> block.
+  var jsDest = JSON.stringify(meta.dest).replace(/</g, '\\u003c');
   var safeDest = meta.dest.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
     .replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return HtmlService.createHtmlOutput(
     '<!DOCTYPE html><html><head>'
-    + '<meta http-equiv="refresh" content="0;url=' + safeDest + '">'
-    + '<script>window.location.replace(' + JSON.stringify(meta.dest) + ');</script>'
+    + '<script>window.top.location.href=' + jsDest + ';</script>'
     + '</head><body style="font-family:Arial,sans-serif;">'
-    + 'Redirecting&hellip; if nothing happens, <a href="' + safeDest + '">click here</a>.'
+    + 'Redirecting&hellip; if nothing happens, '
+    + '<a href="' + safeDest + '" target="_top">click here</a>.'
     + '</body></html>')
     .setTitle('Redirecting')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
