@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.16.1] - 2026-07-06
+
+### FIX: redirect to Drive's direct-content URL, not the flaky /view preview
+
+Even after v2.16.0 made the PDF copy fully public, Drive's `/file/d/<id>/view` PREVIEW page persistently returned "Sorry, unable to open the file at this time" for freshly-copied PDFs - including 15+ min later and in incognito. Proven the file itself was fine: an unauthenticated `curl` of `uc?export=download&id=<id>` returned HTTP 200 and the real 4-page PDF (83 KB, `%PDF-1.4`). So the file is public + downloadable; only Drive's preview renderer chokes on the copy.
+
+Fix: `doGet` now rewrites any Drive `/view` (or `?id=`) destination to `https://drive.google.com/uc?export=download&id=<id>` via new `_driveDirectUrl()` before redirecting. Done at redirect time (not just link-build time) so links ALREADY sitting in inboxes are fixed by this redeploy - no regenerating drafts. Verified the redirect target serves the PDF to an anonymous request (200, 83 KB, valid PDF).
+
+Redeployed same web app (@5). `node --check` clean; 153/153 tests green.
+
 ## [v2.16.0] - 2026-07-06
 
 ### FIX: tracked PDF links 401'd - now link to a PUBLIC OWNED COPY

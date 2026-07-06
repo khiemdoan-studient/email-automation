@@ -1975,6 +1975,20 @@ function logSendEvent(teacher, week, templateName) {
 }
 
 /**
+ * Convert a Drive file/view URL to the direct-content URL that reliably serves
+ * the file (the /view preview page persistently errors on freshly-copied PDFs).
+ * Handles `/file/d/<id>/view` and `?id=<id>` forms; other URLs pass through.
+ */
+function _driveDirectUrl(url) {
+  var s = String(url || '');
+  var m = s.match(/\/file\/d\/([-\w]+)/) || s.match(/[?&]id=([-\w]+)/);
+  if (m && /drive\.google\.com|docs\.google\.com/.test(s)) {
+    return 'https://drive.google.com/uc?export=download&id=' + m[1];
+  }
+  return url;
+}
+
+/**
  * Web-app entry point. Verifies the signed token, logs the click, then bounces
  * the browser to the real destination. An unsigned / tampered / missing token
  * is NOT redirected (prevents this endpoint being abused as an open redirect).
@@ -1992,15 +2006,20 @@ function doGet(e) {
     event: 'click', week: meta.week, email: meta.email, campus: meta.campus,
     teacher: '', linkType: meta.linkType, dest: meta.dest
   });
+  // v2.16.1: Drive's /view PREVIEW page persistently errors ("unable to open the
+  // file at this time") for freshly-copied PDFs even though the file itself is
+  // fully public + downloadable. So redirect to the direct-content URL instead
+  // of the preview. Done here (not just at link-build time) so links ALREADY in
+  // sent inboxes are fixed by a redeploy, no regeneration needed.
+  var realDest = _driveDirectUrl(meta.dest);
   // v2.15.1: Apps Script serves doGet HTML inside a sandboxed iframe, so
   // window.location only navigates the iframe - the real destination (Drive,
-  // etc.) then loads FRAMED and errors ("unable to open the file"). Redirect the
-  // TOP window instead (window.top.location, allowed cross-origin for
-  // navigation) and make the fallback link target _top. JSON.stringify escapes
-  // the URL as a JS string literal; also escape "<" so a signed dest can never
-  // break out of the <script> block.
-  var jsDest = JSON.stringify(meta.dest).replace(/</g, '\\u003c');
-  var safeDest = meta.dest.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  // etc.) then loads FRAMED and errors. Redirect the TOP window instead
+  // (window.top.location, allowed cross-origin for navigation) and make the
+  // fallback link target _top. JSON.stringify escapes the URL as a JS string
+  // literal; also escape "<" so a signed dest can't break out of the <script>.
+  var jsDest = JSON.stringify(realDest).replace(/</g, '\\u003c');
+  var safeDest = realDest.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
     .replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return HtmlService.createHtmlOutput(
     '<!DOCTYPE html><html><head>'
