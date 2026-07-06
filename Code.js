@@ -273,6 +273,7 @@ function onOpen() {
     .addItem('Clear Error Log', 'clearErrorLog')
     .addSeparator()
     .addItem('Engagement: Rebuild Click Dashboard', 'rebuildEngagementDashboard')
+    .addItem('Engagement: Set Up Report Links Folder', 'setupReportLinksFolder')
     .addItem('Run Unit Tests', 'runUnitTests')
     .addSeparator()
     .addItem('Set Date Range', 'setDateRange')
@@ -1841,6 +1842,92 @@ function _injectPdfCta(html, ctaHtml) {
   return ctaHtml + html;
 }
 
+// ============================================
+// v2.16.0 — PUBLIC PDF COPIES (so tracked links actually open)
+// ============================================
+//
+// The weekly + summer PDFs live in a Drive tree this account does NOT own
+// (shared-with-me), so setSharing() on the original throws and the file stays
+// private -> teachers hit "request access" / "unable to open the file". Fix:
+// COPY each PDF into a folder THIS account owns ("Email Report Links"), set the
+// COPY to anyone-with-link (which works, because we own it), and link to the
+// copy. Idempotent: a copy named "{Teacher} - {week}.pdf" is reused if present.
+// Fail-soft: any failure returns null and the caller falls back to attaching
+// the original PDF, so a teacher is never left without their report.
+
+var _reportLinksFolderCache = null;
+
+/**
+ * Return the id of the "Email Report Links" folder this account owns, creating
+ * it (My Drive, anyone-with-link) + persisting the id on first use. The Script
+ * Property REPORT_LINKS_FOLDER_ID overrides / pins it. Returns '' on failure.
+ */
+function _ensureReportLinksFolder() {
+  if (_reportLinksFolderCache) return _reportLinksFolderCache;
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('REPORT_LINKS_FOLDER_ID') || '';
+  if (id) {
+    try {
+      var existing = DriveApp.getFolderById(id);
+      existing.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      _reportLinksFolderCache = id;
+      return id;
+    } catch (e) {
+      // stored id is stale/inaccessible -> fall through and make a fresh one
+    }
+  }
+  try {
+    var folder = DriveApp.createFolder('Email Report Links');
+    folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    _reportLinksFolderCache = folder.getId();
+    props.setProperty('REPORT_LINKS_FOLDER_ID', _reportLinksFolderCache);
+    return _reportLinksFolderCache;
+  } catch (e2) {
+    logError('WARN', '_ensureReportLinksFolder',
+      null, 'could not create/ share Email Report Links folder: ' + (e2.message || e2), '');
+    return '';
+  }
+}
+
+/**
+ * Publish a public, owned copy of a source PDF and return its File (or null on
+ * failure -> caller attaches the original instead). Idempotent by copyName.
+ * @param {File} sourcePdf  the shared-with-me original
+ * @param {string} copyName deterministic name, e.g. "Jane Doe - 2026-04-20_to_2026-04-26.pdf"
+ */
+function _publishPublicPdfCopy(sourcePdf, copyName) {
+  try {
+    var folderId = _ensureReportLinksFolder();
+    if (!folderId) return null;
+    var folder = DriveApp.getFolderById(folderId);
+    // Reuse an existing copy if one is already there (idempotent re-runs).
+    var it = folder.getFilesByName(copyName);
+    var copy = it.hasNext() ? it.next() : sourcePdf.makeCopy(copyName, folder);
+    copy.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return copy;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Menu helper: (re)create the Email Report Links folder + report its URL. Lets
+ * the IM confirm the public-copies folder exists without generating drafts.
+ */
+function setupReportLinksFolder() {
+  var ui = SpreadsheetApp.getUi();
+  var id = _ensureReportLinksFolder();
+  if (!id) {
+    ui.alert('Could not set up folder',
+      'Failed to create the Email Report Links folder. Check the Error Log.', ui.ButtonSet.OK);
+    return;
+  }
+  var url = 'https://drive.google.com/drive/folders/' + id;
+  ui.alert('Email Report Links folder ready',
+    'Public (anyone-with-link) copies of each teacher PDF land here so tracked '
+    + 'links open for everyone.\n\nFolder: ' + url, ui.ButtonSet.OK);
+}
+
 /**
  * Lazily create a log tab with a bold frozen header row. Mirrors the Error Log
  * bootstrap in logError. Returns the Sheet.
@@ -2943,30 +3030,40 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
   // the tracking redirect. Body links are rewritten too. All fail OPEN: if the
   // web app isn't deployed yet, links pass through untracked and the email still
   // works. Sharing failures (Shared-Drive policy) are logged, not fatal.
+  // v2.16.0: publish a PUBLIC OWNED COPY of the PDF and link to that (the
+  // originals live in a shared-with-me tree we can't reshare, so linking to them
+  // 401s for recipients). If the copy fails, fall back to ATTACHING the original
+  // so the teacher still gets their report (that week's PDF click just isn't
+  // tracked). Body links are rewritten either way.
   var trackMeta = { week: dateRange, email: teacher.email, campus: teacher.campus };
+  var attachFallback = null;
   if (summaryPdf) {
-    try {
-      summaryPdf.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    } catch (shareErr) {
+    var copyName = String(teacher.name || 'report') + ' - ' + dateRange + '.pdf';
+    var publicCopy = _publishPublicPdfCopy(summaryPdf, copyName);
+    if (publicCopy) {
+      var pdfUrl = null;
+      try { pdfUrl = publicCopy.getUrl(); } catch (_) {}
+      if (pdfUrl) {
+        var trackedPdf = buildTrackedUrl(pdfUrl, {
+          week: dateRange, email: teacher.email, campus: teacher.campus, linkType: 'pdf'
+        });
+        body = _injectPdfCta(body, buildPdfCtaHtml_(trackedPdf));
+      } else {
+        attachFallback = summaryPdf;  // no url somehow -> attach original
+      }
+    } else {
+      attachFallback = summaryPdf;    // copy/share failed -> attach original
       logError('WARN', 'createDraftForTeacher', teacher,
-        'could not set PDF link-sharing (recipients may hit "request access"): '
-        + (shareErr.message || shareErr), '');
-    }
-    var pdfUrl = null;
-    try { pdfUrl = summaryPdf.getUrl(); } catch (_) {}
-    if (pdfUrl) {
-      var trackedPdf = buildTrackedUrl(pdfUrl, {
-        week: dateRange, email: teacher.email, campus: teacher.campus, linkType: 'pdf'
-      });
-      body = _injectPdfCta(body, buildPdfCtaHtml_(trackedPdf));
+        'public PDF copy failed; attaching original instead (PDF click not tracked this send)', '');
     }
   }
   body = rewriteBodyLinks_(body, trackMeta);
 
   try {
     withGmailRetry(function() {
-      // v2.15.0: no attachments — the PDF is a tracked link in the body now.
-      GmailApp.createDraft(teacher.email, template.subject, '', { htmlBody: body });
+      var draftOptions = { htmlBody: body };
+      if (attachFallback) draftOptions.attachments = [attachFallback];
+      GmailApp.createDraft(teacher.email, template.subject, '', draftOptions);
     });
   } catch (e) {
     var pdfName = summaryPdf ? '<unknown>' : '(no-pdf template)';
@@ -5210,9 +5307,10 @@ function _summerUnassignedBanner(campus) {
  * operator (the body already carries a fill-in banner).
  */
 function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
-  // v2.15.0: summer PDFs become tracked links appended to the body (not
-  // attachments), so summer click-through is measured too. Fail-open: no web
-  // app => links pass through untracked.
+  // v2.15.0 + v2.16.0: summer PDFs become tracked links to PUBLIC OWNED COPIES
+  // (append to the body, not attachments), so summer click-through is measured.
+  // Any PDF whose public copy fails is ATTACHED instead so the teacher still
+  // gets it. Fail-open: no web app => links pass through untracked.
   var sMeta = {
     week: 'summer',
     email: toEmail || (teacherObj && teacherObj.email) || '',
@@ -5220,20 +5318,24 @@ function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
   };
   var body = htmlBody;
   var pdfLinks = [];
+  var attachFallbacks = [];
   for (var i = 0; i < (pdfs || []).length; i++) {
     var f = pdfs[i];
-    try { f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); }
-    catch (shErr) {
-      logError('WARN', '_createSummerDraft', teacherObj,
-        'could not set summer PDF link-sharing: ' + (shErr.message || shErr), '');
-    }
-    var url = null, nm = 'report';
-    try { url = f.getUrl(); nm = f.getName(); } catch (_) {}
+    var nm = 'report';
+    try { nm = f.getName(); } catch (_) {}
+    // Disambiguate by campus so same-named files (e.g. Unassigned reports at
+    // different campuses) don't collide on the idempotent copy-name reuse.
+    var copyName = (sMeta.campus ? String(sMeta.campus).replace(/[\\\/]/g, '-') + ' - ' : '') + nm;
+    var copy = _publishPublicPdfCopy(f, copyName);
+    var url = null;
+    if (copy) { try { url = copy.getUrl(); } catch (_) {} }
     if (url) {
       var tracked = buildTrackedUrl(url, {
         week: 'summer', email: sMeta.email, campus: sMeta.campus, linkType: 'pdf'
       });
       pdfLinks.push('<a href="' + tracked + '">&#128196; ' + _esc(nm) + '</a>');
+    } else {
+      attachFallbacks.push(f);  // copy failed -> attach original
     }
   }
   if (pdfLinks.length) {
@@ -5242,6 +5344,7 @@ function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
   }
   body = rewriteBodyLinks_(body, sMeta);
   var opts = { htmlBody: body };
+  if (attachFallbacks.length) opts.attachments = attachFallbacks;
   var to = toEmail || '';
   try {
     withGmailRetry(function () { GmailApp.createDraft(to, subject, '', opts); });

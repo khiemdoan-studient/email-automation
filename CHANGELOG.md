@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.16.0] - 2026-07-06
+
+### FIX: tracked PDF links 401'd - now link to a PUBLIC OWNED COPY
+
+v2.15.0 tried `setSharing(ANYONE_WITH_LINK)` on the ORIGINAL PDF, but the weekly + summer PDFs live in a Drive tree this account doesn't own (shared-with-me), so the call throws and the file stays private. Recipients (and even the sender, opening under a different logged-in account) got Drive's "Sorry, unable to open the file at this time." Verified live: the original file returned HTTP 401 unauthenticated, while already-public studient files return 200 - so it's a per-file ownership problem, not a domain policy.
+
+Fix: at draft time, COPY each teacher's PDF into an **"Email Report Links"** folder THIS account owns, set the COPY to anyone-with-link (works, because we own it), and build the tracked link to the copy. Self-contained - no dependency on the original file's owner, the (external, not-in-repo) process that produces these PDFs, or any Shared-Drive policy.
+
+- New helpers: `_ensureReportLinksFolder` (creates + shares + caches the folder id in Script Property `REPORT_LINKS_FOLDER_ID`, lazily on first use), `_publishPublicPdfCopy` (idempotent copy by name + share; returns null on failure), `setupReportLinksFolder` (menu helper to create the folder + show its URL).
+- `createDraftForTeacher` + `_createSummerDraft` now link to the public copy; **fail-soft**: if a copy fails (e.g. the source owner disabled "viewers can copy"), the ORIGINAL PDF is ATTACHED instead so the teacher still gets their report (that send's PDF click just isn't tracked), logged as a WARN.
+- Idempotent: copy named `{Teacher} - {week}.pdf` (summer: campus-prefixed) is reused if already present, so re-runs don't duplicate.
+- New menu item: "Engagement: Set Up Report Links Folder".
+
+Redeployed to the same web app (@4). `node --check` clean; 153/153 tests green.
+
 ## [v2.15.1] - 2026-07-06
 
 ### FIX: tracking redirect landed the destination inside the sandbox iframe
