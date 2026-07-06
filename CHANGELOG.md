@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.15.0] - 2026-07-06
+
+### FEATURE: Central click-through tracking (who clicked + PDF click-through rate)
+
+Adds a lightweight click tracker so IMs can see, in one place, which teachers clicked into their weekly email and the click-through rate on the weekly PDF report. No engagement tracking existed before.
+
+**How it works.** The script deploys as a Web App (`doGet`, execute-as-owner, access Anyone). Every `<a href>` in the email body, plus the weekly PDF (now delivered as a LINK, not an attachment), is rewritten to point at the `/exec` endpoint with an HMAC-signed token carrying week + teacher email + campus + link type + destination. `doGet` verifies the signature, appends a row to the `Engagement Log` tab, then bounces the browser to the real destination. Unsigned/tampered tokens are refused (no open-redirect). Each successful draft creation writes a row to `Send Log` (the denominator).
+
+- **PDF is now a tracked link, not an attachment.** `createDraftForTeacher` sets the PDF to link-sharing (`ANYONE_WITH_LINK`, fail-soft on Shared-Drive policy), injects a "View your weekly report (PDF)" CTA after the greeting, and drops `attachments`. Same for the Summer flow (`_createSummerDraft`) - each summer PDF becomes a tracked link.
+- **New tabs** (auto-created): `Engagement Log` (raw click events), `Send Log` (sends = CTR denominator), `Engagement Dashboard` (per-teacher Sent / Clicked any / Clicked PDF / #clicks + PDF CTR by week).
+- **New menu item**: Email Tools -> "Engagement: Rebuild Click Dashboard" (`rebuildEngagementDashboard`).
+- **New helpers**: `signToken`/`verifyToken` (HMAC, JSON payload), `buildTrackedUrl`, `rewriteBodyLinks_`, `classifyLink_`, `buildPdfCtaHtml_`/`_injectPdfCta`, `logEngagementEvent`, `logSendEvent`, `_ensureTab`, `doGet`.
+- **Fail-open**: until `TRACKING_WEBAPP_URL` Script Property is set (the one-time deploy step), links pass through untracked and emails keep working. `TRACKING_HMAC_SECRET` auto-generates on first use.
+- `appsscript.json`: added `webapp` block.
+
+**Signals**: clicks only for v1. Open-pixel tracking was deliberately skipped (Gmail image-proxy prefetch inflates opens, and Apps Script web apps can't return a binary pixel); it can be added later as a labeled best-effort column.
+
+### One-time setup (required before tracking is live)
+1. `clasp push`.
+2. Apps Script editor -> Deploy -> New deployment -> Web app (Execute as: Me, Who has access: Anyone). Authorize.
+3. Copy the `/exec` URL into Script Property `TRACKING_WEBAPP_URL` (Project Settings -> Script Properties).
+See `docs/CLASP_SETUP.md` + `IMPLEMENTATION_NOTES.md`.
+
+### Verified
+- `node test_runner.js`: 153/153 PASS (no regression).
+- New tracking-core harness (mocked Apps Script globals): 25/25 PASS - sign/verify roundtrip incl. URLs with `&`, tampered-payload + tampered-signature + garbage + empty all rejected, `doGet` refuses unsigned (no redirect, no log row) and redirects a valid token while logging one `pdf` click row, body-link rewrite wraps `http(s)` hrefs while skipping `mailto:`/`#anchor` and preserving link text, link classification, CTA injection after greeting.
+- `node --check Code.js`: clean.
+
 ## [v2.14.0] - 2026-06-26
 
 ### FEATURE: "Summer School Final Week" template (all campuses + student awards)

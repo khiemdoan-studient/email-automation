@@ -93,6 +93,22 @@ Some Google Workspace orgs restrict OAuth scopes for non-domain accounts. If `cl
 ### `clasp push` says "Pushed 0 files"
 The `.clasp.json` `rootDir` setting points to where clasp looks for files. Default is `.` (repo root). If your `Code.gs` lives in a subdirectory, update `rootDir` in `.clasp.json`.
 
+## Step 6 — Deploy the click-tracking Web App (v2.15.0, one-time)
+
+Click tracking needs the script published as a Web App so teachers' link clicks hit `doGet`. This is separate from `clasp push` (which only uploads code). Do it once, then re-version after each push.
+
+1. **First deploy** (via editor - the OAuth authorization for a public web app can't be scripted):
+   - `clasp open` -> Apps Script editor -> **Deploy > New deployment**.
+   - Gear icon -> **Web app**.
+   - **Execute as: Me** (the owner). **Who has access: Anyone**. Click **Deploy**, authorize the scopes.
+   - Copy the **Web app URL** (ends in `/exec`).
+2. **Wire the URL**: Editor -> **Project Settings** (gear) -> **Script Properties** -> Add property `TRACKING_WEBAPP_URL` = the `/exec` URL. (`TRACKING_HMAC_SECRET` auto-generates on first use - no action needed. Do NOT rotate it, or already-sent links stop verifying.)
+3. **Verify**: run "Generate My Email Drafts" for a test teacher; the Gmail draft's PDF should be a **link** (no attachment) pointing at `script.google.com/macros/s/.../exec?e=...`. Click it -> lands on the PDF, and the `Engagement Log` tab gains a `pdf` click row.
+
+**After every later `clasp push`:** the live `/exec` keeps running the OLD code until you re-version. Editor -> **Deploy > Manage deployments** -> edit the web app deployment -> **Version: New version** -> **Deploy**. The `/exec` URL stays the same, so `TRACKING_WEBAPP_URL` does not change.
+
+Until `TRACKING_WEBAPP_URL` is set, `buildTrackedUrl` fails open: links are untracked and emails still send normally.
+
 ## When NOT to use clasp
 
 - **You're not the script owner / Editor**: Use the manual paste workflow.

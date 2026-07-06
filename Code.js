@@ -264,6 +264,8 @@ function onOpen() {
     .addItem('Debug: Drive Auth (run if "Service error: Drive")', 'diagnoseDriveAuth')
     .addItem('View Error Log', 'viewErrorLog')
     .addItem('Clear Error Log', 'clearErrorLog')
+    .addSeparator()
+    .addItem('Engagement: Rebuild Click Dashboard', 'rebuildEngagementDashboard')
     .addItem('Run Unit Tests', 'runUnitTests')
     .addSeparator()
     .addItem('Set Date Range', 'setDateRange')
@@ -1652,6 +1654,350 @@ function _getRunId() {
   return _runIdCache;
 }
 
+// ============================================
+// v2.15.0 — CLICK-THROUGH TRACKING (web app redirect + engagement log)
+// ============================================
+//
+// Adds a lightweight click tracker so IMs can see, centrally, which teachers
+// clicked into their weekly email and the click-through rate on the weekly
+// PDF report. Mechanism:
+//
+//   1. Every <a href> in the email body (plus the weekly PDF, now delivered as
+//      a LINK instead of an attachment) is rewritten to point at this project's
+//      own web-app /exec URL with a signed token carrying:
+//        week | teacher email | campus | linkType | destination URL
+//   2. doGet() verifies the HMAC signature, appends a row to the "Engagement
+//      Log" tab, then bounces the browser to the real destination.
+//   3. createDraftForTeacher logs a "send" row to "Send Log" (the denominator:
+//      who was emailed this week) so we can list teachers who never clicked and
+//      compute PDF CTR = distinct PDF-clickers / teachers sent.
+//
+// SETUP (one-time, see docs/CLASP_SETUP.md + IMPLEMENTATION_NOTES.md):
+//   - Deploy > New deployment > Web app (Execute as: Me, Access: Anyone).
+//   - Copy the /exec URL into Script Property TRACKING_WEBAPP_URL.
+//   - A random TRACKING_HMAC_SECRET is auto-generated on first use if unset.
+// Until TRACKING_WEBAPP_URL is set, buildTrackedUrl() fails OPEN (returns the
+// raw destination) so emails keep working before the deploy step lands.
+
+var ENGAGEMENT_LOG_TAB = 'Engagement Log';
+var ENGAGEMENT_LOG_HEADERS = ['timestamp', 'event', 'week', 'teacher', 'email', 'campus', 'link_type', 'destination'];
+var SEND_LOG_TAB = 'Send Log';
+var SEND_LOG_HEADERS = ['timestamp', 'week', 'teacher', 'email', 'campus', 'template'];
+var ENGAGEMENT_DASHBOARD_TAB = 'Engagement Dashboard';
+var _trackingSecretCache = null;
+var _trackingUrlCache = null;
+
+/**
+ * Return the tracking web-app /exec URL, or '' if not yet deployed/configured.
+ * Cached at module scope. Empty string => buildTrackedUrl fails open.
+ */
+function _trackingWebAppUrl() {
+  if (_trackingUrlCache === null) {
+    _trackingUrlCache = PropertiesService.getScriptProperties()
+      .getProperty('TRACKING_WEBAPP_URL') || '';
+  }
+  return _trackingUrlCache;
+}
+
+/**
+ * Return the HMAC secret, generating + persisting a random one on first use.
+ */
+function _trackingSecret() {
+  if (_trackingSecretCache) return _trackingSecretCache;
+  var props = PropertiesService.getScriptProperties();
+  var s = props.getProperty('TRACKING_HMAC_SECRET');
+  if (!s) {
+    s = Utilities.base64EncodeWebSafe(
+      Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+        String(new Date().getTime()) + '|' + Math.random() + '|' + Utilities.getUuid()));
+    props.setProperty('TRACKING_HMAC_SECRET', s);
+  }
+  _trackingSecretCache = s;
+  return s;
+}
+
+/** base64url-encode a UTF-8 string. */
+function _b64u(str) {
+  return Utilities.base64EncodeWebSafe(Utilities.newBlob(str).getBytes());
+}
+/** base64url-decode back to a UTF-8 string. */
+function _b64uDecode(b64) {
+  return Utilities.newBlob(Utilities.base64DecodeWebSafe(b64)).getDataAsString();
+}
+
+/** HMAC-SHA256(payload) as a base64url string, keyed by the tracking secret. */
+function _signPayload(payloadB64) {
+  var raw = Utilities.computeHmacSha256Signature(payloadB64, _trackingSecret());
+  return Utilities.base64EncodeWebSafe(raw);
+}
+
+/**
+ * Build a signed tracking token. meta = {week, email, campus, linkType, dest}.
+ * Token shape: "<payloadB64>.<sigB64>".
+ */
+function signToken(meta) {
+  var payload = JSON.stringify({
+    w: meta.week || '', e: meta.email || '', c: meta.campus || '',
+    l: meta.linkType || 'other', d: meta.dest || ''
+  });
+  var payloadB64 = _b64u(payload);
+  return payloadB64 + '.' + _signPayload(payloadB64);
+}
+
+/**
+ * Verify + decode a token. Returns {week,email,campus,linkType,dest} on a valid
+ * signature, or null on any tampering / malformed input.
+ */
+function verifyToken(token) {
+  try {
+    if (!token || token.indexOf('.') < 0) return null;
+    var parts = token.split('.');
+    var payloadB64 = parts[0], sig = parts[1];
+    if (_signPayload(payloadB64) !== sig) return null;  // signature mismatch
+    var o = JSON.parse(_b64uDecode(payloadB64));
+    return {
+      week: o.w || '', email: o.e || '', campus: o.c || '',
+      linkType: o.l || 'other', dest: o.d || ''
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Wrap a destination URL in a tracked redirect. Fails OPEN (returns dest
+ * unchanged) when the web app isn't deployed yet or dest isn't trackable.
+ * @param {string} dest      real destination URL
+ * @param {object} meta      {week, email, campus, linkType}
+ */
+function buildTrackedUrl(dest, meta) {
+  var base = _trackingWebAppUrl();
+  if (!base || !dest) return dest;
+  if (!/^https?:\/\//i.test(dest)) return dest;      // skip mailto:, tel:, #anchors
+  if (dest.indexOf(base) === 0) return dest;         // already tracked
+  var token = signToken({
+    week: meta.week, email: meta.email, campus: meta.campus,
+    linkType: meta.linkType, dest: dest
+  });
+  return base + '?e=' + encodeURIComponent(token);
+}
+
+/**
+ * Infer a coarse link_type label from a destination URL, so the dashboard can
+ * break clicks down (pdf vs portal vs sheet vs canva vs other). The PDF link is
+ * tagged explicitly at injection time; this classifies the pre-existing body
+ * links picked up by rewriteBodyLinks_.
+ */
+function classifyLink_(url) {
+  var u = String(url || '').toLowerCase();
+  if (/customer-portal|studient\.com/.test(u)) return 'portal';
+  if (/docs\.google\.com\/spreadsheets/.test(u)) return 'sheet';
+  if (/canva\./.test(u)) return 'canva';
+  if (/drive\.google\.com|docs\.google\.com\/document/.test(u)) return 'resource';
+  return 'other';
+}
+
+/**
+ * Rewrite every trackable <a href> in an assembled HTML body to route through
+ * the tracking redirect. Visible link text is untouched. Idempotent + fail-open.
+ * @param {string} html   assembled email body
+ * @param {object} meta   {week, email, campus}
+ */
+function rewriteBodyLinks_(html, meta) {
+  if (!html || !_trackingWebAppUrl()) return html;
+  return html.replace(/(<a\b[^>]*\bhref=")([^"]+)(")/gi, function(m, pre, href, post) {
+    var tracked = buildTrackedUrl(href, {
+      week: meta.week, email: meta.email, campus: meta.campus,
+      linkType: classifyLink_(href)
+    });
+    return pre + tracked + post;
+  });
+}
+
+/** A prominent "View your weekly report" CTA button linking to a tracked URL. */
+function buildPdfCtaHtml_(trackedUrl) {
+  return '<div style="margin:16px 0;">'
+    + '<a href="' + trackedUrl + '" style="display:inline-block;background-color:#1a73e8;'
+    + 'color:#ffffff;padding:12px 24px;border-radius:6px;text-decoration:none;'
+    + 'font-weight:bold;font-size:14px;">&#128196; View your weekly report (PDF)</a>'
+    + '</div>';
+}
+
+/**
+ * Insert the PDF CTA into a body: right after the greeting paragraph if there
+ * is one, otherwise at the very top.
+ */
+function _injectPdfCta(html, ctaHtml) {
+  if (!ctaHtml) return html;
+  var idx = html.indexOf('</p>');
+  if (idx >= 0) return html.slice(0, idx + 4) + ctaHtml + html.slice(idx + 4);
+  return ctaHtml + html;
+}
+
+/**
+ * Lazily create a log tab with a bold frozen header row. Mirrors the Error Log
+ * bootstrap in logError. Returns the Sheet.
+ */
+function _ensureTab(name, headers) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    sheet.appendRow(headers);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#f3f3f3');
+  }
+  return sheet;
+}
+
+/** Append one row to the Engagement Log. Best-effort (never throws). */
+function logEngagementEvent(ev) {
+  try {
+    var sheet = _ensureTab(ENGAGEMENT_LOG_TAB, ENGAGEMENT_LOG_HEADERS);
+    sheet.appendRow([
+      new Date().toISOString(), ev.event || 'click', ev.week || '',
+      ev.teacher || '', ev.email || '', ev.campus || '',
+      ev.linkType || 'other', String(ev.dest || '').substring(0, 500)
+    ]);
+  } catch (e) {
+    console.log('logEngagementEvent failed: ' + (e.message || e));
+  }
+}
+
+/** Append one "send" row (the CTR denominator). Best-effort (never throws). */
+function logSendEvent(teacher, week, templateName) {
+  try {
+    var sheet = _ensureTab(SEND_LOG_TAB, SEND_LOG_HEADERS);
+    sheet.appendRow([
+      new Date().toISOString(), week || '',
+      String((teacher && teacher.name) || ''),
+      String((teacher && teacher.email) || ''),
+      String((teacher && teacher.campus) || ''),
+      String(templateName || '')
+    ]);
+  } catch (e) {
+    console.log('logSendEvent failed: ' + (e.message || e));
+  }
+}
+
+/**
+ * Web-app entry point. Verifies the signed token, logs the click, then bounces
+ * the browser to the real destination. An unsigned / tampered / missing token
+ * is NOT redirected (prevents this endpoint being abused as an open redirect).
+ */
+function doGet(e) {
+  var token = (e && e.parameter && e.parameter.e) || '';
+  var meta = verifyToken(token);
+  if (!meta || !/^https?:\/\//i.test(meta.dest)) {
+    return HtmlService.createHtmlOutput(
+      '<p style="font-family:Arial,sans-serif;">This link has expired or is invalid. '
+      + 'Please open the email again.</p>')
+      .setTitle('Link unavailable');
+  }
+  logEngagementEvent({
+    event: 'click', week: meta.week, email: meta.email, campus: meta.campus,
+    teacher: '', linkType: meta.linkType, dest: meta.dest
+  });
+  var safeDest = meta.dest.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html><head>'
+    + '<meta http-equiv="refresh" content="0;url=' + safeDest + '">'
+    + '<script>window.location.replace(' + JSON.stringify(meta.dest) + ');</script>'
+    + '</head><body style="font-family:Arial,sans-serif;">'
+    + 'Redirecting&hellip; if nothing happens, <a href="' + safeDest + '">click here</a>.'
+    + '</body></html>')
+    .setTitle('Redirecting')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * Rebuild the Engagement Dashboard tab: one section per week showing which
+ * teachers were sent, whether they clicked anything, whether they clicked the
+ * PDF, and the per-week PDF click-through rate. Formula-driven off Send Log +
+ * Engagement Log so it stays live between rebuilds.
+ */
+function rebuildEngagementDashboard() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sendSheet = ss.getSheetByName(SEND_LOG_TAB);
+  if (!sendSheet || sendSheet.getLastRow() < 2) {
+    ui.alert('No sends logged yet',
+      'Generate drafts first — the Send Log is written as drafts are created.',
+      ui.ButtonSet.OK);
+    return;
+  }
+  var send = sendSheet.getDataRange().getValues();  // [ts, week, teacher, email, campus, template]
+  var eng = [];
+  var engSheet = ss.getSheetByName(ENGAGEMENT_LOG_TAB);
+  if (engSheet && engSheet.getLastRow() > 1) eng = engSheet.getDataRange().getValues();
+
+  // Index clicks: email|week -> {any:true, pdf:true, count, first}
+  var clicks = {};
+  for (var i = 1; i < eng.length; i++) {
+    var r = eng[i];
+    if ((r[1] || 'click') !== 'click') continue;
+    var key = String(r[4] || '').toLowerCase() + '||' + String(r[2] || '');  // email||week
+    var rec = clicks[key] || { any: false, pdf: false, count: 0, first: '' };
+    rec.any = true;
+    rec.count++;
+    if (String(r[6] || '') === 'pdf') rec.pdf = true;
+    if (!rec.first || String(r[0]) < rec.first) rec.first = String(r[0]);
+    clicks[key] = rec;
+  }
+
+  // De-dupe sends to one row per (email, week), newest template wins.
+  var sentMap = {}, order = [];
+  for (var j = 1; j < send.length; j++) {
+    var s = send[j];
+    var wk = String(s[1] || ''), em = String(s[3] || '');
+    var sk = em.toLowerCase() + '||' + wk;
+    if (!sentMap[sk]) order.push(sk);
+    sentMap[sk] = { week: wk, teacher: String(s[2] || ''), email: em, campus: String(s[4] || '') };
+  }
+
+  var rows = [['Week', 'Teacher', 'Email', 'Campus', 'Sent', 'Clicked any', 'Clicked PDF', '# clicks', 'First click']];
+  var perWeek = {};  // week -> {sent, pdfClickers}
+  order.sort(function(a, b) {
+    return (sentMap[b].week + sentMap[b].teacher).localeCompare(sentMap[a].week + sentMap[a].teacher);
+  });
+  for (var k = 0; k < order.length; k++) {
+    var m = sentMap[order[k]];
+    var c = clicks[m.email.toLowerCase() + '||' + m.week] || { any: false, pdf: false, count: 0, first: '' };
+    rows.push([m.week, m.teacher, m.email, m.campus, 'Y',
+      c.any ? 'Y' : 'N', c.pdf ? 'Y' : 'N', c.count, c.first]);
+    var pw = perWeek[m.week] || { sent: 0, pdf: 0 };
+    pw.sent++;
+    if (c.pdf) pw.pdf++;
+    perWeek[m.week] = pw;
+  }
+
+  // Summary block (PDF CTR by week).
+  var summary = [[''], ['PDF click-through rate by week'], ['Week', 'Teachers sent', 'PDF clickers', 'PDF CTR']];
+  var weeks = Object.keys(perWeek).sort().reverse();
+  for (var w = 0; w < weeks.length; w++) {
+    var pw2 = perWeek[weeks[w]];
+    var ctr = pw2.sent ? (pw2.pdf / pw2.sent) : 0;
+    summary.push([weeks[w], pw2.sent, pw2.pdf, Math.round(ctr * 1000) / 10 + '%']);
+  }
+
+  var sheet = _ensureTab(ENGAGEMENT_DASHBOARD_TAB, rows[0]);
+  sheet.clear();
+  sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+  sheet.getRange(1, 1, 1, rows[0].length).setFontWeight('bold').setBackground('#f3f3f3');
+  var startRow = rows.length + 2;
+  for (var sRow = 0; sRow < summary.length; sRow++) {
+    if (summary[sRow].length) {
+      sheet.getRange(startRow + sRow, 1, 1, summary[sRow].length).setValues([summary[sRow]]);
+    }
+  }
+  sheet.getRange(startRow + 1, 1, 2, 4).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  ss.setActiveSheet(sheet);
+  ui.alert('Engagement Dashboard rebuilt',
+    order.length + ' teacher-week rows across ' + weeks.length + ' week(s).', ui.ButtonSet.OK);
+}
+
 /**
  * Append a structured row to the "Error Log" tab. Best-effort — failures in
  * logging itself fall back to console.log (never crash the caller).
@@ -2575,11 +2921,37 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
   // rate-limit blips (one retry after 2s).
   // v2.8.1: when needsPdf is false, no attachments key sent to createDraft.
   var body = template.buildBody(teacher, metrics, winners);
+
+  // v2.15.0: the weekly PDF is now delivered as a TRACKED LINK (not attached),
+  // so click-through can be measured. Ensure the file is viewable by recipients
+  // (link-sharing), inject a "View your weekly report" CTA, and route it through
+  // the tracking redirect. Body links are rewritten too. All fail OPEN: if the
+  // web app isn't deployed yet, links pass through untracked and the email still
+  // works. Sharing failures (Shared-Drive policy) are logged, not fatal.
+  var trackMeta = { week: dateRange, email: teacher.email, campus: teacher.campus };
+  if (summaryPdf) {
+    try {
+      summaryPdf.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareErr) {
+      logError('WARN', 'createDraftForTeacher', teacher,
+        'could not set PDF link-sharing (recipients may hit "request access"): '
+        + (shareErr.message || shareErr), '');
+    }
+    var pdfUrl = null;
+    try { pdfUrl = summaryPdf.getUrl(); } catch (_) {}
+    if (pdfUrl) {
+      var trackedPdf = buildTrackedUrl(pdfUrl, {
+        week: dateRange, email: teacher.email, campus: teacher.campus, linkType: 'pdf'
+      });
+      body = _injectPdfCta(body, buildPdfCtaHtml_(trackedPdf));
+    }
+  }
+  body = rewriteBodyLinks_(body, trackMeta);
+
   try {
     withGmailRetry(function() {
-      var draftOptions = { htmlBody: body };
-      if (summaryPdf) draftOptions.attachments = [summaryPdf];
-      GmailApp.createDraft(teacher.email, template.subject, '', draftOptions);
+      // v2.15.0: no attachments — the PDF is a tracked link in the body now.
+      GmailApp.createDraft(teacher.email, template.subject, '', { htmlBody: body });
     });
   } catch (e) {
     var pdfName = summaryPdf ? '<unknown>' : '(no-pdf template)';
@@ -2592,6 +2964,7 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
       error: 'createDraft failed for "' + pdfName + '" (' + pdfSize + ' bytes): ' + (e.message || e)
     };
   }
+  logSendEvent(teacher, dateRange, (template && template.subject) || '');
   return { success: true };
 }
 
@@ -4822,13 +5195,43 @@ function _summerUnassignedBanner(campus) {
  * operator (the body already carries a fill-in banner).
  */
 function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
-  var attachments = [];
-  for (var i = 0; i < (pdfs || []).length; i++) attachments.push(pdfs[i]);
-  var opts = { htmlBody: htmlBody };
-  if (attachments.length > 0) opts.attachments = attachments;
+  // v2.15.0: summer PDFs become tracked links appended to the body (not
+  // attachments), so summer click-through is measured too. Fail-open: no web
+  // app => links pass through untracked.
+  var sMeta = {
+    week: 'summer',
+    email: toEmail || (teacherObj && teacherObj.email) || '',
+    campus: (teacherObj && teacherObj.campus) || ''
+  };
+  var body = htmlBody;
+  var pdfLinks = [];
+  for (var i = 0; i < (pdfs || []).length; i++) {
+    var f = pdfs[i];
+    try { f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); }
+    catch (shErr) {
+      logError('WARN', '_createSummerDraft', teacherObj,
+        'could not set summer PDF link-sharing: ' + (shErr.message || shErr), '');
+    }
+    var url = null, nm = 'report';
+    try { url = f.getUrl(); nm = f.getName(); } catch (_) {}
+    if (url) {
+      var tracked = buildTrackedUrl(url, {
+        week: 'summer', email: sMeta.email, campus: sMeta.campus, linkType: 'pdf'
+      });
+      pdfLinks.push('<a href="' + tracked + '">&#128196; ' + _esc(nm) + '</a>');
+    }
+  }
+  if (pdfLinks.length) {
+    body += '<div style="margin:16px 0;"><strong>Your weekly report(s):</strong><br>'
+      + pdfLinks.join('<br>') + '</div>';
+  }
+  body = rewriteBodyLinks_(body, sMeta);
+  var opts = { htmlBody: body };
   var to = toEmail || '';
   try {
     withGmailRetry(function () { GmailApp.createDraft(to, subject, '', opts); });
+    logSendEvent({ name: (teacherObj && teacherObj.teacher) || (teacherObj && teacherObj.name) || '',
+      email: sMeta.email, campus: sMeta.campus }, 'summer', subject);
     return { success: true };
   } catch (e) {
     var msg = String(e && e.message || e);

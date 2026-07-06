@@ -109,4 +109,22 @@ Run **Debug: Drive Auth** FIRST (v2.4.2+). Tests 3 Drive ops in isolation; outpu
 ### New templates don't appear in the Config Template dropdown
 The Config B4 data validation is set once (manually or via `setupTemplateDropdown()`) and does NOT auto-update when `TEMPLATE_NAMES` changes in Code.gs.
 - After adding/removing any template in Code.gs, run **Email Tools > Refresh Template Dropdown**
+
+## Click tracking (v2.15.0)
+
+### What it does
+Answers two questions centrally: (1) which teachers clicked into their weekly email, and (2) the click-through rate on the weekly PDF report. Mechanism: the script is deployed as a Web App (`doGet`); every body link + the weekly PDF (now a link, not an attachment) routes through the `/exec` endpoint carrying an HMAC-signed token; `doGet` logs the click to `Engagement Log` and redirects to the real destination. `logSendEvent` writes the denominator (`Send Log`) at draft time. `rebuildEngagementDashboard` rolls both into the `Engagement Dashboard` tab.
+
+### Deploy + wiring
+See `docs/CLASP_SETUP.md` Step 6. Short version: Deploy > New deployment > Web app (Execute as Me, Access Anyone) -> copy `/exec` URL into Script Property `TRACKING_WEBAPP_URL`. Re-version the deployment (Manage deployments > New version) after every `clasp push` or the live tracker runs stale code.
+
+### Reading the dashboard
+Run **Email Tools > Engagement: Rebuild Click Dashboard**. Top table = one row per teacher-week: `Sent`, `Clicked any`, `Clicked PDF`, `# clicks`, `First click`. Teachers with `Clicked any = N` are the "has not clicked" set. Bottom block = **PDF CTR by week** = distinct PDF-clickers / teachers sent.
+
+### Gotchas
+- **Attachment -> link**: recipients open the PDF via a Drive link now. The code sets `ANYONE_WITH_LINK` per file; a restrictive Shared-Drive sharing policy can block that (logged WARN). If teachers report "request access", enable link-sharing on the Weekly Reports Drive.
+- **Click inflation**: corporate link-scanners / Gmail prefetch can auto-hit a redirect link (the click analog of open-pixel inflation). A single auto-click still correctly marks the teacher "engaged", which matches the ask; the dashboard counts distinct teachers, not raw hits, for CTR.
+- **Fail-open**: no `TRACKING_WEBAPP_URL` set = links pass through untracked, emails still send. So a missing/rolled-back deployment degrades gracefully, it doesn't break sending.
+- **Secret rotation**: `TRACKING_HMAC_SECRET` auto-generates once. If it's ever changed, links in already-sent emails fail signature verification and land on the "link unavailable" page.
+- **"Attached:" copy**: a few subjects/bodies (Week 2, Week 8) still say "Attached:". Cosmetic only now; candidate copy fix, not a bug.
 - The "Set Template" popup reads `TEMPLATE_NAMES` directly, so it always shows the current list

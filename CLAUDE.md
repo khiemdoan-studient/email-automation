@@ -30,6 +30,8 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 
 **v2.14.0**: Added a third summer template, "Summer School Final Week" (subject "Studient - Final Week: You Made It"), for ALL summer campuses (Jasper + Allendale), week of 6/22. Unlike Week 1+2 / Week 3 it adds a Student Achievement Awards section (Week-6 style categorized shout-outs: Hit Fidelity Goal / 125+ Minutes / High Accuracy 90%+) sourced from the live Summer Performance Dashboard helper tabs (`_SummerFAData` for cumulative minutes/days/accuracy + `_SummerFAStud` for the authoritative At-fidelity status, joined by student_id; the visible "Summer Fidelity" tab is filter-dependent so it is NOT used). New `summerConfig.showStudentAwards` flag wires `readSummerStudentFidelity` (byKey per teacher + byCampus for consolidated JRHS) + `buildSummerStudentAwards` into the core's per-teacher AND consolidated paths; Week 1+2 / Week 3 stay byte-identical (flag absent). Live-verified the reader join against real data (389 students, 23 teacher groups, status join 5/5). Coverage: only AASP/AFES/AFMS/JRES have 6/22 weekly rows + PDFs (JHMS/JHES/JRHS ended 6/15); the cumulative awards + wrap-up copy still populate for all 7 campuses. New helpers: `readSummerStudentFidelity`, `buildSummerStudentAwards`, `_summerFinalWeekCopy`. Test count: 139 -> 153.
 
+**v2.15.0**: Central click-through tracking. The script now also deploys as a Web App (`doGet`, execute-as-owner, access Anyone) that acts as a signed-redirect click tracker. Every `<a href>` in the email body plus the weekly PDF (now a LINK, not an attachment) is rewritten through the `/exec` endpoint with an HMAC-signed token (week + teacher email + campus + link_type + destination); `doGet` verifies the signature, appends to the `Engagement Log` tab, then bounces to the real destination. Tampered/unsigned tokens are refused (no open-redirect). `createDraftForTeacher` + `_createSummerDraft` set the PDF to `ANYONE_WITH_LINK` (fail-soft), inject a "View your weekly report (PDF)" CTA, drop `attachments`, and log a `Send Log` row (the CTR denominator). New tabs: `Engagement Log`, `Send Log`, `Engagement Dashboard` (per-teacher Sent / Clicked any / Clicked PDF / #clicks + PDF CTR by week, rebuilt via the new "Engagement: Rebuild Click Dashboard" menu item). Clicks only for v1 (no open-pixel: Gmail proxy inflates opens + Apps Script can't serve a binary pixel). Fail-open until the one-time deploy sets Script Property `TRACKING_WEBAPP_URL`; `TRACKING_HMAC_SECRET` auto-generates. New helpers: `signToken`/`verifyToken`, `buildTrackedUrl`, `rewriteBodyLinks_`, `classifyLink_`, `buildPdfCtaHtml_`/`_injectPdfCta`, `logEngagementEvent`, `logSendEvent`, `_ensureTab`, `doGet`, `rebuildEngagementDashboard`. Verified: 153/153 existing tests + 25/25 new tracking-core tests (mocked Apps Script globals).
+
 For full per-version implementation details + version-specific bug post-mortems, see `IMPLEMENTATION_NOTES.md`.
 
 ## Architecture
@@ -97,6 +99,18 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
 
 10. **Student Year Highlights** (v2.6.5+, top 2 per teacher)
     - Used only by SC Final Email template
+
+11. **Engagement Log** (v2.15.0, auto-created on first click)
+    - Raw click events: `timestamp, event, week, teacher, email, campus, link_type, destination`
+    - Written by `doGet` (the web-app tracker), one row per tracked link click
+
+12. **Send Log** (v2.15.0, auto-created on first draft)
+    - The CTR denominator: `timestamp, week, teacher, email, campus, template`
+    - Written by `logSendEvent` at each successful draft creation
+
+13. **Engagement Dashboard** (v2.15.0, rebuilt on demand)
+    - Per-teacher Sent / Clicked any / Clicked PDF / #clicks + First click, plus PDF CTR by week
+    - Rebuilt by `rebuildEngagementDashboard` (Email Tools menu); formula-free snapshot off the two logs
 
 ### Google Drive Folder Structure (verified April 2026)
 
@@ -208,7 +222,8 @@ Debug menu items - run when "Drive folders NOT FOUND" or "Service error: Drive" 
 | Set Date Range | `setDateRange` | Manual override for Config Date Range |
 | Set Template | `setTemplate` | Manual override for Config Template |
 | Refresh Template Dropdown | `setupTemplateDropdown` | Rebuilds Config Template data validation from `TEMPLATE_NAMES` |
-| Run Unit Tests | (test runner) | 139 test cases (v2.13.0) |
+| Engagement: Rebuild Click Dashboard | `rebuildEngagementDashboard` | Rebuilds the Engagement Dashboard tab (who clicked + PDF CTR by week) from Send Log + Engagement Log (v2.15.0) |
+| Run Unit Tests | (test runner) | 153 test cases (v2.14.0) |
 
 ## Important Implementation Details
 
@@ -220,6 +235,7 @@ Debug menu items - run when "Drive folders NOT FOUND" or "Service error: Drive" 
 - **Email HTML** - inline CSS only (no `<style>` blocks).
 - **Drive validation blocks generation** if no matching PDF found.
 - **Winners table** only in Week 6 and Wrap Up templates.
+- **Click tracking (v2.15.0)** - the weekly PDF is now a **tracked link, not an attachment**. Requires a one-time Web App deploy: `clasp push` -> Apps Script editor -> Deploy -> New deployment -> Web app (Execute as: Me, Access: Anyone) -> copy the `/exec` URL into Script Property `TRACKING_WEBAPP_URL`. Until that property is set, `buildTrackedUrl` fails OPEN (links untracked, emails still send). RE-DEPLOY (Manage deployments -> edit -> new version) after any `Code.js` push, otherwise the live `/exec` runs stale code. Recipients must be able to VIEW the Drive PDF: the code sets `ANYONE_WITH_LINK` per file, but a restrictive Shared-Drive sharing policy can block that (logged as WARN) - if teachers hit "request access", enable link-sharing on the Weekly Reports Drive.
 
 For color thresholds, testing workflow, and troubleshooting recipes, see `IMPLEMENTATION_NOTES.md`.
 
@@ -232,6 +248,7 @@ For color thresholds, testing workflow, and troubleshooting recipes, see `IMPLEM
 
 **Critical drift markers** (do NOT remove from this CLAUDE.md):
 - Sheet ID, Apps Script Project ID, Root Drive Folder ID
+- **Click tracking (v2.15.0)**: Script Properties `TRACKING_WEBAPP_URL` (the deployed `/exec` URL; unset = tracking off, fail-open) + `TRACKING_HMAC_SECRET` (auto-generated; if rotated, previously-sent links stop verifying and 404 to "link unavailable"). `appsscript.json` carries the `webapp` block. The PDF is a link, not an attachment - any template copy still saying "Attached:" (e.g. Week 2 / Week 8 subjects) is now slightly inaccurate; harmless but a candidate copy fix.
 - Sheet tab names + column letters (Y/Z/AA for Teacher Email)
 - Drive folder structure (school name format)
 - Related-project function names (changes upstream break this app)
