@@ -119,7 +119,10 @@ Answers two questions centrally: (1) which teachers clicked into their weekly em
 See `docs/CLASP_SETUP.md` Step 6. Short version: Deploy > New deployment > Web app (Execute as Me, Access Anyone) -> copy `/exec` URL into Script Property `TRACKING_WEBAPP_URL`. Re-version the deployment (Manage deployments > New version) after every `clasp push` or the live tracker runs stale code.
 
 ### Reading the dashboard
-Run **Email Tools > Engagement: Rebuild Click Dashboard**. Top table = one row per teacher-week: `Sent`, `Clicked any`, `Clicked PDF`, `# clicks`, `First click`. Teachers with `Clicked any = N` are the "has not clicked" set. Bottom block = **PDF CTR by week** = distinct PDF-clickers / teachers sent.
+Run **Email Tools > Engagement: Rebuild Click Dashboard**. Three sections (v2.19.0):
+1. **Teacher Fidelity** (top) - one row per teacher across all weeks: `Reports sent`, `PDFs clicked`, `Total clicks`, `Fidelity %` (= PDFs clicked / reports sent; green >= 80%, yellow >= 40%, red below; sorted by fidelity descending). This is the at-a-glance "which teachers engage with their reports" view.
+2. **Per-(teacher, week) detail** - `Sent`, `Clicked any`, `Clicked PDF`, `# clicks`, `First click`. Teachers with `Clicked any = N` are the "has not clicked" set for that week.
+3. **PDF CTR by week** = distinct PDF-clickers / teachers sent.
 
 ### Gotchas
 - **Email links MUST go through the cookie-less shim, never straight to /exec (v2.18.0)**: Google's multi-account front-end rewrites browser navigations to `script.google.com/macros/u/N/...` and kills them BEFORE `doGet` runs (Drive-branded error at the script URL; zero Engagement Log rows). Cookie-less requests never get account-routed. So generated links target `https://khiemdoan-studient.github.io/email-automation/r.html#e=<token>` (GitHub Pages, main `/docs`; token in the fragment so GitHub never sees it), and the shim fetches `/exec?fmt=json` with `credentials:'omit'`. If `docs/r.html`'s embedded exec id ever changes, update `CONFIG.TRACKING_SHIM_URL`/the file together. Disabling: set Script Property `TRACKING_SHIM_URL` to a space? No - set it to any non-empty alternate URL, or blank BOTH the property and `CONFIG.TRACKING_SHIM_URL` to fall back to direct /exec links.

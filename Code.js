@@ -2199,24 +2199,56 @@ function rebuildEngagementDashboard() {
     sentMap[sk] = { week: wk, teacher: String(s[2] || ''), email: em, campus: String(s[4] || '') };
   }
 
-  var rows = [['Week', 'Teacher', 'Email', 'Campus', 'Sent', 'Clicked any', 'Clicked PDF', '# clicks', 'First click']];
-  var perWeek = {};  // week -> {sent, pdfClickers}
+  var perWeek = {};    // week -> {sent, pdfClickers}
+  var perTeacher = {}; // email -> {teacher, campus, weeksSent, pdfClicked, totalClicks}
+  var detail = [];     // per-(teacher, week) rows
   order.sort(function(a, b) {
     return (sentMap[b].week + sentMap[b].teacher).localeCompare(sentMap[a].week + sentMap[a].teacher);
   });
   for (var k = 0; k < order.length; k++) {
     var m = sentMap[order[k]];
-    var c = clicks[m.email.toLowerCase() + '||' + m.week] || { any: false, pdf: false, count: 0, first: '' };
-    rows.push([m.week, m.teacher, m.email, m.campus, 'Y',
+    var emKey = m.email.toLowerCase();
+    var c = clicks[emKey + '||' + m.week] || { any: false, pdf: false, count: 0, first: '' };
+    detail.push([m.week, m.teacher, m.email, m.campus, 'Y',
       c.any ? 'Y' : 'N', c.pdf ? 'Y' : 'N', c.count, c.first]);
     var pw = perWeek[m.week] || { sent: 0, pdf: 0 };
     pw.sent++;
     if (c.pdf) pw.pdf++;
     perWeek[m.week] = pw;
+    // v2.19.0: per-teacher fidelity aggregate (all weeks).
+    var pt = perTeacher[emKey] || { teacher: m.teacher, campus: m.campus, weeksSent: 0, pdfClicked: 0, totalClicks: 0, email: m.email };
+    pt.weeksSent++;
+    if (c.pdf) pt.pdfClicked++;
+    pt.totalClicks += c.count;
+    if (m.teacher) pt.teacher = m.teacher;  // keep a non-blank name if any send row had one
+    perTeacher[emKey] = pt;
   }
 
-  // Summary block (PDF CTR by week).
-  var summary = [[''], ['PDF click-through rate by week'], ['Week', 'Teachers sent', 'PDF clickers', 'PDF CTR']];
+  // v2.19.0: SECTION 1 - Teacher Fidelity (% of report PDFs clicked, all weeks).
+  var fidelity = [['TEACHER FIDELITY - % of report PDFs clicked'],
+                  ['Teacher', 'Email', 'Campus', 'Reports sent', 'PDFs clicked', 'Total clicks', 'Fidelity %']];
+  var tKeys = Object.keys(perTeacher);
+  tKeys.sort(function(a, b) {
+    var fa = perTeacher[a].pdfClicked / perTeacher[a].weeksSent;
+    var fb = perTeacher[b].pdfClicked / perTeacher[b].weeksSent;
+    if (fb !== fa) return fb - fa;                                   // fidelity desc
+    return perTeacher[a].teacher.localeCompare(perTeacher[b].teacher); // then name
+  });
+  var fidelityPcts = [];  // parallel array for color banding
+  for (var t = 0; t < tKeys.length; t++) {
+    var pt2 = perTeacher[tKeys[t]];
+    var pct = pt2.weeksSent ? (pt2.pdfClicked / pt2.weeksSent) : 0;
+    fidelityPcts.push(pct);
+    fidelity.push([pt2.teacher, pt2.email, pt2.campus, pt2.weeksSent, pt2.pdfClicked,
+      pt2.totalClicks, Math.round(pct * 1000) / 10 + '%']);
+  }
+
+  // SECTION 2 - per-(teacher, week) detail.
+  var rows = [['Week', 'Teacher', 'Email', 'Campus', 'Sent', 'Clicked any', 'Clicked PDF', '# clicks', 'First click']];
+  for (var d = 0; d < detail.length; d++) rows.push(detail[d]);
+
+  // SECTION 3 - PDF CTR by week.
+  var summary = [['PDF click-through rate by week'], ['Week', 'Teachers sent', 'PDF clickers', 'PDF CTR']];
   var weeks = Object.keys(perWeek).sort().reverse();
   for (var w = 0; w < weeks.length; w++) {
     var pw2 = perWeek[weeks[w]];
@@ -2224,21 +2256,41 @@ function rebuildEngagementDashboard() {
     summary.push([weeks[w], pw2.sent, pw2.pdf, Math.round(ctr * 1000) / 10 + '%']);
   }
 
-  var sheet = _ensureTab(ENGAGEMENT_DASHBOARD_TAB, rows[0]);
+  var sheet = _ensureTab(ENGAGEMENT_DASHBOARD_TAB, fidelity[1]);
   sheet.clear();
-  sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
-  sheet.getRange(1, 1, 1, rows[0].length).setFontWeight('bold').setBackground('#f3f3f3');
-  var startRow = rows.length + 2;
+
+  // Write Section 1 (fidelity). Row 1 = section title, row 2 = header.
+  sheet.getRange(1, 1, 1, 1).setValue(fidelity[0][0]).setFontWeight('bold');
+  sheet.getRange(2, 1, 1, fidelity[1].length).setValues([fidelity[1]])
+    .setFontWeight('bold').setBackground('#f3f3f3');
+  if (tKeys.length) {
+    sheet.getRange(3, 1, tKeys.length, fidelity[1].length)
+      .setValues(fidelity.slice(2));
+    // Color-band the Fidelity % column (col 7): green >= 80%, yellow >= 40%, red below.
+    for (var fb2 = 0; fb2 < fidelityPcts.length; fb2++) {
+      var color = fidelityPcts[fb2] >= 0.8 ? '#d9ead3' : (fidelityPcts[fb2] >= 0.4 ? '#fff2cc' : '#f4cccc');
+      sheet.getRange(3 + fb2, 7).setBackground(color);
+    }
+  }
+
+  // Write Section 2 (detail) below with a blank spacer row.
+  var detailStart = 2 + tKeys.length + 2;
+  sheet.getRange(detailStart, 1, rows.length, rows[0].length).setValues(rows);
+  sheet.getRange(detailStart, 1, 1, rows[0].length).setFontWeight('bold').setBackground('#f3f3f3');
+
+  // Write Section 3 (CTR by week) below that.
+  var startRow = detailStart + rows.length + 1;
   for (var sRow = 0; sRow < summary.length; sRow++) {
     if (summary[sRow].length) {
       sheet.getRange(startRow + sRow, 1, 1, summary[sRow].length).setValues([summary[sRow]]);
     }
   }
-  sheet.getRange(startRow + 1, 1, 2, 4).setFontWeight('bold');
-  sheet.setFrozenRows(1);
+  sheet.getRange(startRow, 1, 2, 4).setFontWeight('bold');
+  sheet.setFrozenRows(2);
   ss.setActiveSheet(sheet);
   ui.alert('Engagement Dashboard rebuilt',
-    order.length + ' teacher-week rows across ' + weeks.length + ' week(s).', ui.ButtonSet.OK);
+    tKeys.length + ' teachers, ' + order.length + ' teacher-week rows across '
+    + weeks.length + ' week(s).', ui.ButtonSet.OK);
 }
 
 /**

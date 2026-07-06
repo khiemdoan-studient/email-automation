@@ -108,8 +108,10 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
     - The CTR denominator: `timestamp, week, teacher, email, campus, template`
     - Written by `logSendEvent` at each successful draft creation
 
-13. **Engagement Dashboard** (v2.15.0, rebuilt on demand)
-    - Per-teacher Sent / Clicked any / Clicked PDF / #clicks + First click, plus PDF CTR by week
+13. **Engagement Dashboard** (v2.15.0, rebuilt on demand; v2.19.0 layout)
+    - Section 1 (v2.19.0): **Teacher Fidelity** - per teacher across all weeks: Reports sent, PDFs clicked, Total clicks, Fidelity % (= PDFs clicked / reports sent; green >= 80% / yellow >= 40% / red below)
+    - Section 2: per-(teacher, week) detail - Sent / Clicked any / Clicked PDF / #clicks / First click
+    - Section 3: PDF CTR by week
     - Rebuilt by `rebuildEngagementDashboard` (Email Tools menu); formula-free snapshot off the two logs
 
 ### Google Drive Folder Structure (verified April 2026)

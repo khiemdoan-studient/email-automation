@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.19.0] - 2026-07-06
+
+### FEATURE: Teacher Fidelity section on the Engagement Dashboard
+
+`rebuildEngagementDashboard` now renders THREE sections (was two):
+
+1. **TEACHER FIDELITY - % of report PDFs clicked** (new, on top): one row per teacher across ALL weeks - `Teacher | Email | Campus | Reports sent | PDFs clicked | Total clicks | Fidelity %`. Fidelity % = PDFs clicked / reports sent, color-banded (green >= 80%, yellow >= 40%, red below), sorted worst-visible: fidelity descending, then name. Also surfaces each teacher's total click count (all link types), covering the "# of PDF clicks by teacher" ask alongside the per-week `# clicks` column that already existed.
+2. Per-(teacher, week) detail table (unchanged columns).
+3. PDF CTR by week (unchanged).
+
+Frozen rows now 2 (section title + fidelity header). Completion alert reports teacher count + teacher-week rows.
+
+### Verified
+- New harness (mocked Send/Engagement/Dashboard sheets): 14/14 - fidelity math (2 sends + 1 PDF week = 50%), color bands (50% yellow, 0% red), section row offsets, newest-week-first detail, per-week CTR math, alert text. Existing suite 153/153; `node --check` clean. Deployed @8.
+
 ## [v2.18.0] - 2026-07-06
 
 ### FIX (actual root cause): cookie-less GitHub Pages shim defeats Google's /macros/u/N account routing
