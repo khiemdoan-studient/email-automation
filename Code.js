@@ -11,6 +11,14 @@ var CONFIG = {
   // create a brand-new deployment, or the /exec id changes and this goes stale).
   // Empty string here = tracking off / fail-open.
   TRACKING_WEBAPP_URL: "https://script.google.com/macros/s/AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg/exec",
+
+  // v2.18.0: GitHub Pages shim that fetches the /exec endpoint COOKIE-LESSLY
+  // (credentials:'omit'), dodging Google's multi-account /macros/u/N routing
+  // which kills browser navigations to /exec before doGet runs. Generated links
+  // point here with the token in the URL FRAGMENT (#e=...), which never reaches
+  // GitHub's servers. Script Property TRACKING_SHIM_URL overrides. Empty string
+  // = link straight to /exec (old behavior).
+  TRACKING_SHIM_URL: "https://khiemdoan-studient.github.io/email-automation/r.html",
   CONFIG_SHEET_NAME: "Config",
   MAPPING_SHEET_NAME: "School-IM Mapping",
   ROSTER_SHEET_NAME: "Teacher Emails",
@@ -1783,11 +1791,27 @@ function buildTrackedUrl(dest, meta) {
   if (!base || !dest) return dest;
   if (!/^https?:\/\//i.test(dest)) return dest;      // skip mailto:, tel:, #anchors
   if (dest.indexOf(base) === 0) return dest;         // already tracked
+  var shim = _trackingShimUrl();
+  if (shim && dest.indexOf(shim) === 0) return dest; // already tracked (shim form)
   var token = signToken({
     week: meta.week, email: meta.email, campus: meta.campus,
     linkType: meta.linkType, dest: dest
   });
+  // v2.18.0: prefer the cookie-less GitHub Pages shim; token rides the fragment
+  // so it never reaches GitHub. Fall back to the direct /exec form if no shim.
+  if (shim) return shim + '#e=' + encodeURIComponent(token);
   return base + '?e=' + encodeURIComponent(token);
+}
+
+/** Return the GitHub Pages shim URL ('' = disabled, link straight to /exec). */
+var _trackingShimCache = null;
+function _trackingShimUrl() {
+  if (_trackingShimCache === null) {
+    var prop = PropertiesService.getScriptProperties().getProperty('TRACKING_SHIM_URL');
+    _trackingShimCache = (prop !== null && prop !== undefined && prop !== '')
+      ? prop : (CONFIG.TRACKING_SHIM_URL || '');
+  }
+  return _trackingShimCache;
 }
 
 /**
@@ -2048,6 +2072,12 @@ function _servePdfPage(fileId) {
   }
 }
 
+/** JSON response helper for the shim's fmt=json mode. */
+function _jsonOut(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 /**
  * Web-app entry point. Verifies the signed token, logs the click, then bounces
  * the browser to the real destination. An unsigned / tampered / missing token
@@ -2055,8 +2085,10 @@ function _servePdfPage(fileId) {
  */
 function doGet(e) {
   var token = (e && e.parameter && e.parameter.e) || '';
+  var wantJson = ((e && e.parameter && e.parameter.fmt) || '') === 'json';
   var meta = verifyToken(token);
   if (!meta || !/^https?:\/\//i.test(meta.dest)) {
+    if (wantJson) return _jsonOut({ kind: 'invalid' });
     return HtmlService.createHtmlOutput(
       '<p style="font-family:Arial,sans-serif;">This link has expired or is invalid. '
       + 'Please open the email again.</p>')
@@ -2066,6 +2098,29 @@ function doGet(e) {
     event: 'click', week: meta.week, email: meta.email, campus: meta.campus,
     teacher: '', linkType: meta.linkType, dest: meta.dest
   });
+  // v2.18.0: JSON mode for the GitHub Pages shim (cookie-less fetch). Google's
+  // multi-account front-end (/macros/u/N routing) kills BROWSER navigations to
+  // /exec before doGet even runs, while cookie-less requests always work. The
+  // shim fetches this endpoint with {credentials:'omit'} - no cookies, no /u/N
+  // routing possible - and downloads the returned bytes client-side.
+  if (wantJson) {
+    var fid = _driveFileId(meta.dest);
+    if (fid) {
+      try {
+        var jf = DriveApp.getFileById(fid);
+        if (jf.getSize() <= PDF_SERVE_MAX_BYTES) {
+          var jname = String(jf.getName() || 'report.pdf');
+          if (!/\.pdf$/i.test(jname)) jname += '.pdf';
+          return _jsonOut({
+            kind: 'pdf', name: jname,
+            b64: Utilities.base64Encode(jf.getBlob().getBytes())
+          });
+        }
+      } catch (jErr) { /* unreadable -> fall through to redirect */ }
+      return _jsonOut({ kind: 'redirect', url: _driveDirectUrl(meta.dest) });
+    }
+    return _jsonOut({ kind: 'redirect', url: meta.dest });
+  }
   // v2.17.0: for Drive-file destinations, serve the PDF bytes OURSELVES instead
   // of bouncing to Drive's browser front-end (which kept erroring "unable to
   // open the file at this time" across /view AND the uc download flow, even on

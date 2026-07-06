@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Your Studient report</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; text-align: center; padding-top: 48px; color: #202124; }
+  #msg { font-size: 16px; margin-bottom: 24px; }
+  a.btn { display: inline-block; background-color: #1a73e8; color: #ffffff; padding: 12px 24px;
+          border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 14px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<p id="msg">Preparing your report&hellip;</p>
+<p><a id="dl" class="btn hidden" href="#">Download your report (PDF)</a></p>
+<script>
+// Studient click-tracking shim (v2.18.0).
+// Why this page exists: Google's multi-account session routing
+// (script.google.com/macros/u/N/...) intermittently kills BROWSER navigations
+// to Apps Script web apps before they execute. Cookie-less requests always
+// work. So this static page fetches the tracker with {credentials:'omit'} -
+// no cookies, no account routing - and delivers the PDF client-side.
+// The token stays in the URL FRAGMENT: it is never sent to GitHub's servers.
+(function () {
+  var EXEC = 'https://script.google.com/macros/s/AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg/exec';
+  var msg = document.getElementById('msg');
+  var btn = document.getElementById('dl');
+
+  var h = window.location.hash || '';
+  var token = h.indexOf('#e=') === 0 ? h.slice(3) : '';
+  if (!token) { msg.textContent = 'This link is incomplete. Please open it from your email again.'; return; }
+
+  function fallback() {
+    // Last resort: direct navigation to the tracker (old behavior).
+    window.location.replace(EXEC + '?e=' + token);
+  }
+
+  fetch(EXEC + '?fmt=json&e=' + token, { credentials: 'omit', redirect: 'follow' })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (data) {
+      if (data.kind === 'pdf' && data.b64) {
+        var bin = atob(data.b64), len = bin.length, arr = new Uint8Array(len);
+        for (var i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+        var url = URL.createObjectURL(new Blob([arr], { type: 'application/pdf' }));
+        btn.href = url;
+        btn.download = data.name || 'report.pdf';
+        btn.classList.remove('hidden');
+        btn.click();
+        msg.textContent = 'Your report is downloading. If it did not start, use the button below.';
+      } else if (data.kind === 'redirect' && data.url) {
+        msg.textContent = 'Taking you there…';
+        window.location.replace(data.url);
+      } else if (data.kind === 'invalid') {
+        msg.textContent = 'This link has expired or is invalid. Please open the email again.';
+      } else {
+        fallback();
+      }
+    })
+    .catch(fallback);
+})();
+</script>
+</body>
+</html>
