@@ -19,11 +19,8 @@ Adds a lightweight click tracker so IMs can see, in one place, which teachers cl
 
 **Signals**: clicks only for v1. Open-pixel tracking was deliberately skipped (Gmail image-proxy prefetch inflates opens, and Apps Script web apps can't return a binary pixel); it can be added later as a labeled best-effort column.
 
-### One-time setup (required before tracking is live)
-1. `clasp push`.
-2. Apps Script editor -> Deploy -> New deployment -> Web app (Execute as: Me, Who has access: Anyone). Authorize.
-3. Copy the `/exec` URL into Script Property `TRACKING_WEBAPP_URL` (Project Settings -> Script Properties).
-See `docs/CLASP_SETUP.md` + `IMPLEMENTATION_NOTES.md`.
+### Deploy (done 2026-07-06; here for reference)
+Deployed via clasp (the manifest `webapp` block lets clasp publish it - no browser step): `clasp push -f` then `clasp deploy`. Deployment id `AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg`; its `/exec` URL is baked into `CONFIG.TRACKING_WEBAPP_URL`, so tracking is ON with no Script Property needed. Verified live: `/exec` returns HTTP 200 (anonymous access works). **After any future `clasp push`, re-version the SAME deployment** (`clasp deploy -i <that id>`) so the `/exec` URL stays stable - a bare `clasp deploy` mints a new id and stales the baked URL. Full test walkthrough in `docs/CLASP_SETUP.md` Step 6.
 
 ### Verified
 - `node test_runner.js`: 153/153 PASS (no regression).

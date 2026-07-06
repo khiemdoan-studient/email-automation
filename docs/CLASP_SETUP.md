@@ -93,21 +93,36 @@ Some Google Workspace orgs restrict OAuth scopes for non-domain accounts. If `cl
 ### `clasp push` says "Pushed 0 files"
 The `.clasp.json` `rootDir` setting points to where clasp looks for files. Default is `.` (repo root). If your `Code.gs` lives in a subdirectory, update `rootDir` in `.clasp.json`.
 
-## Step 6 — Deploy the click-tracking Web App (v2.15.0, one-time)
+## Step 6 — Click-tracking Web App (v2.15.0)
 
-Click tracking needs the script published as a Web App so teachers' link clicks hit `doGet`. This is separate from `clasp push` (which only uploads code). Do it once, then re-version after each push.
+Click tracking needs the script published as a Web App so teachers' link clicks hit `doGet`. This is separate from `clasp push` (which only uploads code) - a deployment publishes a runnable `/exec` URL. The manifest already carries the `webapp` block (`executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS`), so clasp can do the whole thing - no browser step.
 
-1. **First deploy** (via editor - the OAuth authorization for a public web app can't be scripted):
-   - `clasp open` -> Apps Script editor -> **Deploy > New deployment**.
-   - Gear icon -> **Web app**.
-   - **Execute as: Me** (the owner). **Who has access: Anyone**. Click **Deploy**, authorize the scopes.
-   - Copy the **Web app URL** (ends in `/exec`).
-2. **Wire the URL**: Editor -> **Project Settings** (gear) -> **Script Properties** -> Add property `TRACKING_WEBAPP_URL` = the `/exec` URL. (`TRACKING_HMAC_SECRET` auto-generates on first use - no action needed. Do NOT rotate it, or already-sent links stop verifying.)
-3. **Verify**: run "Generate My Email Drafts" for a test teacher; the Gmail draft's PDF should be a **link** (no attachment) pointing at `script.google.com/macros/s/.../exec?e=...`. Click it -> lands on the PDF, and the `Engagement Log` tab gains a `pdf` click row.
+**Already deployed (2026-07-06):** deployment id `AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg`, `/exec` URL is baked into `CONFIG.TRACKING_WEBAPP_URL` in Code.js. So tracking is ON by default - nothing else to configure.
 
-**After every later `clasp push`:** the live `/exec` keeps running the OLD code until you re-version. Editor -> **Deploy > Manage deployments** -> edit the web app deployment -> **Version: New version** -> **Deploy**. The `/exec` URL stays the same, so `TRACKING_WEBAPP_URL` does not change.
+### The rule after every `clasp push`
+Re-version the SAME deployment (keeps the `/exec` URL stable so `CONFIG.TRACKING_WEBAPP_URL` stays valid):
 
-Until `TRACKING_WEBAPP_URL` is set, `buildTrackedUrl` fails open: links are untracked and emails still send normally.
+```bash
+clasp push -f
+clasp deploy -i AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg -d "what changed"
+```
+
+Do NOT run a bare `clasp deploy` (no `-i`): that mints a BRAND-NEW deployment with a different `/exec` id, and the baked-in URL goes stale. If you ever must create a fresh deployment, update `CONFIG.TRACKING_WEBAPP_URL` to the new `/exec` URL (or set the Script Property `TRACKING_WEBAPP_URL`, which overrides the CONFIG default).
+
+### Verify it's live
+```bash
+curl -s -L -o /dev/null -w "%{http_code}\n" \
+  "https://script.google.com/macros/s/AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg/exec"
+# expect: 200  (no login wall = anonymous access works)
+```
+
+### End-to-end test (drafts to yourself, no teacher touched)
+1. Reload the spreadsheet, then **Email Tools > Test Mode: Generate Smoke Test (drafts to me)**. This drafts ~6-8 emails to your own Gmail.
+2. Open one draft: the weekly PDF is a blue **"View your weekly report (PDF)"** button (no attachment), and body links point at `script.google.com/macros/s/.../exec?e=...`.
+3. Click the PDF button and one body link -> each lands on the real destination.
+4. **Email Tools > Engagement: Rebuild Click Dashboard** -> your test row shows `Clicked PDF = Y`, and the `Engagement Log` tab has your click rows.
+
+`TRACKING_HMAC_SECRET` auto-generates in Script Properties on the first draft - no action needed. Do NOT rotate it, or links in already-sent emails stop verifying. If `CONFIG.TRACKING_WEBAPP_URL` is ever blanked and no Script Property is set, `buildTrackedUrl` fails open: links go out untracked and emails still send.
 
 ## When NOT to use clasp
 

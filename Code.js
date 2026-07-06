@@ -4,6 +4,13 @@
 var CONFIG = {
   ROOT_FOLDER_NAME: "Bruna and Mark's Schools - Weekly Report",
   ROOT_FOLDER_ID: "1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR",  // Bulletproof fallback: direct folder ID
+
+  // v2.15.0: click-tracking web app /exec URL. This is the DEFAULT; the Script
+  // Property TRACKING_WEBAPP_URL (if set) overrides it. Keep this pointed at the
+  // SAME deployment id you re-version after each `clasp push` (re-version, don't
+  // create a brand-new deployment, or the /exec id changes and this goes stale).
+  // Empty string here = tracking off / fail-open.
+  TRACKING_WEBAPP_URL: "https://script.google.com/macros/s/AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg/exec",
   CONFIG_SHEET_NAME: "Config",
   MAPPING_SHEET_NAME: "School-IM Mapping",
   ROSTER_SHEET_NAME: "Teacher Emails",
@@ -1694,7 +1701,7 @@ var _trackingUrlCache = null;
 function _trackingWebAppUrl() {
   if (_trackingUrlCache === null) {
     _trackingUrlCache = PropertiesService.getScriptProperties()
-      .getProperty('TRACKING_WEBAPP_URL') || '';
+      .getProperty('TRACKING_WEBAPP_URL') || CONFIG.TRACKING_WEBAPP_URL || '';
   }
   return _trackingUrlCache;
 }

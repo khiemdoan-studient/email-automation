@@ -248,7 +248,7 @@ For color thresholds, testing workflow, and troubleshooting recipes, see `IMPLEM
 
 **Critical drift markers** (do NOT remove from this CLAUDE.md):
 - Sheet ID, Apps Script Project ID, Root Drive Folder ID
-- **Click tracking (v2.15.0)**: Script Properties `TRACKING_WEBAPP_URL` (the deployed `/exec` URL; unset = tracking off, fail-open) + `TRACKING_HMAC_SECRET` (auto-generated; if rotated, previously-sent links stop verifying and 404 to "link unavailable"). `appsscript.json` carries the `webapp` block. The PDF is a link, not an attachment - any template copy still saying "Attached:" (e.g. Week 2 / Week 8 subjects) is now slightly inaccurate; harmless but a candidate copy fix.
+- **Click tracking (v2.15.0)**: web app DEPLOYED 2026-07-06, id `AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg`, `/exec` URL baked into `CONFIG.TRACKING_WEBAPP_URL` (Script Property `TRACKING_WEBAPP_URL` overrides it; unset+blank CONFIG = fail-open, tracking off). `TRACKING_HMAC_SECRET` auto-generates in Script Properties; if rotated, previously-sent links stop verifying and show "link unavailable". `appsscript.json` carries the `webapp` block. **After every `clasp push`, re-version the SAME deployment**: `clasp deploy -i AKfycbzx...SeDTMBl0bh6r2IBg -d "..."` - a bare `clasp deploy` mints a new `/exec` id and stales the baked URL. The PDF is a link, not an attachment - any template copy still saying "Attached:" (e.g. Week 2 / Week 8 subjects) is now slightly inaccurate; harmless but a candidate copy fix.
 - Sheet tab names + column letters (Y/Z/AA for Teacher Email)
 - Drive folder structure (school name format)
 - Related-project function names (changes upstream break this app)
