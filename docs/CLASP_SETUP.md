@@ -119,7 +119,7 @@ curl -s -L -o /dev/null -w "%{http_code}\n" \
 ### End-to-end test (drafts to yourself, no teacher touched)
 1. Reload the spreadsheet, then **Email Tools > Test Mode: Generate Smoke Test (drafts to me)**. This drafts ~6-8 emails to your own Gmail.
 2. Open one draft: the weekly PDF is a blue **"View your weekly report (PDF)"** button (no attachment), and body links point at `script.google.com/macros/s/.../exec?e=...`.
-3. Click the PDF button and one body link -> each lands on the real destination.
+3. Click the PDF button -> the report PDF **downloads** (v2.17.0: the web app serves the bytes itself; no Drive page appears). Click one body link -> it redirects to the real destination.
 4. **Email Tools > Engagement: Rebuild Click Dashboard** -> your test row shows `Clicked PDF = Y`, and the `Engagement Log` tab has your click rows.
 
 `TRACKING_HMAC_SECRET` auto-generates in Script Properties on the first draft - no action needed. Do NOT rotate it, or links in already-sent emails stop verifying. If `CONFIG.TRACKING_WEBAPP_URL` is ever blanked and no Script Property is set, `buildTrackedUrl` fails open: links go out untracked and emails still send.

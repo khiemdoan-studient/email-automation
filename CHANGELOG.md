@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.17.0] - 2026-07-06
+
+### FIX (root): serve PDF bytes FROM the web app - Drive removed from the click path
+
+v2.15.1/v2.16.0/v2.16.1 each fixed a real blocker (iframe redirect, private original, /view preview), yet recipients STILL hit Drive's "Sorry, unable to open the file at this time" - even on a provably-public copy whose bytes curl downloads anonymously (200, 83KB, valid `%PDF-1.4`). Conclusion: Drive's browser front-end is the unfixable variable; stop routing clicks through it.
+
+**Fix**: `doGet` now serves the PDF ITSELF. For a Drive-file destination it reads the blob server-side (as the web-app owner - works on shared-with-me originals, NO sharing or public copies needed), base64s it, and returns a download page (base64 -> JS Blob -> auto-download + visible "Download your report (PDF)" button). Applied at redirect time, so links already sitting in inboxes are fixed by the redeploy.
+
+- New: `_driveFileId()`, `_servePdfPage()` (15MB guard; oversize/unreadable -> old redirect fallback via `_driveDirectUrl`). Non-Drive links (portal/canva/sheet) redirect exactly as before.
+- Link-build simplified: `createDraftForTeacher` + `_createSummerDraft` link the tracked URL straight at the ORIGINAL PDF (no more `_publishPublicPdfCopy` at draft time; helpers kept for the existing copies already linked in sent drafts). Attachment fallback only if `getUrl()` fails.
+- Privacy upgrade: PDFs no longer need to be public AT ALL - only holders of an HMAC-signed link can fetch bytes, and the web app serves them.
+
+### Verified
+- New harness (mocked DriveApp/HtmlService): 13/13 - doGet serves the download page for a Drive dest with the byte-exact original PDF embedded, logs the click, falls back to redirect on unreadable/oversized files, non-Drive dests unchanged, tampered tokens still refused. Existing suite 153/153; `node --check` clean.
+- Live (deployment @6): curl of the user's exact previously-failing /exec link now returns title `Rebecca Reynolds - 2026-04-20_to_2026-04-26.pdf` - the serve path executed end-to-end server-side (token verified, click logged, blob read, download page returned).
+
 ## [v2.16.1] - 2026-07-06
 
 ### FIX: redirect to Drive's direct-content URL, not the flaky /view preview

@@ -1989,6 +1989,66 @@ function _driveDirectUrl(url) {
 }
 
 /**
+ * Extract the Drive file id from a Drive URL, or '' if it isn't one.
+ * Same patterns as _driveDirectUrl.
+ */
+function _driveFileId(url) {
+  var s = String(url || '');
+  if (!/drive\.google\.com|docs\.google\.com/.test(s)) return '';
+  var m = s.match(/\/file\/d\/([-\w]+)/) || s.match(/[?&]id=([-\w]+)/);
+  return m ? m[1] : '';
+}
+
+// v2.17.0: max bytes doGet will inline-serve as base64. Weekly PDFs are ~100KB;
+// XP reports low MB. Base64 inflates ~33%; HtmlOutput handles this comfortably.
+var PDF_SERVE_MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * v2.17.0: serve the PDF bytes DIRECTLY from the web app - Drive's browser
+ * front-end (/view preview AND the uc download flow) kept erroring "unable to
+ * open the file at this time" for recipients even though the bytes were
+ * provably fetchable. The web app runs as the owner, so it reads the file
+ * server-side (works on shared-with-me originals too - no sharing needed) and
+ * hands the browser a download page: base64 -> Blob -> auto-download, plus a
+ * visible button fallback. Returns HtmlOutput, or null -> caller falls back to
+ * the redirect path.
+ */
+function _servePdfPage(fileId) {
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var size = file.getSize();
+    if (size > PDF_SERVE_MAX_BYTES) return null;
+    var blob = file.getBlob();
+    var b64 = Utilities.base64Encode(blob.getBytes());
+    var name = String(file.getName() || 'report.pdf');
+    if (!/\.pdf$/i.test(name)) name += '.pdf';
+    var jsName = JSON.stringify(name).replace(/</g, '\\u003c');
+    return HtmlService.createHtmlOutput(
+      '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>'
+      + '<body style="font-family:Arial,sans-serif;text-align:center;padding-top:40px;">'
+      + '<p id="msg">Preparing your report&hellip;</p>'
+      + '<p><a id="dl" href="#" style="display:inline-block;background-color:#1a73e8;color:#ffffff;'
+      + 'padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px;">'
+      + 'Download your report (PDF)</a></p>'
+      + '<script>\n'
+      + 'var B64="' + b64 + '";\n'
+      + 'var NAME=' + jsName + ';\n'
+      + 'function toBlob(){var bin=atob(B64);var len=bin.length;var arr=new Uint8Array(len);'
+      + 'for(var i=0;i<len;i++){arr[i]=bin.charCodeAt(i);}return new Blob([arr],{type:"application/pdf"});}\n'
+      + 'var url=URL.createObjectURL(toBlob());\n'
+      + 'var a=document.getElementById("dl");a.href=url;a.download=NAME;\n'
+      + 'try{a.click();document.getElementById("msg").textContent='
+      + '"Your report is downloading. If it did not start, use the button below.";}'
+      + 'catch(err){document.getElementById("msg").textContent="Click the button to download your report.";}\n'
+      + '</script></body></html>')
+      .setTitle(name)
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  } catch (e) {
+    return null;  // unreadable / deleted / oversized -> caller redirects instead
+  }
+}
+
+/**
  * Web-app entry point. Verifies the signed token, logs the click, then bounces
  * the browser to the real destination. An unsigned / tampered / missing token
  * is NOT redirected (prevents this endpoint being abused as an open redirect).
@@ -2006,11 +2066,18 @@ function doGet(e) {
     event: 'click', week: meta.week, email: meta.email, campus: meta.campus,
     teacher: '', linkType: meta.linkType, dest: meta.dest
   });
-  // v2.16.1: Drive's /view PREVIEW page persistently errors ("unable to open the
-  // file at this time") for freshly-copied PDFs even though the file itself is
-  // fully public + downloadable. So redirect to the direct-content URL instead
-  // of the preview. Done here (not just at link-build time) so links ALREADY in
-  // sent inboxes are fixed by a redeploy, no regeneration needed.
+  // v2.17.0: for Drive-file destinations, serve the PDF bytes OURSELVES instead
+  // of bouncing to Drive's browser front-end (which kept erroring "unable to
+  // open the file at this time" across /view AND the uc download flow, even on
+  // provably-public files). Server-side read works on shared-with-me originals
+  // too, so no sharing/copying is needed. Done here so links ALREADY in sent
+  // inboxes are fixed by a redeploy. Fail-soft: null -> old redirect below.
+  var pdfFileId = _driveFileId(meta.dest);
+  if (pdfFileId) {
+    var served = _servePdfPage(pdfFileId);
+    if (served) return served;
+  }
+  // v2.16.1: fallback - redirect to Drive's direct-content URL (not /view).
   var realDest = _driveDirectUrl(meta.dest);
   // v2.15.1: Apps Script serves doGet HTML inside a sandboxed iframe, so
   // window.location only navigates the iframe - the real destination (Drive,
@@ -3049,31 +3116,23 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
   // the tracking redirect. Body links are rewritten too. All fail OPEN: if the
   // web app isn't deployed yet, links pass through untracked and the email still
   // works. Sharing failures (Shared-Drive policy) are logged, not fatal.
-  // v2.16.0: publish a PUBLIC OWNED COPY of the PDF and link to that (the
-  // originals live in a shared-with-me tree we can't reshare, so linking to them
-  // 401s for recipients). If the copy fails, fall back to ATTACHING the original
-  // so the teacher still gets their report (that week's PDF click just isn't
-  // tracked). Body links are rewritten either way.
+  // v2.17.0: the tracked link points at the ORIGINAL PDF - doGet now serves the
+  // bytes server-side (as the web-app owner), so no sharing and no public copy
+  // is needed. Attachment fallback only when the PDF's URL is unreadable.
   var trackMeta = { week: dateRange, email: teacher.email, campus: teacher.campus };
   var attachFallback = null;
   if (summaryPdf) {
-    var copyName = String(teacher.name || 'report') + ' - ' + dateRange + '.pdf';
-    var publicCopy = _publishPublicPdfCopy(summaryPdf, copyName);
-    if (publicCopy) {
-      var pdfUrl = null;
-      try { pdfUrl = publicCopy.getUrl(); } catch (_) {}
-      if (pdfUrl) {
-        var trackedPdf = buildTrackedUrl(pdfUrl, {
-          week: dateRange, email: teacher.email, campus: teacher.campus, linkType: 'pdf'
-        });
-        body = _injectPdfCta(body, buildPdfCtaHtml_(trackedPdf));
-      } else {
-        attachFallback = summaryPdf;  // no url somehow -> attach original
-      }
+    var pdfUrl = null;
+    try { pdfUrl = summaryPdf.getUrl(); } catch (_) {}
+    if (pdfUrl) {
+      var trackedPdf = buildTrackedUrl(pdfUrl, {
+        week: dateRange, email: teacher.email, campus: teacher.campus, linkType: 'pdf'
+      });
+      body = _injectPdfCta(body, buildPdfCtaHtml_(trackedPdf));
     } else {
-      attachFallback = summaryPdf;    // copy/share failed -> attach original
+      attachFallback = summaryPdf;  // no url somehow -> attach original
       logError('WARN', 'createDraftForTeacher', teacher,
-        'public PDF copy failed; attaching original instead (PDF click not tracked this send)', '');
+        'PDF getUrl failed; attaching instead (PDF click not tracked this send)', '');
     }
   }
   body = rewriteBodyLinks_(body, trackMeta);
@@ -5326,10 +5385,10 @@ function _summerUnassignedBanner(campus) {
  * operator (the body already carries a fill-in banner).
  */
 function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
-  // v2.15.0 + v2.16.0: summer PDFs become tracked links to PUBLIC OWNED COPIES
-  // (append to the body, not attachments), so summer click-through is measured.
-  // Any PDF whose public copy fails is ATTACHED instead so the teacher still
-  // gets it. Fail-open: no web app => links pass through untracked.
+  // v2.15.0 + v2.17.0: summer PDFs become tracked links to the ORIGINALS
+  // (doGet serves the bytes server-side; no sharing/copies needed). Any PDF
+  // whose URL is unreadable is ATTACHED instead so the teacher still gets it.
+  // Fail-open: no web app => links pass through untracked.
   var sMeta = {
     week: 'summer',
     email: toEmail || (teacherObj && teacherObj.email) || '',
@@ -5340,21 +5399,15 @@ function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
   var attachFallbacks = [];
   for (var i = 0; i < (pdfs || []).length; i++) {
     var f = pdfs[i];
-    var nm = 'report';
-    try { nm = f.getName(); } catch (_) {}
-    // Disambiguate by campus so same-named files (e.g. Unassigned reports at
-    // different campuses) don't collide on the idempotent copy-name reuse.
-    var copyName = (sMeta.campus ? String(sMeta.campus).replace(/[\\\/]/g, '-') + ' - ' : '') + nm;
-    var copy = _publishPublicPdfCopy(f, copyName);
-    var url = null;
-    if (copy) { try { url = copy.getUrl(); } catch (_) {} }
+    var nm = 'report', url = null;
+    try { nm = f.getName(); url = f.getUrl(); } catch (_) {}
     if (url) {
       var tracked = buildTrackedUrl(url, {
         week: 'summer', email: sMeta.email, campus: sMeta.campus, linkType: 'pdf'
       });
       pdfLinks.push('<a href="' + tracked + '">&#128196; ' + _esc(nm) + '</a>');
     } else {
-      attachFallbacks.push(f);  // copy failed -> attach original
+      attachFallbacks.push(f);  // no url -> attach original
     }
   }
   if (pdfLinks.length) {
