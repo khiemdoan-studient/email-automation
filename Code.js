@@ -1752,9 +1752,12 @@ function _signPayload(payloadB64) {
  * Token shape: "<payloadB64>.<sigB64>".
  */
 function signToken(meta) {
+  // v2.20.0: `t` (teacher name) added so clicks attribute per-teacher even when
+  // several teachers share one recipient email (smoke tests: ALL drafts go to
+  // the operator). Old tokens without `t` still verify; teacher decodes as ''.
   var payload = JSON.stringify({
     w: meta.week || '', e: meta.email || '', c: meta.campus || '',
-    l: meta.linkType || 'other', d: meta.dest || ''
+    l: meta.linkType || 'other', d: meta.dest || '', t: meta.teacher || ''
   });
   var payloadB64 = _b64u(payload);
   return payloadB64 + '.' + _signPayload(payloadB64);
@@ -1773,7 +1776,7 @@ function verifyToken(token) {
     var o = JSON.parse(_b64uDecode(payloadB64));
     return {
       week: o.w || '', email: o.e || '', campus: o.c || '',
-      linkType: o.l || 'other', dest: o.d || ''
+      linkType: o.l || 'other', dest: o.d || '', teacher: o.t || ''
     };
   } catch (e) {
     return null;
@@ -1795,7 +1798,7 @@ function buildTrackedUrl(dest, meta) {
   if (shim && dest.indexOf(shim) === 0) return dest; // already tracked (shim form)
   var token = signToken({
     week: meta.week, email: meta.email, campus: meta.campus,
-    linkType: meta.linkType, dest: dest
+    linkType: meta.linkType, dest: dest, teacher: meta.teacher
   });
   // v2.18.0: prefer the cookie-less GitHub Pages shim; token rides the fragment
   // so it never reaches GitHub. Fall back to the direct /exec form if no shim.
@@ -1840,7 +1843,7 @@ function rewriteBodyLinks_(html, meta) {
   return html.replace(/(<a\b[^>]*\bhref=")([^"]+)(")/gi, function(m, pre, href, post) {
     var tracked = buildTrackedUrl(href, {
       week: meta.week, email: meta.email, campus: meta.campus,
-      linkType: classifyLink_(href)
+      teacher: meta.teacher, linkType: classifyLink_(href)
     });
     return pre + tracked + post;
   });
@@ -2096,7 +2099,7 @@ function doGet(e) {
   }
   logEngagementEvent({
     event: 'click', week: meta.week, email: meta.email, campus: meta.campus,
-    teacher: '', linkType: meta.linkType, dest: meta.dest
+    teacher: meta.teacher, linkType: meta.linkType, dest: meta.dest
   });
   // v2.18.0: JSON mode for the GitHub Pages shim (cookie-less fetch). Google's
   // multi-account front-end (/macros/u/N routing) kills BROWSER navigations to
@@ -2175,29 +2178,64 @@ function rebuildEngagementDashboard() {
   var engSheet = ss.getSheetByName(ENGAGEMENT_LOG_TAB);
   if (engSheet && engSheet.getLastRow() > 1) eng = engSheet.getDataRange().getValues();
 
-  // Index clicks: email|week -> {any:true, pdf:true, count, first}
-  var clicks = {};
-  for (var i = 1; i < eng.length; i++) {
-    var r = eng[i];
-    if ((r[1] || 'click') !== 'click') continue;
-    var key = String(r[4] || '').toLowerCase() + '||' + String(r[2] || '');  // email||week
-    var rec = clicks[key] || { any: false, pdf: false, count: 0, first: '' };
+  // v2.20.0: clicks + sends key on email||week||teacher so several teachers
+  // sharing one recipient email (smoke tests: ALL drafts go to the operator) no
+  // longer collapse into one row. Legacy clicks (pre-v2.20.0 tokens carry no
+  // teacher) go into a per-(email, week) pool and are attributed ONLY when that
+  // (email, week) has exactly one send row - never guessed.
+  function _clickRec() { return { any: false, pdf: false, count: 0, first: '' }; }
+  function _addClick(rec, r) {
     rec.any = true;
     rec.count++;
     if (String(r[6] || '') === 'pdf') rec.pdf = true;
     if (!rec.first || String(r[0]) < rec.first) rec.first = String(r[0]);
-    clicks[key] = rec;
+    return rec;
+  }
+  var clicks = {};       // email||week||teacherLower -> rec
+  var legacyClicks = {}; // email||week -> rec (blank-teacher tokens)
+  for (var i = 1; i < eng.length; i++) {
+    var r = eng[i];
+    if ((r[1] || 'click') !== 'click') continue;
+    var emwk = String(r[4] || '').toLowerCase() + '||' + String(r[2] || '');
+    var tch = String(r[3] || '').toLowerCase();
+    if (tch) clicks[emwk + '||' + tch] = _addClick(clicks[emwk + '||' + tch] || _clickRec(), r);
+    else legacyClicks[emwk] = _addClick(legacyClicks[emwk] || _clickRec(), r);
   }
 
-  // De-dupe sends to one row per (email, week), newest template wins.
-  var sentMap = {}, order = [];
+  // De-dupe sends to one row per (email, week, teacher), newest template wins.
+  var sentMap = {}, orderList = [];
+  var sendsPerEmailWeek = {};  // email||week -> count of DISTINCT teacher rows
   for (var j = 1; j < send.length; j++) {
     var s = send[j];
-    var wk = String(s[1] || ''), em = String(s[3] || '');
-    var sk = em.toLowerCase() + '||' + wk;
-    if (!sentMap[sk]) order.push(sk);
-    sentMap[sk] = { week: wk, teacher: String(s[2] || ''), email: em, campus: String(s[4] || '') };
+    var wk = String(s[1] || ''), em = String(s[3] || ''), tn = String(s[2] || '');
+    var sk = em.toLowerCase() + '||' + wk + '||' + tn.toLowerCase();
+    if (!sentMap[sk]) {
+      orderList.push(sk);
+      var ewk = em.toLowerCase() + '||' + wk;
+      sendsPerEmailWeek[ewk] = (sendsPerEmailWeek[ewk] || 0) + 1;
+    }
+    sentMap[sk] = { week: wk, teacher: tn, email: em, campus: String(s[4] || '') };
   }
+  // Merge legacy (blank-teacher) clicks into the row IFF unambiguous.
+  for (var lk in legacyClicks) {
+    if (sendsPerEmailWeek[lk] === 1) {
+      for (var sk2 = 0; sk2 < orderList.length; sk2++) {
+        if (orderList[sk2].indexOf(lk + '||') === 0) {
+          var tgt = clicks[orderList[sk2]] || _clickRec();
+          var leg = legacyClicks[lk];
+          tgt.any = tgt.any || leg.any;
+          tgt.pdf = tgt.pdf || leg.pdf;
+          tgt.count += leg.count;
+          if (!tgt.first || (leg.first && leg.first < tgt.first)) tgt.first = leg.first;
+          clicks[orderList[sk2]] = tgt;
+          break;
+        }
+      }
+    }
+    // ambiguous (2+ teachers share the email that week): dropped from
+    // per-teacher attribution on purpose - never guess.
+  }
+  var order = orderList;
 
   var perWeek = {};    // week -> {sent, pdfClickers}
   var perTeacher = {}; // email -> {teacher, campus, weeksSent, pdfClicked, totalClicks}
@@ -2207,21 +2245,23 @@ function rebuildEngagementDashboard() {
   });
   for (var k = 0; k < order.length; k++) {
     var m = sentMap[order[k]];
-    var emKey = m.email.toLowerCase();
-    var c = clicks[emKey + '||' + m.week] || { any: false, pdf: false, count: 0, first: '' };
+    // v2.20.0: order[k] IS the click key (email||week||teacherLower).
+    var c = clicks[order[k]] || _clickRec();
     detail.push([m.week, m.teacher, m.email, m.campus, 'Y',
       c.any ? 'Y' : 'N', c.pdf ? 'Y' : 'N', c.count, c.first]);
     var pw = perWeek[m.week] || { sent: 0, pdf: 0 };
     pw.sent++;
     if (c.pdf) pw.pdf++;
     perWeek[m.week] = pw;
-    // v2.19.0: per-teacher fidelity aggregate (all weeks).
-    var pt = perTeacher[emKey] || { teacher: m.teacher, campus: m.campus, weeksSent: 0, pdfClicked: 0, totalClicks: 0, email: m.email };
+    // v2.19.0 aggregate; v2.20.0 keyed by (email, teacher) so teachers sharing
+    // one recipient email get their own fidelity rows.
+    var ptKey = m.email.toLowerCase() + '||' + m.teacher.toLowerCase();
+    var pt = perTeacher[ptKey] || { teacher: m.teacher, campus: m.campus, weeksSent: 0, pdfClicked: 0, totalClicks: 0, email: m.email };
     pt.weeksSent++;
     if (c.pdf) pt.pdfClicked++;
     pt.totalClicks += c.count;
     if (m.teacher) pt.teacher = m.teacher;  // keep a non-blank name if any send row had one
-    perTeacher[emKey] = pt;
+    perTeacher[ptKey] = pt;
   }
 
   // v2.19.0: SECTION 1 - Teacher Fidelity (% of report PDFs clicked, all weeks).
@@ -3226,14 +3266,15 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
   // v2.17.0: the tracked link points at the ORIGINAL PDF - doGet now serves the
   // bytes server-side (as the web-app owner), so no sharing and no public copy
   // is needed. Attachment fallback only when the PDF's URL is unreadable.
-  var trackMeta = { week: dateRange, email: teacher.email, campus: teacher.campus };
+  var trackMeta = { week: dateRange, email: teacher.email, campus: teacher.campus, teacher: teacher.name };
   var attachFallback = null;
   if (summaryPdf) {
     var pdfUrl = null;
     try { pdfUrl = summaryPdf.getUrl(); } catch (_) {}
     if (pdfUrl) {
       var trackedPdf = buildTrackedUrl(pdfUrl, {
-        week: dateRange, email: teacher.email, campus: teacher.campus, linkType: 'pdf'
+        week: dateRange, email: teacher.email, campus: teacher.campus,
+        teacher: teacher.name, linkType: 'pdf'
       });
       body = _injectPdfCta(body, buildPdfCtaHtml_(trackedPdf));
     } else {
@@ -5499,7 +5540,8 @@ function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
   var sMeta = {
     week: 'summer',
     email: toEmail || (teacherObj && teacherObj.email) || '',
-    campus: (teacherObj && teacherObj.campus) || ''
+    campus: (teacherObj && teacherObj.campus) || '',
+    teacher: (teacherObj && (teacherObj.teacher || teacherObj.name)) || ''
   };
   var body = htmlBody;
   var pdfLinks = [];
@@ -5510,7 +5552,8 @@ function _createSummerDraft(toEmail, subject, htmlBody, pdfs, teacherObj) {
     try { nm = f.getName(); url = f.getUrl(); } catch (_) {}
     if (url) {
       var tracked = buildTrackedUrl(url, {
-        week: 'summer', email: sMeta.email, campus: sMeta.campus, linkType: 'pdf'
+        week: 'summer', email: sMeta.email, campus: sMeta.campus,
+        teacher: sMeta.teacher, linkType: 'pdf'
       });
       pdfLinks.push('<a href="' + tracked + '">&#128196; ' + _esc(nm) + '</a>');
     } else {

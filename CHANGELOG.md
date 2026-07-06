@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.20.0] - 2026-07-06
+
+### FIX: per-teacher click attribution (email-key collapse in smoke tests)
+
+Bertha's PDF click downloaded + logged fine but the dashboard credited it to Rebecca. Root cause: the token carried no teacher name (doGet logged `teacher=''`) and the dashboard joined clicks to sends by **email+week** - and in smoke-test mode EVERY draft's recipient is the operator, so all sends collapsed to one row per week (last write wins) and every click pooled onto it.
+
+- Token payload gains `t` (teacher name); `verifyToken` decodes missing `t` as `''`, so links already in inboxes keep working.
+- `createDraftForTeacher` + `_createSummerDraft` + `rewriteBodyLinks_` pass the teacher name; `doGet` now writes it to the Engagement Log `teacher` column.
+- Dashboard keys sends AND clicks by `email||week||teacher`: teachers sharing one recipient email get separate rows with exact attribution. Fidelity aggregates key on (email, teacher) likewise.
+- **Legacy clicks** (pre-v2.20.0 tokens, blank teacher): attributed to an (email, week) ONLY when exactly one send row exists for it (unambiguous); ambiguous ones are excluded from per-teacher attribution on purpose - never guessed. They still count toward nothing per-teacher but the raw Engagement Log keeps them.
+
+### Verified
+- New harness reproducing the exact failure (Rebecca + Bertha sharing the operator email, Bertha clicks with a teacher-carrying token, one ambiguous legacy click + one unambiguous solo legacy click): 13/13 - Bertha 100% fidelity/green with her click, Rebecca 0%/red without it, solo legacy click attributed, ambiguous one dropped, CTR 2/3 = 66.7%. Existing suite 153/153; `node --check` clean. Deployed @9.
+- NOTE: regenerate smoke-test drafts to get teacher-carrying tokens; clicks on OLD draft links stay blank-teacher (legacy path).
+
 ## [v2.19.0] - 2026-07-06
 
 ### FEATURE: Teacher Fidelity section on the Engagement Dashboard

@@ -118,6 +118,9 @@ Answers two questions centrally: (1) which teachers clicked into their weekly em
 ### Deploy + wiring
 See `docs/CLASP_SETUP.md` Step 6. Short version: Deploy > New deployment > Web app (Execute as Me, Access Anyone) -> copy `/exec` URL into Script Property `TRACKING_WEBAPP_URL`. Re-version the deployment (Manage deployments > New version) after every `clasp push` or the live tracker runs stale code.
 
+### Smoke-test attribution (v2.20.0)
+In smoke-test mode ALL drafts go to the operator's email, so clicks can only be attributed per-teacher because the token carries the teacher name (`t` field, v2.20.0). Clicks on drafts generated BEFORE v2.20.0 have a blank teacher and are attributed only when the (email, week) pair has exactly one send row - ambiguous ones are deliberately excluded from per-teacher numbers (never guessed). After deploying a tracking change, REGENERATE the smoke-test drafts before clicking, or your clicks ride old tokens.
+
 ### Reading the dashboard
 Run **Email Tools > Engagement: Rebuild Click Dashboard**. Three sections (v2.19.0):
 1. **Teacher Fidelity** (top) - one row per teacher across all weeks: `Reports sent`, `PDFs clicked`, `Total clicks`, `Fidelity %` (= PDFs clicked / reports sent; green >= 80%, yellow >= 40%, red below; sorted by fidelity descending). This is the at-a-glance "which teachers engage with their reports" view.
