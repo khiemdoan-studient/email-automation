@@ -101,6 +101,46 @@ var CONFIG = {
 // Each template: { subject, buildBody(teacher, metrics, winners, dot) }
 // Templates that don't use winners pass null for winnersArray
 var TEMPLATES = {
+  // v2.21.0: SY26-27 Weeks 1-9. Listed first so the current school year leads
+  // the dropdown. Copy + links come from the shared Google Doc "26_27
+  // Implementation Emails"; specs live in WEEK_SPECS_2627 near the bottom of
+  // this file. Standard weekly path: metrics table + PDF attachment.
+  '26-27 Week 1: Growth Mindset Culture': {
+    subject: 'Studient: Week 1: Let\'s Launch!',
+    buildBody: generate2627Week1Body
+  },
+  '26-27 Week 2: Clarity Builds Mastery': {
+    subject: 'Studient: Teach It. Check It. Repeat It.',
+    buildBody: generate2627Week2Body
+  },
+  '26-27 Week 3: Persistence': {
+    subject: 'Studient: Persistence Starts with Presence',
+    buildBody: generate2627Week3Body
+  },
+  '26-27 Week 4: Reflection & Ownership': {
+    subject: 'Studient: Cultivating the "Yet"',
+    buildBody: generate2627Week4Body
+  },
+  '26-27 Week 5: Learning Narratives': {
+    subject: 'Studient: Changing the Learning Narrative',
+    buildBody: generate2627Week5Body
+  },
+  '26-27 Week 6: Persistent Engagement': {
+    subject: 'Studient: How to make "struggling" the best part of your class.',
+    buildBody: generate2627Week6Body
+  },
+  '26-27 Week 7: Actionable Feedback': {
+    subject: 'Studient: Build Curious, Unstoppable Problem-Solvers',
+    buildBody: generate2627Week7Body
+  },
+  '26-27 Week 8: Misses as Roadmaps': {
+    subject: 'Studient: Turn a "miss" into a roadmap.',
+    buildBody: generate2627Week8Body
+  },
+  '26-27 Week 9: Confidence Through Evidence': {
+    subject: 'Studient: Stop hoping for confidence. Start building it.',
+    buildBody: generate2627Week9Body
+  },
   'Week 0: Data': {
     subject: 'Data Delivery: Try to Contain Your Excitement -- MAP Scores Are In!',
     buildBody: generateWeek0Body
@@ -3180,6 +3220,64 @@ function runUnitTests() {
   _testAssertEq(results, 'summer template: requiresPdf false (no weekly PDF lookup)',
     TEMPLATES['Summer School Week 1+2'].requiresPdf, false);
 
+  // v2.21.0: SY26-27 Weeks 1-9
+  var k2627 = [
+    '26-27 Week 1: Growth Mindset Culture',
+    '26-27 Week 2: Clarity Builds Mastery',
+    '26-27 Week 3: Persistence',
+    '26-27 Week 4: Reflection & Ownership',
+    '26-27 Week 5: Learning Narratives',
+    '26-27 Week 6: Persistent Engagement',
+    '26-27 Week 7: Actionable Feedback',
+    '26-27 Week 8: Misses as Roadmaps',
+    '26-27 Week 9: Confidence Through Evidence'
+  ];
+  var t2627 = { name: 'Test Teacher', firstName: 'Test', campus: 'JHES - Hardeeville Elementary School' };
+  _testAssertEq(results, '26-27: all 9 keys registered in TEMPLATES',
+    k2627.filter(function (k) { return !!TEMPLATES[k]; }).length, 9);
+  _testAssertEq(results, '26-27: all 9 in TEMPLATE_NAMES (dropdown)',
+    k2627.filter(function (k) { return TEMPLATE_NAMES.indexOf(k) !== -1; }).length, 9);
+  _testAssertEq(results, '26-27: lead the dropdown (first 9 entries)',
+    TEMPLATE_NAMES.slice(0, 9).join('|'), k2627.join('|'));
+  _testAssertEq(results, '26-27: weekly PDF still attached (requiresPdf not disabled)',
+    k2627.filter(function (k) { return TEMPLATES[k].requiresPdf === false; }).length, 0);
+  _testAssertEq(results, '26-27: every subject non-empty',
+    k2627.filter(function (k) { return !TEMPLATES[k].subject; }).length, 0);
+
+  var bad2627 = [];
+  for (var w2 = 1; w2 <= 9; w2++) {
+    var spec2 = WEEK_SPECS_2627[w2];
+    var html2 = TEMPLATES[k2627[w2 - 1]].buildBody(t2627, []);
+    // Every week must surface its own video, infographic, the Timeback login,
+    // and the Teacher Hub -- these are the links IMs actually click.
+    if (html2.indexOf(spec2.videoUrl) === -1) bad2627.push('wk' + w2 + ' video');
+    if (html2.indexOf(spec2.infographicUrl) === -1) bad2627.push('wk' + w2 + ' infographic');
+    if (html2.indexOf(TIMEBACK_PLATFORM_URL_2627) === -1) bad2627.push('wk' + w2 + ' timeback');
+    if (html2.indexOf(TEACHER_HUB_URL_2627) === -1) bad2627.push('wk' + w2 + ' hub');
+    // No unrendered doc markers or leftover placeholders may ship.
+    if (html2.indexOf('<<Teacher Data Table>>') !== -1) bad2627.push('wk' + w2 + ' raw marker');
+    if (html2.indexOf('PLACEHOLDER') !== -1 || html2.indexOf('_____') !== -1) bad2627.push('wk' + w2 + ' placeholder');
+    // AIM link renders only where the doc has one (weeks 1-6).
+    if (spec2.aimUrl && html2.indexOf(spec2.aimUrl) === -1) bad2627.push('wk' + w2 + ' aim missing');
+    if (!spec2.aimUrl && html2.indexOf('AIM Launch Link') !== -1) bad2627.push('wk' + w2 + ' aim leaked');
+  }
+  _testAssertEq(results, '26-27: all 9 bodies render links + no stray markers', bad2627.join(','), '');
+  _testAssertEq(results, '26-27: no em dash in any body (repo style rule)',
+    k2627.filter(function (k) {
+      return TEMPLATES[k].buildBody(t2627, []).indexOf('—') !== -1;
+    }).length, 0);
+  _testAssertEq(results, '26-27: weeks 7-9 have no AIM link (doc omits it)',
+    [7, 8, 9].filter(function (w) { return !!WEEK_SPECS_2627[w].aimUrl; }).length, 0);
+  // Week 1's doc tab has no data-table marker; product decision is to show the
+  // table anyway, so guard that it does.
+  var wk1html = TEMPLATES[k2627[0]].buildBody(t2627, [
+    { subject: 'Math', activeDays: 4, lessons: 10, minutes: 200, logins: 5 }
+  ]);
+  _testAssertEq(results, '26-27 wk1: renders metrics table despite no doc marker',
+    wk1html.indexOf('<table') !== -1, true);
+  _testAssertEq(results, '26-27 wk1: no data-line caption (doc has none)',
+    WEEK_SPECS_2627[1].dataLine, '');
+
   // Render
   var pass = 0, fail = 0;
   var lines = [];
@@ -5815,3 +5913,218 @@ function _runSummerSchoolCore(opts) {
   done += NL + NL + 'Open Gmail Drafts to review the To, the data table, and the attached PDFs.';
   ui.alert('Done', done, ui.ButtonSet.OK);
 }
+
+
+// ============================================
+// SY26-27 WEEKLY TEMPLATES (Weeks 1-9)  [v2.21.0]
+// ============================================
+// Copy + links are transcribed from the shared Google Doc
+// "26_27 Implementation Emails" (1pKkcEnP-Ljt6MtZ7ukdLzsfxSrbG8nqEz4__xMyqohw),
+// tabs UPD_WK 1..UPD_WK 7 + Week 8 + Week 9.
+//
+// One spec table drives nine bodies so the weeks can't drift into nine
+// near-identical copies of the same HTML. To add Weeks 10-18 later: add spec
+// entries, a generate2627WeekNBody wrapper, and a TEMPLATES key.
+//
+// Doc structure -> spec field:
+//   "Focus: ..."                     -> focus (internal label, not rendered)
+//   "Subject: ..."                   -> subject (lives on the TEMPLATES entry)
+//   line under <<Teacher Data Table>> -> dataLine (caption under the metrics table)
+//   "Weekly Focus: ..."              -> focusTitle
+//   "✅ ..." + following sentence     -> action + actionDetail
+//   Watch / View the ... links       -> video / infographic
+//   Resources                        -> aim (optional) + materials + Teacher Hub
+var WEEK_SPECS_2627 = {
+  1: {
+    focus: 'Relationship Foundations + Emotional Safety',
+    dataLine: '',
+    focusTitle: 'Fostering a Growth Mindset Culture',
+    action: 'Coach for growth',
+    actionDetail: 'Strengthen perseverance, productive risk-taking, and progress over perfection.',
+    videoText: 'Teacher Language That Builds Confident Learners',
+    videoUrl: 'https://canva.link/odeniz479l85fy3',
+    infographicText: 'Growth Mindset Infographic',
+    infographicUrl: 'https://drive.google.com/file/d/1q88wfKpj7rRLz0lbLCp6L3uONU22knSd/view?usp=sharing',
+    aimUrl: 'https://www.canva.com/design/DAHCV6eulqc/3oEsttJjNc0jO49KYHLyfw/view?utm_content=DAHCV6eulqc&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h5cacee9c30',
+    aimMaterials: 'Sticky Notes, Stopwatch (Motivention Clock), Measuring Tape'
+  },
+  2: {
+    focus: 'Explicit Expectations + Predictable Routines',
+    dataLine: 'Utilizing objective metrics to guide targeted instruction, practice, and intervention.',
+    focusTitle: 'Clarity builds mastery',
+    action: 'Create consistency that supports mastery',
+    actionDetail: 'Reinforce visible, accessible, and repeatable learning.',
+    videoText: 'Less cognitive load, more lightbulb moments',
+    videoUrl: 'https://canva.link/3ba5xdlt06j4xvj',
+    infographicText: 'Building Mastery Infographic',
+    infographicUrl: 'https://drive.google.com/file/d/1L_Gui6-Yaudf3hZOieWhwQE4Fa-tuara/view?usp=sharing',
+    aimUrl: 'https://www.canva.com/design/DAHC0PQ5IKg/SCAKPRLE5bzKgZ5rJoeqbA/view?utm_content=DAHC0PQ5IKg&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hed034bb29b',
+    aimMaterials: 'Stopwatch (Motivention Clock), Printer Paper, Measuring Tape, Empty Trash Can/Box, Plastic Cups'
+  },
+  3: {
+    focus: 'Fostering Persistence through Productive Struggle',
+    dataLine: 'Monitoring platform data to identify emerging frustration and reinforce a beginner\'s mindset.',
+    focusTitle: 'Persistence',
+    action: 'Reinforce persistence and respond early.',
+    actionDetail: 'Encourage sustained engagement and confidence during productive struggle.',
+    videoText: 'How This One \'Data Hack\' Unlocks the Beginner\'s Brain',
+    videoUrl: 'https://canva.link/wsqbejf3c6eylrf',
+    infographicText: 'Persistence Infographic',
+    infographicUrl: 'https://drive.google.com/file/d/1uW9-BhUx5MCMybSLa1jtv2XV95kwDvVZ/view?usp=sharing',
+    aimUrl: 'https://www.canva.com/design/DAHDeEQyjI0/UESk6Vp4GScPIiS7Xjdhfw/view?utm_content=DAHDeEQyjI0&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=he8b086611c',
+    aimMaterials: 'Stopwatch (Motivention Clock), Construction Paper, Measuring Tape, Pencils, Clothespins/Clips, Plastic Cups (6), Pom Poms, Ping Pong Balls, Paper Labels for corners (how, why, what if, I wonder)'
+  },
+  4: {
+    focus: 'Fostering Student Ownership Through Reflection',
+    dataLine: 'Integrating objective evidence into restorative conversations to support reflection and action planning.',
+    focusTitle: 'Reflection',
+    action: 'Build ownership through action.',
+    actionDetail: 'Cultivate student ownership through reflection and goal-directed action.',
+    videoText: 'The \'Yet\' Cheat Code',
+    videoUrl: 'https://canva.link/c8050scyhcjgnj6',
+    infographicText: 'Cultivating the "Yet" Infographic',
+    infographicUrl: 'https://drive.google.com/file/d/15XoQSkSEj-kQ2v1-BEg0Y8lXF1yMMYsu/view?usp=sharing',
+    aimUrl: 'https://www.canva.com/design/DAHDjdCSoBE/ZhB3f6k-dMvNMQ9QtNT0iA/view?utm_content=DAHDjdCSoBE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hd9e0f0c72b',
+    aimMaterials: 'Paper, Pencils'
+  },
+  5: {
+    focus: 'Success data rewrites beliefs',
+    dataLine: 'Using student performance data to reinforce growth, identify support needs, and inform instructional decisions.',
+    focusTitle: 'Learning Narratives',
+    action: 'Coach Productive Learning Narratives',
+    actionDetail: 'Building learner confidence through visible evidence of growth, effort, and achievement.',
+    videoText: 'The "I Can\'t" Cure: 3 Moves to Rewrite Student Narratives',
+    videoUrl: 'https://canva.link/3vufcvbip3n6y8i',
+    infographicText: 'Learning Narrative Infographic',
+    infographicUrl: 'https://drive.google.com/file/d/13Mh--BQF5HSwVOEHDxLJ5T0FKSALm1uq/view?usp=sharing',
+    aimUrl: 'https://www.canva.com/design/DAHDyS0iyd8/cMK174HeOxUmagRJvojT6Q/view?utm_content=DAHDyS0iyd8&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=h3e9c4fa347#2',
+    aimMaterials: 'Paper, Pencils, Stopwatch (Motivention Clock), Sticky Notes/Cards labeled (excited, annoyed, scared, nervous, rude, shy)'
+  },
+  6: {
+    focus: 'Embrace the friction of learning',
+    dataLine: 'Interpreting platform data to recognize productive struggle, guide responsive coaching, and reinforce sustained effort.',
+    focusTitle: 'Persistent Engagement',
+    action: 'Build persistence during struggle',
+    actionDetail: 'Developing learner perseverance through strategic problem-solving and sustained effort.',
+    videoText: 'Embracing the Friction of Learning',
+    videoUrl: 'https://canva.link/6d5epb3qbi31dgd',
+    infographicText: 'Persistence Infographic',
+    infographicUrl: 'https://drive.google.com/file/d/1buTjSQAUk3ZLvKT1kPQgt6LmkkO8IfmV/view?usp=sharing',
+    aimUrl: 'https://www.canva.com/design/DAHD3NLIJ9k/SK2vLZcgFXR-T3o1i539Rw/view?utm_content=DAHD3NLIJ9k&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=hffe456c812',
+    aimMaterials: 'Four Corner Labels, Stopwatch (Motivention Clock), Scissors, Pencils, Ping Pong Balls, Rubber Bands, Plastic Cups, Straws, Painters Tape, Spoons, Tape, String, Cardboard, Paperclips, Index Cards'
+  },
+  7: {
+    focus: 'Data as the Map, Effort as the Engine',
+    dataLine: 'Analyzing platform data to guide responsive instruction, personalize feedback, and support continuous student growth.',
+    focusTitle: 'Persistent Engagement',
+    action: 'Provide Actionable Feedback',
+    actionDetail: 'Promoting the effective use of feedback to strengthen strategy and student ownership.',
+    videoText: 'Why the First Draft Needs to Fail',
+    videoUrl: 'https://canva.link/f5bfq425coloeoa',
+    infographicText: 'Data Driven Decisions Infographic',
+    infographicUrl: 'https://drive.google.com/drive/folders/1M3pc_Ax3mAIDIJKqbIjmUoaz2uteXh27',
+    // Weeks 7-9 carry no AIM Launch link in the doc; the Teacher Hub entry
+    // covers "AIM launches and needed materials" for those weeks instead.
+    aimUrl: '',
+    aimMaterials: ''
+  },
+  8: {
+    focus: 'The Curious Learner',
+    dataLine: 'Interpreting platform data to identify learning gaps, guide responsive supports, and provide actionable feedback.',
+    focusTitle: 'Misses as Roadmaps',
+    action: 'Focus on Continuous Improvement',
+    actionDetail: 'Reflecting on mistakes, feedback, and challenges to refine strategies, close learning gaps, and build confidence.',
+    videoText: 'Do your students see roadblocks or roadmaps?',
+    videoUrl: 'https://canva.link/n93k6c5z2798rrh',
+    infographicText: 'Curiosity Infographic',
+    infographicUrl: 'https://drive.google.com/file/d/11MoVqhgNBgpKb6MDpVO7VeLdf5wY5z0h/view?usp=drive_link',
+    aimUrl: '',
+    aimMaterials: ''
+  },
+  9: {
+    focus: 'Building Confidence Through Evidence',
+    dataLine: 'Leveraging student data to monitor growth, inform coaching, and celebrate progress.',
+    focusTitle: 'Confidence is built, not given.',
+    action: 'Have Students Use Evidence to Explain Their Learning',
+    actionDetail: 'Using personal data, reflection, and evidence of growth to set goals, recognize progress, and build earned confidence.',
+    videoText: 'Flip the Script on Student Apathy',
+    videoUrl: 'https://canva.link/qjpq162elmefuns',
+    infographicText: 'Confidence Infographic',
+    infographicUrl: 'https://drive.google.com/drive/folders/1181PLU6vbcMMD3SZqBiLTH-VaXj188GT',
+    aimUrl: '',
+    aimMaterials: ''
+  }
+};
+
+var TIMEBACK_PLATFORM_URL_2627 = 'https://alpha.timeback.com/login';
+var TEACHER_HUB_URL_2627 = 'https://studient.com/teacher';
+
+// "This week's moves" block: the same content offered as a 60-second video or a
+// skimmable infographic.
+function _build2627Moves(spec) {
+  return '<h3 style="color:#1a1a1a;">This week\'s moves ⬇️</h3>'
+    + '<p style="margin:0 0 8px 0;color:#666;"><em>(Same content, two ways)</em></p>'
+    + '<p>🎬 <strong>Got 60 seconds?</strong> Watch: '
+    + '<a href="' + spec.videoUrl + '">' + spec.videoText + '</a></p>'
+    + '<p>📊 <strong>Prefer to skim?</strong> View the '
+    + '<a href="' + spec.infographicUrl + '">' + spec.infographicText + '</a>'
+    // Doc copy uses an em dash here; repo style bans it (see the summer-copy
+    // "no em dash" tests), so it ships as a hyphen.
+    + ' - easy to save or print</p>'
+    + '<p>⏰ <a href="' + TIMEBACK_PLATFORM_URL_2627 + '">Access Timeback Platform</a></p>';
+}
+
+// Resources list for the 26-27 weeks. Deliberately NOT buildResourcesSection():
+// that helper hardcodes SY25-26 items (Pomodoro portal, ELA/Math Goal Trackers)
+// the new doc doesn't list. The weekly PDF still ships, so it stays listed.
+function _build2627Resources(spec) {
+  var html = '<h3 style="color:#1a1a1a;">📚 Resources</h3><ul style="padding-left:20px;">';
+  // Since v2.16.0 the weekly PDF ships as the tracked "View your weekly report
+  // (PDF)" button that _injectPdfCta puts under the greeting, NOT as an
+  // attachment. Don't copy buildResourcesSection's stale "(Attached)" wording.
+  html += '<li><strong>Teacher Data Deep Dive:</strong> the "View your weekly report (PDF)" button above</li>';
+  if (spec.aimUrl) {
+    html += '<li><a href="' + spec.aimUrl + '">AIM Launch Link</a>';
+    if (spec.aimMaterials) {
+      html += '<br><em>Needed Materials:</em> ' + spec.aimMaterials;
+    }
+    html += '</li>';
+  }
+  html += '<li><a href="' + TEACHER_HUB_URL_2627 + '">Teacher Hub</a>'
+    + '<br><em>Find here Focus Clock, AIM launches and needed materials, goal sheets, resources, and more.</em></li>';
+  html += '</ul>';
+  return html;
+}
+
+function _build2627Body(teacher, metricsArray, week) {
+  var spec = WEEK_SPECS_2627[week];
+  if (!spec) throw new Error('No 26-27 spec for week ' + week);
+  var sections = [
+    buildGreeting(teacher),
+    '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
+    buildMetricsTable(teacher, metricsArray),
+    '<br>',
+    buildColorLegend(),
+    buildTrendAlert(metricsArray)
+  ];
+  // Week 1 has no caption line under the data table in the doc.
+  if (spec.dataLine) {
+    sections.push('<p style="color:#555;"><em>' + spec.dataLine + '</em></p>');
+  }
+  sections.push('<h2 style="color:#1a1a1a;">🎯 Weekly Focus: ' + spec.focusTitle + '</h2>');
+  sections.push('<p>' + dotSpan('#2e7d32') + '<strong>' + spec.action + '</strong><br>'
+    + spec.actionDetail + '</p>');
+  sections.push(_build2627Moves(spec));
+  sections.push(_build2627Resources(spec));
+  return wrapEmailHtml(sections);
+}
+
+function generate2627Week1Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 1); }
+function generate2627Week2Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 2); }
+function generate2627Week3Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 3); }
+function generate2627Week4Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 4); }
+function generate2627Week5Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 5); }
+function generate2627Week6Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 6); }
+function generate2627Week7Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 7); }
+function generate2627Week8Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 8); }
+function generate2627Week9Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 9); }

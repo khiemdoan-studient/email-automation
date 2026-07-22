@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.21.0] - 2026-07-22
+
+### FEAT: SY26-27 weekly templates, Weeks 1-9
+
+Every template in the dropdown was SY25-26 or summer, so an IM picking a week in the 2026-27 year had nothing current to select. Added the first nine weeks of the new year, sourced from the shared Google Doc "26_27 Implementation Emails" (`1pKkcEnP-Ljt6MtZ7ukdLzsfxSrbG8nqEz4__xMyqohw`, tabs `UPD_WK 1`-`UPD_WK 7`, `Week 8`, `Week 9`).
+
+- Nine new `TEMPLATES` keys, `26-27 Week 1: Growth Mindset Culture` through `26-27 Week 9: Confidence Through Evidence`, registered FIRST so the current year leads the dropdown. `TEMPLATE_NAMES` is derived from `Object.keys(TEMPLATES)`, so no second edit. Count: 20 -> 29.
+- Copy + links live in one `WEEK_SPECS_2627` table; `_build2627Body(teacher, metrics, week)` renders all nine, with thin `generate2627WeekNBody` wrappers as the registry entry points. Adding Weeks 10-18 later means a spec entry, a wrapper, and a key.
+- Standard weekly path: metrics table, `buildColorLegend`, `buildTrendAlert`, the tracked PDF link, and click rewriting all work unchanged (`requiresPdf` stays default true). No changes to `createDraftForTeacher` or the tracking layer.
+- Week 1 renders the metrics table even though its doc tab carries no `<<Teacher Data Table>>` marker (product decision); its data-table caption is omitted because the doc has none. Weeks 7-9 render no AIM Launch link, matching the doc.
+- New `_build2627Resources` instead of reusing `buildResourcesSection`: that helper hardcodes SY25-26 items (Pomodoro portal, ELA/Math Goal Trackers) the new doc doesn't list, and still says the PDF is "(Attached)" when since v2.16.0 it ships as the tracked "View your weekly report (PDF)" button. The new copy points at the button.
+- Doc copy's em dash in "easy to save or print" ships as a hyphen, matching the existing summer-copy style tests.
+- Tests: 154 -> 163. New cases cover registration, dropdown ordering, per-week video/infographic/Timeback/Teacher Hub links, no leaked `<<Teacher Data Table>>` marker or placeholder, the weeks-7-9 no-AIM branch, Week 1's table, and no em dash in any body.
+
+Weeks 10-18 exist in the doc but are thinner (infographic + Teacher Hub, no subject or focus copy in several). Deferred until that content lands.
+
 ## [v2.20.0] - 2026-07-06
 
 ### FIX: per-teacher click attribution (email-key collapse in smoke tests)

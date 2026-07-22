@@ -4,7 +4,7 @@
 
 Google Apps Script email automation system that generates weekly Gmail drafts for teachers with performance metrics tables and PDF attachments. Built for non-technical Implementation Managers (IMs) to run via a custom menu in Google Sheets.
 
-**v2.0**: IMs can select any available week and any email template before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks. (Originally launched with 10 templates: Week 0-8 + Wrap Up. Now 16.)
+**v2.0**: IMs can select any available week and any email template before generating drafts. Metrics are preloaded for all weeks so no pipeline re-run is needed when switching weeks. (Originally launched with 10 templates: Week 0-8 + Wrap Up. Now 29, incl. the SY26-27 Weeks 1-9.)
 
 **v2.0.3**: Bulletproof root folder lookup via folder ID + comprehensive Drive diagnostic. Drive structure verified against live production Drive (April 2026).
 
@@ -40,6 +40,8 @@ Google Apps Script email automation system that generates weekly Gmail drafts fo
 - **Dashboard** (v2.19.0 + v2.20.0): `rebuildEngagementDashboard` renders 3 sections - Teacher Fidelity (% of report PDFs clicked, color-banded), per-(teacher, week) detail, PDF CTR by week - keyed by `email||week||teacher`.
 - New helpers: `_servePdfPage`, `_driveFileId`, `_driveDirectUrl`, `_jsonOut`, `_trackingShimUrl`, `_publishPublicPdfCopy`, `_ensureReportLinksFolder`, `setupReportLinksFolder`. New file `docs/r.html` (GitHub Pages shim; excluded from `clasp push` by the `.claspignore` whitelist). Deployed through @9.
 
+**v2.21.0**: SY26-27 weekly templates, Weeks 1-9. Nine new `TEMPLATES` keys (`26-27 Week 1: Growth Mindset Culture` .. `26-27 Week 9: Confidence Through Evidence`) registered FIRST so the current school year leads the dropdown; count 20 -> 29. Copy + links are transcribed from the shared Doc "26_27 Implementation Emails" (`1pKkcEnP-Ljt6MtZ7ukdLzsfxSrbG8nqEz4__xMyqohw`) into a single `WEEK_SPECS_2627` table that `_build2627Body` renders for all nine weeks. Standard weekly path (metrics table + legend + trend alert + tracked PDF link), no tracking-layer changes. Week 1 shows the metrics table despite having no `<<Teacher Data Table>>` doc marker; Weeks 7-9 have no AIM Launch link. Uses its own `_build2627Resources` rather than `buildResourcesSection` (that one hardcodes stale SY25-26 links and the pre-v2.16.0 "(Attached)" wording). Test count: 154 -> 163. Weeks 10-18 deferred until the doc content fills in.
+
 For full per-version implementation details + version-specific bug post-mortems, see `IMPLEMENTATION_NOTES.md`.
 
 ## Architecture
@@ -71,7 +73,7 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
 1. **Config** (A1:B4)
    - `Date Range` - dropdown from Available Weeks tab (e.g., `2026-03-30_to_2026-04-05`)
    - `Root Folder Name` - informational only; code uses hardcoded constants
-   - `Template` - dropdown of 16 templates (incl. Summer School Week 1+2 + Week 3, v2.11-v2.13). Refresh via `Email Tools > Refresh Template Dropdown` after Code.gs changes.
+   - `Template` - dropdown of 29 templates (SY26-27 Weeks 1-9 listed first, v2.21.0; incl. Summer School Week 1+2 + Week 3, v2.11-v2.13). Refresh via `Email Tools > Refresh Template Dropdown` after Code.gs changes.
 
 2. **School-IM Mapping** (A1:C11)
    - Column A: School Folder Name (legacy underscored form - kept for backward compat)
