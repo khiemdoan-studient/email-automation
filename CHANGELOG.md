@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.21.1] - 2026-07-22
+
+### FIX (ops, no code change): PDF-download button 404 - private repo killed GitHub Pages
+
+The "View your weekly report (PDF)" button in every email 404'd. The button points at the GitHub Pages shim `https://khiemdoan-studient.github.io/email-automation/r.html#e=<token>` (v2.18.0). Root cause: the repo had been flipped to **private** since v2.18.0, and GitHub Pages does not serve from a free private repo, so `has_pages` went false and the shim URL returned the GitHub 404 page. Not a code bug and not related to the v2.21.0 templates - it broke ALL templates' PDF buttons. The Apps Script `/exec` tracker was unaffected; only the Pages hop was down.
+
+- Made the repo public again and re-enabled Pages (source = `main` `/docs`) via `gh api -X POST .../pages`. Pages rebuilt; shim URL now returns HTTP 200 with the correct `EXEC` id (`AKfycbzx...SeDTMBl0bh6r2IBg`).
+- No `Code.js` change: `CONFIG.TRACKING_SHIM_URL` already held the correct URL.
+- Failure mode recorded in `IMPLEMENTATION_NOTES.md` so it isn't re-diagnosed from scratch: **the shim host is GitHub Pages on a PUBLIC repo; making `email-automation` private silently 404s every PDF button.** If the repo must go private later, move `docs/r.html` to a public host first and repoint `CONFIG.TRACKING_SHIM_URL`.
+
 ## [v2.21.0] - 2026-07-22
 
 ### FEAT: SY26-27 weekly templates, Weeks 1-9
