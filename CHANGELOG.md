@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.22.0] - 2026-07-24
+
+### FEAT: manager-editable templates - Sync from the 26-27 Doc
+
+Managers asked to add or modify the weekly emails without touching code. The content already lives in their shared "26_27 Implementation Emails" Doc; v2.21.0 hardcoded it, so every copy tweak was a Code.js edit + clasp push. Now the Doc is the authoring surface.
+
+Flow: managers edit the Doc → IM clicks **Email Tools → Templates: Sync from 26-27 Doc** → the parser extracts per-week fields, validates them, and shows a preview (per week: OK with subject, or SKIPPED with the reason) → YES writes the parsed specs to a new **Template Content** tab and auto-refreshes the dropdown. Draft generation reads that snapshot. A week that fails validation is SKIPPED and keeps serving what it serves today (previous synced row, else the hardcoded v2.21.0 copy) - bad formatting can never reach a teacher's inbox.
+
+- **Resolver layer**: `resolveTemplate_(name)` + `getTemplateNames_()` replace direct `TEMPLATES[...]` / `TEMPLATE_NAMES` hits at all ~11 runtime call sites. 26-27 names resolve by WEEK NUMBER (`/^26-27 Week (\d+)/`) through `_getSpec2627_` (synced row first, `WEEK_SPECS_2627` fallback), so a renamed focus title never breaks an already-selected dropdown value. `_getSyncedSpecs_()` reads the Template Content tab once per execution, fail-soft `{}`.
+- **Auto-add**: a Week 10-18 tab that passes validation becomes a dropdown template with zero code (today all nine of them SKIP: no subject/focus/video content yet).
+- **Content fields only**: the skeleton (greeting, metrics table, color legend, trend alert, tracked PDF button, section order) stays code-owned. Managers control subject, focus title, action + detail, data-table caption, video/infographic/AIM links, materials.
+- **Sync engine**: `syncTemplatesFromDoc` walks the Doc's nested tabs via `DocumentApp.getTabs()` (no advanced service; UPD_WK N beats Week N), `_extractTabLines_` flattens each tab to a bold/link runs model, and the PURE `_parseWeekLines_` extracts + validates fields (em dashes ship as hyphens; `_____` blanks and unresolved `<<markers>>` are rejected).
+- **Parser hardened against the real doc** (live-sim run 2026-07-24): subject cut at a same-paragraph `<<Teacher Data Table>>` marker; 🎬/📊 links anchored at their own emoji when both share one paragraph; zero-width (empty-text) links resolved by run offsets with the bold label as link text; materials cut before a merged "- Teacher Hub" bullet; action fenced off an adjacent bold "This week's moves".
+- **Pre-verified against the LIVE doc**: the shipped `_parseWeekLines_` replayed over the real Docs API content parses 9/9 weeks clean; URLs/fields match, surfacing that managers already changed Week 8's video and Week 9's infographic since v2.21.0 (the sync will pick those up - the feature working as intended).
+- Tests: 163 -> 199 (resolver fallback byte-identical to the static builders, synced-spec override, dropdown ordering, registry-vs-spec subject drift guard, 20+ parser fixtures replicating live doc quirks).
+
 ## [v2.21.1] - 2026-07-22
 
 ### FIX (ops, no code change): PDF-download button 404 - private repo killed GitHub Pages

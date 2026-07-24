@@ -31,6 +31,12 @@ var CONFIG = {
   STUDENT_HIGHLIGHTS_SHEET_NAME: "Student Year Highlights",
   // v2.8.0: Spring 2026 MAP Scores tab for the new live-data MAP template.
   MAP_SCORES_SHEET_NAME: "Spring 2026 MAP Scores",
+  // v2.22.0: manager-editable 26-27 templates. The shared "26_27 Implementation
+  // Emails" Doc is the authoring surface; Email Tools > "Templates: Sync from
+  // 26-27 Doc" parses it into the Template Content tab, which draft generation
+  // reads (hardcoded WEEK_SPECS_2627 is the fallback when no synced row exists).
+  TEMPLATE_DOC_ID: "1pKkcEnP-Ljt6MtZ7ukdLzsfxSrbG8nqEz4__xMyqohw",
+  TEMPLATE_CONTENT_TAB: "Template Content",
 
   // v2.10.0: Summer School Week 1+2 template reads THREE EXTERNAL sources
   // (NOT the active spreadsheet): a Summer Performance Dashboard, the MAP
@@ -278,6 +284,106 @@ var TEMPLATES = {
 // the order entries appear in the TEMPLATES literal above.
 var TEMPLATE_NAMES = Object.keys(TEMPLATES);
 
+// ============================================
+// v2.22.0 — MANAGER-EDITABLE 26-27 TEMPLATES (resolver layer)
+// ============================================
+// The 26-27 weekly templates resolve their content through _getSpec2627_:
+// a synced row in the Template Content tab (written by syncTemplatesFromDoc,
+// authored by managers in the shared 26_27 Doc) wins; the hardcoded
+// WEEK_SPECS_2627 entry is the fail-soft fallback. Resolution keys off the
+// WEEK NUMBER parsed from the template name, so a manager renaming a week's
+// focus title never breaks an already-selected dropdown value.
+
+var _syncedSpecs2627Cache = null;
+
+/** Read synced specs from the Template Content tab. Fail-soft: {} on any error. */
+function _getSyncedSpecs_() {
+  if (_syncedSpecs2627Cache !== null) return _syncedSpecs2627Cache;
+  var out = {};
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.TEMPLATE_CONTENT_TAB);
+    if (sheet && sheet.getLastRow() > 1) {
+      var data = sheet.getDataRange().getValues();
+      for (var i = 1; i < data.length; i++) {
+        var r = data[i];
+        var week = Number(r[0]);
+        var spec = {
+          templateName: String(r[1] || '').trim(),
+          subject: String(r[2] || '').trim(),
+          focusTitle: String(r[3] || '').trim(),
+          action: String(r[4] || '').trim(),
+          actionDetail: String(r[5] || '').trim(),
+          dataLine: String(r[6] || '').trim(),
+          videoText: String(r[7] || '').trim(),
+          videoUrl: String(r[8] || '').trim(),
+          infographicText: String(r[9] || '').trim(),
+          infographicUrl: String(r[10] || '').trim(),
+          aimUrl: String(r[11] || '').trim(),
+          aimMaterials: String(r[12] || '').trim()
+        };
+        // Minimal row sanity; a broken row silently falls back to the hardcoded spec.
+        if (week >= 1 && spec.subject && spec.videoUrl && spec.infographicUrl) out[week] = spec;
+      }
+    }
+  } catch (e) {
+    out = {};
+  }
+  _syncedSpecs2627Cache = out;
+  return out;
+}
+
+/** Spec for a 26-27 week: synced row first, hardcoded fallback, else null. */
+function _getSpec2627_(week) {
+  return _getSyncedSpecs_()[week] || WEEK_SPECS_2627[week] || null;
+}
+
+/**
+ * Resolve a template name to its {subject, buildBody, ...} entry.
+ * 26-27 names resolve by week number through the spec layer (synced content
+ * wins); everything else falls through to the static TEMPLATES registry.
+ * ALL runtime template lookups go through here, never TEMPLATES[name] directly.
+ */
+function resolveTemplate_(name) {
+  var m = /^26-27 Week (\d+)\b/.exec(String(name || ''));
+  if (m) {
+    var spec = _getSpec2627_(Number(m[1]));
+    if (!spec) return null;
+    return {
+      subject: spec.subject,
+      buildBody: function (teacher, metricsArray) {
+        return _build2627BodyFromSpec(teacher, metricsArray, spec);
+      }
+    };
+  }
+  return TEMPLATES[name] || null;
+}
+
+/**
+ * Dropdown name list: 26-27 weeks first (synced names win over static keys,
+ * numeric week order; a synced Week 10+ auto-appears with zero code), then
+ * every non-26-27 static template in registry order.
+ */
+function getTemplateNames_() {
+  var synced = _getSyncedSpecs_();
+  var staticByWeek = {};
+  TEMPLATE_NAMES.forEach(function (n) {
+    var m = /^26-27 Week (\d+)\b/.exec(n);
+    if (m) staticByWeek[Number(m[1])] = n;
+  });
+  var weekSet = {};
+  Object.keys(synced).forEach(function (w) { weekSet[w] = true; });
+  Object.keys(staticByWeek).forEach(function (w) { weekSet[w] = true; });
+  var names = Object.keys(weekSet).map(Number).sort(function (a, b) { return a - b; })
+    .map(function (w) {
+      var s = synced[w];
+      return (s && s.templateName)
+        || (s && ('26-27 Week ' + w + ': ' + (s.focusTitle || 'Weekly Email')))
+        || staticByWeek[w];
+    });
+  TEMPLATE_NAMES.forEach(function (n) { if (!/^26-27 /.test(n)) names.push(n); });
+  return names;
+}
+
 // Manual aliases for teachers whose names differ between roster and BigQuery metrics.
 // KEEP THIS LIST IN SYNC with scripts/check_email_data.py NAME_ALIASES.
 //
@@ -327,6 +433,8 @@ function onOpen() {
     .addItem('Set Date Range', 'setDateRange')
     .addItem('Set Template', 'setTemplate')
     .addItem('Refresh Template Dropdown', 'setupTemplateDropdown')
+    .addSeparator()
+    .addItem('Templates: Sync from 26-27 Doc', 'syncTemplatesFromDoc')
     .addToUi();
 }
 
@@ -424,16 +532,18 @@ function setupTemplateDropdown() {
     return;
   }
 
+  // v2.22.0: getTemplateNames_ merges synced 26-27 names with the static registry.
+  var names = getTemplateNames_();
   var rule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(TEMPLATE_NAMES, true)
+    .requireValueInList(names, true)
     .setAllowInvalid(false)
-    .setHelpText('Select a template. Edit TEMPLATE_NAMES in Code.gs to add more.')
+    .setHelpText('Select a template. Managers edit 26-27 content in the shared Doc, then run Templates: Sync from 26-27 Doc.')
     .build();
   configSheet.getRange(templateRow, 2).setDataValidation(rule);
 
   ui.alert('Done',
-    'Template dropdown refreshed with ' + TEMPLATE_NAMES.length + ' options:\n\n'
-      + TEMPLATE_NAMES.join('\n'),
+    'Template dropdown refreshed with ' + names.length + ' options:\n\n'
+      + names.join('\n'),
     ui.ButtonSet.OK);
 }
 
@@ -470,12 +580,13 @@ function setDateRange() {
 
 function setTemplate() {
   var ui = SpreadsheetApp.getUi();
-  var msg = 'Enter the template name:\n\n' + TEMPLATE_NAMES.join('\n');
+  var names = getTemplateNames_();
+  var msg = 'Enter the template name:\n\n' + names.join('\n');
   var response = ui.prompt('Set Template', msg, ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() === ui.Button.OK) {
     var template = response.getResponseText().trim();
-    if (!TEMPLATES[template]) {
-      ui.alert('Error', 'Unknown template: ' + template + '\n\nValid options:\n' + TEMPLATE_NAMES.join('\n'), ui.ButtonSet.OK);
+    if (!resolveTemplate_(template)) {
+      ui.alert('Error', 'Unknown template: ' + template + '\n\nValid options:\n' + names.join('\n'), ui.ButtonSet.OK);
       return;
     }
     setConfigValue('Template', template);
@@ -564,7 +675,8 @@ function generateSmokeTest() {
   // (weekly metrics + ROOT_FOLDER PDFs) does not apply. Redirect to the summer
   // smoke test (it takes its own lock) BEFORE locking here.
   var _smokeTpl = getConfigValue('Template');
-  if (_smokeTpl && TEMPLATES[_smokeTpl] && TEMPLATES[_smokeTpl].summerSchool) {
+  var _smokeEntry = _smokeTpl && resolveTemplate_(_smokeTpl);
+  if (_smokeEntry && _smokeEntry.summerSchool) {
     generateSummerSchoolSmokeTest();
     return;
   }
@@ -590,7 +702,7 @@ function generateSmokeTest() {
       return;
     }
     var templateName = getConfigValue('Template') || '4/27: Last Week of Motivention';
-    var template = TEMPLATES[templateName];
+    var template = resolveTemplate_(templateName);
     if (!template) {
       ui.alert('Error', 'Unknown template: ' + templateName, ui.ButtonSet.OK);
       return;
@@ -822,7 +934,7 @@ function processRetry(selectedTeacherStrs) {
     var dateRange = getConfigValue('Date Range');
     if (!dateRange) return '<span style="color:#c62828;">Date Range not set in Config. Pick a week, then retry.</span>';
     var templateName = getConfigValue('Template') || '4/27: Last Week of Motivention';
-    var template = TEMPLATES[templateName];
+    var template = resolveTemplate_(templateName);
     if (!template) return '<span style="color:#c62828;">Unknown template: ' + templateName + '</span>';
     var weekStart = dateRange.split('_to_')[0];
     var allMetrics = getTeacherMetricsForWeek(weekStart);
@@ -932,7 +1044,8 @@ function generateDraftsForCurrentUser() {
 
   // Default template tracks the current end-of-year context. Update at each cycle handoff.
   var templateName = getConfigValue('Template') || '4/27: Last Week of Motivention';
-  if (!TEMPLATES[templateName]) {
+  var resolvedTemplate = resolveTemplate_(templateName);
+  if (!resolvedTemplate) {
     return ui.alert('Error', 'Unknown template: ' + templateName + '\n\nSet a valid template in Config or use Email Tools > Set Template.', ui.ButtonSet.OK);
   }
 
@@ -946,7 +1059,7 @@ function generateDraftsForCurrentUser() {
   // scoped to THIS IM's assigned schools. It does not use All Teacher Metrics or
   // the weekly PDF tree. (Date Range is read above but unused here; IMs always
   // have one set.) The lock is held + _runIdCache reset above, so call the core.
-  if (TEMPLATES[templateName].summerSchool) {
+  if (resolvedTemplate.summerSchool) {
     var ssAllowed = {};
     for (var si = 0; si < mySchools.length; si++) ssAllowed[normalizeFolderName(mySchools[si].displayName)] = true;
     _runSummerSchoolCore({ smokeMode: false, allowedCampuses: ssAllowed, templateName: templateName });
@@ -1064,7 +1177,7 @@ function generateDraftsForCurrentUser() {
     schoolFolderMap[mappingData[m][1]] = mappingData[m][0];
   }
 
-  var template = TEMPLATES[templateName];
+  var template = resolvedTemplate;
 
   for (var t = 0; t < teachersWithData.length; t++) {
     var teacher = teachersWithData[t];
@@ -3277,6 +3390,173 @@ function runUnitTests() {
     wk1html.indexOf('<table') !== -1, true);
   _testAssertEq(results, '26-27 wk1: no data-line caption (doc has none)',
     WEEK_SPECS_2627[1].dataLine, '');
+
+  // v2.22.0: manager-editable templates (resolver + doc parser)
+  // Drift guard: registry subjects must equal spec subjects (two declarations, one truth).
+  _testAssertEq(results, '26-27 v2.22: registry subject === spec subject for all 9',
+    k2627.filter(function (k, i) { return TEMPLATES[k].subject !== WEEK_SPECS_2627[i + 1].subject; }).length, 0);
+
+  // Resolver: fallback path renders byte-identical to the static builders.
+  _testAssertEq(results, '26-27 v2.22: resolver fallback body === static builder body',
+    resolveTemplate_('26-27 Week 3: Persistence').buildBody(t2627, []),
+    generate2627Week3Body(t2627, []));
+  _testAssertEq(results, '26-27 v2.22: resolver fallback subject from spec',
+    resolveTemplate_('26-27 Week 5: anything after the week number').subject,
+    WEEK_SPECS_2627[5].subject);
+  _testAssertEq(results, '26-27 v2.22: resolver passes non-26-27 names to registry',
+    resolveTemplate_('Summer School Week 1+2').summerSchool, true);
+  _testAssertEq(results, '26-27 v2.22: resolver returns null for unknown names',
+    resolveTemplate_('Nonexistent Template'), null);
+  _testAssertEq(results, '26-27 v2.22: resolver returns null for unsynced week 12',
+    resolveTemplate_('26-27 Week 12: Not Yet Written'), null);
+
+  // Synced override: a Template Content row beats the hardcoded spec.
+  var _fakeSynced = {
+    subject: 'Custom Subject From Managers',
+    focusTitle: 'Custom Focus',
+    action: 'Custom Action',
+    actionDetail: 'Custom detail sentence.',
+    dataLine: 'Custom data line.',
+    videoText: 'Custom Video', videoUrl: 'https://canva.link/custom',
+    infographicText: 'Custom Infographic', infographicUrl: 'https://drive.google.com/custom',
+    aimUrl: '', aimMaterials: '',
+    templateName: '26-27 Week 2: Custom Focus'
+  };
+  _syncedSpecs2627Cache = { 2: _fakeSynced };
+  var ovr = resolveTemplate_('26-27 Week 2: Clarity Builds Mastery');
+  _testAssertEq(results, '26-27 v2.22: synced spec overrides subject', ovr.subject, 'Custom Subject From Managers');
+  var ovrHtml = ovr.buildBody(t2627, []);
+  _testAssertEq(results, '26-27 v2.22: synced spec overrides body content',
+    ovrHtml.indexOf('https://canva.link/custom') !== -1 && ovrHtml.indexOf('Custom Focus') !== -1, true);
+  var namesWithSync = getTemplateNames_();
+  _testAssertEq(results, '26-27 v2.22: synced templateName appears in dropdown names',
+    namesWithSync.indexOf('26-27 Week 2: Custom Focus') !== -1, true);
+  _testAssertEq(results, '26-27 v2.22: unsynced weeks keep static dropdown names',
+    namesWithSync.indexOf('26-27 Week 1: Growth Mindset Culture'), 0);
+  _syncedSpecs2627Cache = null;
+
+  // No sync at all: dropdown = static 26-27 keys first, full registry after.
+  _syncedSpecs2627Cache = {};
+  var namesNoSync = getTemplateNames_();
+  _testAssertEq(results, '26-27 v2.22: no-sync dropdown leads with the 9 static keys',
+    namesNoSync.slice(0, 9).join('|'), k2627.join('|'));
+  _testAssertEq(results, '26-27 v2.22: no-sync dropdown has every registry template',
+    namesNoSync.length, TEMPLATE_NAMES.length);
+  _syncedSpecs2627Cache = null;
+
+  // Doc parser fixtures - replicating the REAL doc's formatting quirks.
+  function _fxB(t) { return { text: t, bold: true, url: '' }; }
+  function _fxN(t) { return { text: t, bold: false, url: '' }; }
+  function _fxL(t, u) { return { text: t, bold: false, url: u }; }
+
+  // wk1 pattern: Focus+Subject+WeeklyFocus merged in one all-bold paragraph; split ✅ runs.
+  var p1 = _parseWeekLines_([
+    { runs: [_fxN('Focus: Relationship Foundations'), _fxB('Subject: Studient: Week 1: Let\'s Launch!'), _fxB('🎯 Weekly Focus: Fostering a Growth Mindset Culture. ')] },
+    { runs: [_fxB('✅'), _fxB('Coach for growth'), _fxN('Strengthen perseverance and progress.')] },
+    { runs: [_fxN('🎬 Got 60 seconds? Watch: '), _fxL('Teacher Language That Builds', 'https://canva.link/vid1')] },
+    { runs: [_fxN('📊 Prefer to skim? View the '), _fxL('Growth Mindset Infographic', 'https://drive.google.com/file/d/abc'), _fxN(' - easy to save or print')] },
+    { runs: [_fxL('AIM Launch Link', 'https://www.canva.com/design/aim1')] },
+    { runs: [_fxN(' Needed Materials: Sticky Notes, Stopwatch')] }
+  ]);
+  _testAssertEq(results, '26-27 parser: wk1-style subject cut at 🎯', p1.spec.subject, 'Studient: Week 1: Let\'s Launch!');
+  _testAssertEq(results, '26-27 parser: wk1-style split-bold action', p1.spec.action, 'Coach for growth');
+  _testAssertEq(results, '26-27 parser: wk1-style detail after action', p1.spec.actionDetail, 'Strengthen perseverance and progress.');
+  _testAssertEq(results, '26-27 parser: wk1-style no dataLine without marker', p1.spec.dataLine, '');
+  _testAssertEq(results, '26-27 parser: wk1-style aim + materials', p1.spec.aimUrl === 'https://www.canva.com/design/aim1' && p1.spec.aimMaterials === 'Sticky Notes, Stopwatch', true);
+  _testAssertEq(results, '26-27 parser: wk1-style valid (no errors)', p1.errors.join(','), '');
+
+  // wk2 pattern: focus title + action + detail all in ONE line, bold-boundary split.
+  var p2 = _parseWeekLines_([
+    { runs: [_fxN('Subject: Studient: Teach It.')] },
+    { runs: [_fxN('<<Teacher Data Table>>')] },
+    { runs: [_fxN('Utilizing objective metrics to guide instruction.')] },
+    { runs: [_fxB('🎯 Weekly Focus: Clarity builds mastery'), _fxB('✅Create consistency that supports mastery'), _fxN('Reinforce visible, repeatable learning.')] },
+    { runs: [_fxN('🎬 Watch: '), _fxL('Video', 'https://canva.link/vid2')] },
+    { runs: [_fxN('📊 View the '), _fxL('Mastery Infographic', 'https://drive.google.com/file/d/def')] }
+  ]);
+  _testAssertEq(results, '26-27 parser: wk2-style title cut at ✅', p2.spec.focusTitle, 'Clarity builds mastery');
+  _testAssertEq(results, '26-27 parser: wk2-style action from bold segment', p2.spec.action, 'Create consistency that supports mastery');
+  _testAssertEq(results, '26-27 parser: wk2-style detail after bold end', p2.spec.actionDetail, 'Reinforce visible, repeatable learning.');
+  _testAssertEq(results, '26-27 parser: wk2-style dataLine from next line', p2.spec.dataLine, 'Utilizing objective metrics to guide instruction.');
+
+  // wk5 pattern: non-bold detail on the focus line; "This week's moves" fenced off the action.
+  var p5 = _parseWeekLines_([
+    { runs: [_fxN('Subject: Studient: Narrative')] },
+    { runs: [_fxB('🎯 Weekly Focus: Learning Narratives'), _fxN('Building learner confidence through evidence.')] },
+    { runs: [_fxB('✅Coach Productive Learning Narratives'), _fxB('This week\'s moves ⬇️: ')] },
+    { runs: [_fxN('🎬 Watch: '), _fxL('V', 'https://canva.link/vid5')] },
+    { runs: [_fxN('📊 View the '), _fxL('I', 'https://drive.google.com/file/d/ghi')] }
+  ]);
+  _testAssertEq(results, '26-27 parser: wk5-style action fenced at This week', p5.spec.action, 'Coach Productive Learning Narratives');
+  _testAssertEq(results, '26-27 parser: wk5-style detail from focus line', p5.spec.actionDetail, 'Building learner confidence through evidence.');
+
+  // wk4 pattern: marker + dataLine in the same paragraph. wk3 pattern: stray quote after marker.
+  var p4 = _parseWeekLines_([{ runs: [_fxN('<<Teacher Data Table>>Integrating objective evidence into conversations.')] }]);
+  _testAssertEq(results, '26-27 parser: wk4-style same-line dataLine', p4.spec.dataLine, 'Integrating objective evidence into conversations.');
+  var p3 = _parseWeekLines_([
+    { runs: [_fxN('<<Teacher Data Table>>’')] },
+    { runs: [_fxN('Monitoring platform data for frustration.')] }
+  ]);
+  _testAssertEq(results, '26-27 parser: wk3-style stray-quote marker then next-line dataLine', p3.spec.dataLine, 'Monitoring platform data for frustration.');
+
+  // wk8 pattern: infographic link with EMPTY text; label lives in a bold run.
+  var p8 = _parseWeekLines_([
+    { runs: [_fxN('📊 '), _fxB('Prefer to skim? '), _fxN(' View the '), _fxB('Curiosity Infographic'), _fxL('', 'https://drive.google.com/file/d/jkl'), _fxN('- easy to save or print')] }
+  ]);
+  _testAssertEq(results, '26-27 parser: wk8-style empty-link text falls back to bold label',
+    p8.spec.infographicText, 'Curiosity Infographic');
+  _testAssertEq(results, '26-27 parser: wk8-style url captured from empty-text link',
+    p8.spec.infographicUrl, 'https://drive.google.com/file/d/jkl');
+
+  // Live-doc regression (sim run 2026-07-24): subject and <<marker>> share one paragraph.
+  var pSubjMk = _parseWeekLines_([
+    { runs: [_fxB('Subject: Studient: Teach It. Check It. Repeat It.'), _fxN('<<Teacher Data Table>>')] },
+    { runs: [_fxN('Utilizing objective metrics.')] }
+  ]);
+  _testAssertEq(results, '26-27 parser: subject cut at <<marker>> (same paragraph)',
+    pSubjMk.spec.subject, 'Studient: Teach It. Check It. Repeat It.');
+  _testAssertEq(results, '26-27 parser: marker at line end still yields next-line dataLine',
+    pSubjMk.spec.dataLine, 'Utilizing objective metrics.');
+
+  // Live-doc regression (sim run 2026-07-24): 🎬 and 📊 merged into ONE paragraph -
+  // each link must anchor at its own emoji, not "first link on the line".
+  var pMerged = _parseWeekLines_([
+    { runs: [
+      _fxB('This week\'s moves ⬇️: '), _fxN('(Same content, two ways)'),
+      _fxN('🎬 Got 60 seconds? Watch: '), _fxL('Video Title', 'https://canva.link/vidX'),
+      _fxN('📊 Prefer to skim? View the '), _fxL('Persistence Infographic', 'https://drive.google.com/file/d/infX'),
+      _fxN(' - easy to save or print')
+    ] }
+  ]);
+  _testAssertEq(results, '26-27 parser: merged 🎬+📊 paragraph, video anchored at 🎬',
+    pMerged.spec.videoUrl, 'https://canva.link/vidX');
+  _testAssertEq(results, '26-27 parser: merged 🎬+📊 paragraph, infographic anchored at 📊',
+    pMerged.spec.infographicUrl + '|' + pMerged.spec.infographicText,
+    'https://drive.google.com/file/d/infX|Persistence Infographic');
+
+  // Live-doc regression (sim run 2026-07-24): materials paragraph swallows the
+  // following "- Teacher Hub" bullet.
+  var pMats = _parseWeekLines_([
+    { runs: [_fxN(' Needed Materials: Sticky Notes, Measuring Tape- Teacher Hub')] }
+  ]);
+  _testAssertEq(results, '26-27 parser: materials cut before Teacher Hub bullet',
+    pMats.spec.aimMaterials, 'Sticky Notes, Measuring Tape');
+
+  // Style rule: em dashes in doc content ship as hyphens.
+  var pEm = _parseWeekLines_([{ runs: [_fxN('Subject: Data — delivered')] }]);
+  _testAssertEq(results, '26-27 parser: em dash converted to hyphen', pEm.spec.subject, 'Data - delivered');
+
+  // Validation: missing required pieces produce SKIP errors, never a broken spec.
+  var pBad = _parseWeekLines_([{ runs: [_fxN('Subject: Only a subject')] }]);
+  _testAssertEq(results, '26-27 parser: missing focus/action/links -> 4 errors', pBad.errors.length, 4);
+  var pBlank = _parseWeekLines_([
+    { runs: [_fxN('Subject: S')] },
+    { runs: [_fxB('🎯 Weekly Focus: F'), _fxB('✅A_____'), _fxN('')] },
+    { runs: [_fxN('🎬 Watch: '), _fxL('V', 'https://c.link/v')] },
+    { runs: [_fxN('📊 View the '), _fxL('I', 'https://d.google.com/i')] }
+  ]);
+  _testAssertEq(results, '26-27 parser: unfilled blank rejected',
+    pBlank.errors.join(',').indexOf('unfilled blank') !== -1, true);
 
   // Render
   var pass = 0, fail = 0;
@@ -5519,7 +5799,7 @@ function _summerDistrict(campus) {
 }
 
 function _summerTemplateConfig(templateName) {
-  var t = templateName && TEMPLATES[templateName];
+  var t = templateName && resolveTemplate_(templateName);
   if (t && t.summerConfig) return t.summerConfig;
   return TEMPLATES['Summer School Week 1+2'].summerConfig;
 }
@@ -5592,7 +5872,8 @@ function buildSummerConsolidatedTable(entries, weekStarts, weekLabels) {
 
 function generateSummerSchoolSmokeTest() {
   var tpl = getConfigValue('Template');
-  if (!tpl || !TEMPLATES[tpl] || !TEMPLATES[tpl].summerSchool) tpl = 'Summer School Week 1+2';
+  var tplEntry = tpl && resolveTemplate_(tpl);
+  if (!tplEntry || !tplEntry.summerSchool) tpl = 'Summer School Week 1+2';
   _runSummerSchool({ smokeMode: true, templateName: tpl });
 }
 
@@ -5936,6 +6217,7 @@ function _runSummerSchoolCore(opts) {
 //   Resources                        -> aim (optional) + materials + Teacher Hub
 var WEEK_SPECS_2627 = {
   1: {
+    subject: 'Studient: Week 1: Let\'s Launch!',
     focus: 'Relationship Foundations + Emotional Safety',
     dataLine: '',
     focusTitle: 'Fostering a Growth Mindset Culture',
@@ -5949,6 +6231,7 @@ var WEEK_SPECS_2627 = {
     aimMaterials: 'Sticky Notes, Stopwatch (Motivention Clock), Measuring Tape'
   },
   2: {
+    subject: 'Studient: Teach It. Check It. Repeat It.',
     focus: 'Explicit Expectations + Predictable Routines',
     dataLine: 'Utilizing objective metrics to guide targeted instruction, practice, and intervention.',
     focusTitle: 'Clarity builds mastery',
@@ -5962,6 +6245,7 @@ var WEEK_SPECS_2627 = {
     aimMaterials: 'Stopwatch (Motivention Clock), Printer Paper, Measuring Tape, Empty Trash Can/Box, Plastic Cups'
   },
   3: {
+    subject: 'Studient: Persistence Starts with Presence',
     focus: 'Fostering Persistence through Productive Struggle',
     dataLine: 'Monitoring platform data to identify emerging frustration and reinforce a beginner\'s mindset.',
     focusTitle: 'Persistence',
@@ -5975,6 +6259,7 @@ var WEEK_SPECS_2627 = {
     aimMaterials: 'Stopwatch (Motivention Clock), Construction Paper, Measuring Tape, Pencils, Clothespins/Clips, Plastic Cups (6), Pom Poms, Ping Pong Balls, Paper Labels for corners (how, why, what if, I wonder)'
   },
   4: {
+    subject: 'Studient: Cultivating the "Yet"',
     focus: 'Fostering Student Ownership Through Reflection',
     dataLine: 'Integrating objective evidence into restorative conversations to support reflection and action planning.',
     focusTitle: 'Reflection',
@@ -5988,6 +6273,7 @@ var WEEK_SPECS_2627 = {
     aimMaterials: 'Paper, Pencils'
   },
   5: {
+    subject: 'Studient: Changing the Learning Narrative',
     focus: 'Success data rewrites beliefs',
     dataLine: 'Using student performance data to reinforce growth, identify support needs, and inform instructional decisions.',
     focusTitle: 'Learning Narratives',
@@ -6001,6 +6287,7 @@ var WEEK_SPECS_2627 = {
     aimMaterials: 'Paper, Pencils, Stopwatch (Motivention Clock), Sticky Notes/Cards labeled (excited, annoyed, scared, nervous, rude, shy)'
   },
   6: {
+    subject: 'Studient: How to make "struggling" the best part of your class.',
     focus: 'Embrace the friction of learning',
     dataLine: 'Interpreting platform data to recognize productive struggle, guide responsive coaching, and reinforce sustained effort.',
     focusTitle: 'Persistent Engagement',
@@ -6014,6 +6301,7 @@ var WEEK_SPECS_2627 = {
     aimMaterials: 'Four Corner Labels, Stopwatch (Motivention Clock), Scissors, Pencils, Ping Pong Balls, Rubber Bands, Plastic Cups, Straws, Painters Tape, Spoons, Tape, String, Cardboard, Paperclips, Index Cards'
   },
   7: {
+    subject: 'Studient: Build Curious, Unstoppable Problem-Solvers',
     focus: 'Data as the Map, Effort as the Engine',
     dataLine: 'Analyzing platform data to guide responsive instruction, personalize feedback, and support continuous student growth.',
     focusTitle: 'Persistent Engagement',
@@ -6029,6 +6317,7 @@ var WEEK_SPECS_2627 = {
     aimMaterials: ''
   },
   8: {
+    subject: 'Studient: Turn a "miss" into a roadmap.',
     focus: 'The Curious Learner',
     dataLine: 'Interpreting platform data to identify learning gaps, guide responsive supports, and provide actionable feedback.',
     focusTitle: 'Misses as Roadmaps',
@@ -6042,6 +6331,7 @@ var WEEK_SPECS_2627 = {
     aimMaterials: ''
   },
   9: {
+    subject: 'Studient: Stop hoping for confidence. Start building it.',
     focus: 'Building Confidence Through Evidence',
     dataLine: 'Leveraging student data to monitor growth, inform coaching, and celebrate progress.',
     focusTitle: 'Confidence is built, not given.',
@@ -6097,8 +6387,14 @@ function _build2627Resources(spec) {
 }
 
 function _build2627Body(teacher, metricsArray, week) {
-  var spec = WEEK_SPECS_2627[week];
+  // v2.22.0: synced (manager-edited) spec wins; hardcoded spec is the fallback.
+  var spec = _getSpec2627_(week);
   if (!spec) throw new Error('No 26-27 spec for week ' + week);
+  return _build2627BodyFromSpec(teacher, metricsArray, spec);
+}
+
+/** Render a 26-27 weekly body from a spec object (hardcoded or synced). */
+function _build2627BodyFromSpec(teacher, metricsArray, spec) {
   var sections = [
     buildGreeting(teacher),
     '<h2 style="color:#1a1a1a;">Average Active Days in Motivention</h2>',
@@ -6128,3 +6424,374 @@ function generate2627Week6Body(teacher, metricsArray) { return _build2627Body(te
 function generate2627Week7Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 7); }
 function generate2627Week8Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 8); }
 function generate2627Week9Body(teacher, metricsArray) { return _build2627Body(teacher, metricsArray, 9); }
+
+
+// ============================================
+// v2.22.0 — TEMPLATE SYNC FROM THE 26-27 DOC
+// ============================================
+// Managers author weekly content in the shared "26_27 Implementation Emails"
+// Doc (CONFIG.TEMPLATE_DOC_ID). "Email Tools > Templates: Sync from 26-27 Doc"
+// parses every week tab (UPD_WK N / Week N; UPD_WK wins for the same N),
+// validates it, previews the result, and on YES writes the parsed specs to the
+// Template Content tab - which resolveTemplate_/_getSpec2627_ read at draft
+// time. A week that fails validation is SKIPPED (previous synced content, or
+// the hardcoded fallback, keeps serving) - bad formatting can never reach a
+// teacher's inbox.
+//
+// Doc structure contract per week tab (what the parser needs):
+//   "Subject: <text>"                       -> subject (ends at the 🎯 emoji if same line)
+//   "Weekly Focus: <bold title>"            -> focusTitle (bold run; non-bold text after it = actionDetail)
+//   "✅<bold action>"                        -> action (bold run after the check; non-bold remainder = actionDetail)
+//   <<Teacher Data Table>> [text]           -> dataLine (same line or the next line; optional)
+//   🎬 line with a link                      -> video text + URL (required)
+//   📊 line with a link                      -> infographic text + URL (required; bold label used when the link text is empty)
+//   link whose text contains "AIM Launch"   -> aimUrl (optional)
+//   "Needed Materials: <list>"              -> aimMaterials (optional)
+// Timeback + Teacher Hub links stay code-owned constants.
+
+var TEMPLATE_CONTENT_HEADERS = [
+  'week', 'template_name', 'subject', 'focus_title', 'action', 'action_detail',
+  'data_line', 'video_text', 'video_url', 'infographic_text', 'infographic_url',
+  'aim_url', 'aim_materials', 'synced_at', 'synced_by'
+];
+
+/** Clean a parsed field: em dash -> hyphen (repo style rule), collapse whitespace, fix doubled commas. */
+function _cleanField2627_(s) {
+  return String(s || '')
+    .replace(/—/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/,\s*,/g, ',')
+    .trim();
+}
+
+/**
+ * Parse one week tab's extracted lines into a spec. PURE (node-testable).
+ * @param {Array<{runs: Array<{text, bold, url}>}>} lines
+ * @return {{spec: Object, errors: string[]}}
+ */
+function _parseWeekLines_(lines) {
+  var spec = {
+    templateName: '', subject: '', focusTitle: '', action: '', actionDetail: '',
+    dataLine: '', videoText: '', videoUrl: '', infographicText: '',
+    infographicUrl: '', aimUrl: '', aimMaterials: ''
+  };
+  var errors = [];
+  var detailFromFocusLine = '', detailAfterAction = '';
+  var pendingDataLine = false;
+
+  function textOf(line) {
+    var s = '';
+    for (var i = 0; i < line.runs.length; i++) s += line.runs[i].text;
+    return s;
+  }
+  function charFlags(line) {
+    var flags = [];
+    for (var i = 0; i < line.runs.length; i++) {
+      var r = line.runs[i];
+      for (var c = 0; c < r.text.length; c++) flags.push({ bold: !!r.bold, url: r.url || '' });
+    }
+    return flags;
+  }
+
+  for (var li = 0; li < lines.length; li++) {
+    var line = lines[li];
+    var text = textOf(line);
+    var trimmed = text.trim();
+    if (!trimmed) continue;
+    var flags = charFlags(line);
+
+    // dataLine continuation: the first suitable line after a bare marker line.
+    if (pendingDataLine && !spec.dataLine) {
+      if (text.indexOf('Subject:') < 0 && text.indexOf('Weekly Focus') < 0
+          && text.indexOf('✅') < 0 && text.indexOf('🎯') < 0) {
+        spec.dataLine = _cleanField2627_(trimmed.replace(/^['’\s]+/, ''));
+      }
+      pendingDataLine = false;
+    }
+
+    // Subject (ends at the 🎯 emoji or the <<...>> marker when the doc merges
+    // lines into one paragraph - both merges exist in the live doc)
+    if (!spec.subject) {
+      var sm = text.indexOf('Subject:');
+      if (sm >= 0) {
+        var rest = text.slice(sm + 'Subject:'.length);
+        var cut = rest.indexOf('🎯');
+        if (cut >= 0) rest = rest.slice(0, cut);
+        var cut2 = rest.indexOf('<<');
+        if (cut2 >= 0) rest = rest.slice(0, cut2);
+        spec.subject = _cleanField2627_(rest);
+      }
+    }
+
+    // <<Teacher Data Table>> marker: caption on the same line, or the next line.
+    var mk = text.indexOf('<<Teacher Data Table>>');
+    if (mk >= 0 && !spec.dataLine) {
+      var after = text.slice(mk + '<<Teacher Data Table>>'.length).replace(/^['’\s]+/, '');
+      if (after.trim()) spec.dataLine = _cleanField2627_(after);
+      else pendingDataLine = true;
+    }
+
+    // Weekly Focus: bold title; non-bold remainder on the line = detail candidate.
+    var wf = text.indexOf('Weekly Focus:');
+    if (wf >= 0 && !spec.focusTitle) {
+      var start = wf + 'Weekly Focus:'.length;
+      while (start < text.length && text[start] === ' ') start++;
+      var checkIdx = text.indexOf('✅', start);
+      var boldEnd = start;
+      while (boldEnd < text.length && flags[boldEnd] && flags[boldEnd].bold) boldEnd++;
+      var titleEnd;
+      if (boldEnd > start) titleEnd = (checkIdx >= 0 && checkIdx < boldEnd) ? checkIdx : boldEnd;
+      else titleEnd = (checkIdx >= 0) ? checkIdx : text.length;
+      spec.focusTitle = _cleanField2627_(text.slice(start, titleEnd));
+      var candEnd = (checkIdx >= 0) ? checkIdx : text.length;
+      if (candEnd > titleEnd) {
+        var cand = _cleanField2627_(text.slice(titleEnd, candEnd));
+        if (cand) detailFromFocusLine = cand;
+      }
+    }
+
+    // ✅ action: the bold segment after the check. Adjacent bold ("This week's
+    // moves") is fenced off explicitly since char-level bold can't split it.
+    var ck = text.indexOf('✅');
+    if (ck >= 0 && !spec.action) {
+      var as = ck + 1;
+      while (as < text.length && (text[as] === ' ' || text[as] === '✅')) as++;
+      var ae = as;
+      while (ae < text.length && flags[ae] && flags[ae].bold) ae++;
+      if (ae === as) ae = text.length;  // action not bolded: take the rest of the line
+      var tw = text.indexOf('This week', as);
+      if (tw >= 0 && tw < ae) ae = tw;
+      spec.action = _cleanField2627_(text.slice(as, ae));
+      var rem = _cleanField2627_(text.slice(ae));
+      if (rem && rem.indexOf('This week') !== 0 && rem.indexOf('(Same content') !== 0) {
+        detailAfterAction = rem;
+      }
+    }
+
+    // Run offsets: first link AT/AFTER an anchor position. The doc merges 🎬
+    // and 📊 into one paragraph in several weeks, so "first link on the line"
+    // is wrong; and wk8 carries a ZERO-WIDTH link (empty text run), which a
+    // char scan can never see - hence run-offset based selection.
+    function firstLinkFrom(anchorIdx) {
+      var off = 0, url = '';
+      for (var fr = 0; fr < line.runs.length; fr++) {
+        var r = line.runs[fr];
+        var end = off + r.text.length;
+        var covers = r.text.length ? (end > anchorIdx) : (off >= anchorIdx);
+        if (r.url && covers) { url = r.url; break; }
+        off = end;
+      }
+      if (!url) return null;
+      var txt = '', off2 = 0;
+      for (var fr2 = 0; fr2 < line.runs.length; fr2++) {
+        var r2 = line.runs[fr2];
+        var end2 = off2 + r2.text.length;
+        var covers2 = r2.text.length ? (end2 > anchorIdx) : (off2 >= anchorIdx);
+        if (r2.url === url && covers2) txt += r2.text;
+        off2 = end2;
+      }
+      return { url: url, text: txt };
+    }
+
+    // 🎬 video
+    if (!spec.videoUrl && (text.indexOf('🎬') >= 0 || text.indexOf('Watch:') >= 0)) {
+      var vIdx = text.indexOf('🎬');
+      if (vIdx < 0) vIdx = text.indexOf('Watch:');
+      var vlink = firstLinkFrom(vIdx);
+      if (vlink) {
+        spec.videoUrl = vlink.url;
+        spec.videoText = _cleanField2627_(vlink.text) || 'Watch the 60-second video';
+      }
+    }
+
+    // 📊 infographic: when the link text is empty/whitespace (wk8 pattern:
+    // bold label + zero-width link), use the bold text after "View the".
+    if (!spec.infographicUrl && text.indexOf('📊') >= 0) {
+      var pIdx = text.indexOf('📊');
+      var ilink = firstLinkFrom(pIdx);
+      if (ilink) {
+        spec.infographicUrl = ilink.url;
+        var itext = _cleanField2627_(ilink.text);
+        if (!itext) {
+          var vt = text.indexOf('View the');
+          var from = vt >= 0 ? vt + 'View the'.length : pIdx;
+          var bs = '';
+          for (var c2 = from; c2 < text.length; c2++) {
+            if (flags[c2] && flags[c2].bold) bs += text[c2];
+          }
+          itext = _cleanField2627_(bs);
+        }
+        spec.infographicText = itext || 'Infographic';
+      }
+    }
+
+    // AIM Launch link (optional; weeks 7+ point teachers at the Hub instead)
+    if (!spec.aimUrl) {
+      var aimTxt = '', aimUrl = '';
+      for (var ar = 0; ar < line.runs.length; ar++) {
+        var ra = line.runs[ar];
+        if (ra.url) { aimTxt += ra.text; if (!aimUrl) aimUrl = ra.url; }
+      }
+      if (aimUrl && /AIM Launch/i.test(aimTxt)) spec.aimUrl = aimUrl;
+    }
+
+    // Needed Materials (optional). The doc sometimes merges the following
+    // "- Teacher Hub" bullet into the same paragraph - cut it off.
+    if (!spec.aimMaterials) {
+      var nm = text.indexOf('Needed Materials:');
+      if (nm >= 0) {
+        var mats = text.slice(nm + 'Needed Materials:'.length);
+        var th = mats.indexOf('- Teacher Hub');
+        if (th < 0) th = mats.indexOf('Teacher Hub');
+        if (th >= 0) mats = mats.slice(0, th);
+        spec.aimMaterials = _cleanField2627_(mats).replace(/\s*-\s*$/, '');
+      }
+    }
+  }
+
+  spec.actionDetail = detailAfterAction || detailFromFocusLine || '';
+
+  if (!spec.subject) errors.push('no "Subject:" line');
+  if (!spec.focusTitle) errors.push('no "Weekly Focus:" line');
+  if (!spec.action) errors.push('no ✅ action line');
+  if (!/^https:\/\//.test(spec.videoUrl)) errors.push('no video link on the 🎬 line');
+  if (!/^https:\/\//.test(spec.infographicUrl)) errors.push('no infographic link on the 📊 line');
+  if (spec.aimUrl && !/^https:\/\//.test(spec.aimUrl)) errors.push('AIM link is not https');
+  var joined = spec.subject + spec.focusTitle + spec.action + spec.actionDetail + spec.dataLine;
+  if (joined.indexOf('_____') >= 0) errors.push('unfilled blank (_____) in content');
+  if (joined.indexOf('<<') >= 0) errors.push('unresolved << >> marker in content');
+
+  return { spec: spec, errors: errors };
+}
+
+/** Flatten a doc tab body into the runs model _parseWeekLines_ consumes. */
+function _extractTabLines_(documentTab) {
+  var body = documentTab.getBody();
+  var lines = [];
+  for (var i = 0; i < body.getNumChildren(); i++) {
+    var child = body.getChild(i);
+    var t = child.getType();
+    if (t !== DocumentApp.ElementType.PARAGRAPH && t !== DocumentApp.ElementType.LIST_ITEM) continue;
+    var textEl = child.editAsText();
+    var full = textEl.getText();
+    if (!full) { lines.push({ runs: [] }); continue; }
+    var idx = textEl.getTextAttributeIndices();
+    var runs = [];
+    for (var j = 0; j < idx.length; j++) {
+      var start = idx[j];
+      var end = (j + 1 < idx.length) ? idx[j + 1] : full.length;
+      runs.push({
+        text: full.substring(start, end),
+        bold: textEl.isBold(start) === true,
+        url: textEl.getLinkUrl(start) || ''
+      });
+    }
+    lines.push({ runs: runs });
+  }
+  return lines;
+}
+
+/** Walk the doc's (nested) tabs; return {week: Tab}. UPD_WK N beats Week N. */
+function _collectWeekTabs_(doc) {
+  var found = {};
+  function walk(tabs) {
+    for (var i = 0; i < tabs.length; i++) {
+      var title = String(tabs[i].getTitle() || '').trim();
+      var m = /^(UPD_WK|Week)\s*(\d+)$/i.exec(title);
+      if (m) {
+        var w = Number(m[2]);
+        var isUpd = /^UPD/i.test(m[1]);
+        if (!found[w] || (isUpd && !found[w].upd)) found[w] = { tab: tabs[i], upd: isUpd };
+      }
+      walk(tabs[i].getChildTabs());
+    }
+  }
+  walk(doc.getTabs());
+  return found;
+}
+
+/** Full rewrite of the Template Content tab from a {week: spec} map. */
+function _writeTemplateContentTab_(specsByWeek) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(CONFIG.TEMPLATE_CONTENT_TAB);
+  if (!sheet) sheet = ss.insertSheet(CONFIG.TEMPLATE_CONTENT_TAB);
+  sheet.clear();
+  var now = Utilities.formatDate(new Date(), 'America/New_York', 'yyyy-MM-dd HH:mm');
+  var user = Session.getActiveUser().getEmail();
+  var rows = [TEMPLATE_CONTENT_HEADERS];
+  Object.keys(specsByWeek).map(Number).sort(function (a, b) { return a - b; }).forEach(function (w) {
+    var s = specsByWeek[w];
+    rows.push([
+      w, s.templateName || ('26-27 Week ' + w + ': ' + s.focusTitle), s.subject,
+      s.focusTitle, s.action, s.actionDetail, s.dataLine, s.videoText, s.videoUrl,
+      s.infographicText, s.infographicUrl, s.aimUrl, s.aimMaterials, now, user
+    ]);
+  });
+  sheet.getRange(1, 1, rows.length, TEMPLATE_CONTENT_HEADERS.length).setValues(rows);
+  sheet.setFrozenRows(1);
+}
+
+/**
+ * Menu entry: parse the 26-27 Doc, preview per-week results, and on YES write
+ * the Template Content tab + refresh the dropdown. Skipped weeks keep whatever
+ * they serve today (previous synced row, or the hardcoded fallback).
+ */
+function syncTemplatesFromDoc() {
+  var ui = SpreadsheetApp.getUi();
+  var doc;
+  try {
+    doc = DocumentApp.openById(CONFIG.TEMPLATE_DOC_ID);
+  } catch (e) {
+    ui.alert('Error',
+      'Cannot open the 26_27 Implementation Emails doc. You need at least view access to it.\n\n' + (e.message || e),
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  var tabs = _collectWeekTabs_(doc);
+  var weeks = Object.keys(tabs).map(Number).sort(function (a, b) { return a - b; });
+  if (weeks.length === 0) {
+    ui.alert('Error', 'No week tabs (UPD_WK N / Week N) found in the doc.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var ok = {};
+  var report = [];
+  for (var i = 0; i < weeks.length; i++) {
+    var w = weeks[i];
+    try {
+      var parsed = _parseWeekLines_(_extractTabLines_(tabs[w].tab.asDocumentTab()));
+      if (parsed.errors.length > 0) {
+        report.push('Week ' + w + ': SKIPPED - ' + parsed.errors.join('; '));
+      } else {
+        parsed.spec.templateName = '26-27 Week ' + w + ': ' + parsed.spec.focusTitle;
+        ok[w] = parsed.spec;
+        report.push('Week ' + w + ': OK - "' + parsed.spec.subject + '"');
+      }
+    } catch (e) {
+      report.push('Week ' + w + ': SKIPPED - parse error: ' + (e.message || e));
+    }
+  }
+
+  var okCount = Object.keys(ok).length;
+  var resp = ui.alert('Sync Templates from 26-27 Doc',
+    report.join('\n') + '\n\nApply ' + okCount + ' week(s)? Skipped weeks keep the content they serve today.',
+    ui.ButtonSet.YES_NO);
+  if (resp !== ui.Button.YES) return;
+  if (okCount === 0) {
+    ui.alert('Nothing to apply', 'Every week tab failed validation; the Template Content tab was not changed.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Merge over existing synced rows so a week that fails THIS sync keeps its
+  // previously synced content instead of silently reverting to the hardcoded copy.
+  _syncedSpecs2627Cache = null;
+  var merged = {};
+  var existing = _getSyncedSpecs_();
+  Object.keys(existing).forEach(function (w) { merged[w] = existing[w]; });
+  Object.keys(ok).forEach(function (w) { merged[w] = ok[w]; });
+  _writeTemplateContentTab_(merged);
+  _syncedSpecs2627Cache = null;
+
+  setupTemplateDropdown();  // shows its own "Done" alert listing the new names
+}
