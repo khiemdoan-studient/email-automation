@@ -33,8 +33,34 @@
   var token = h.indexOf('#e=') === 0 ? h.slice(3) : '';
   if (!token) { msg.textContent = 'This link is incomplete. Please open it from your email again.'; return; }
 
+  // v2.22.2: decode the token payload CLIENT-SIDE. The payload (before the '.')
+  // is plain base64url JSON carrying d (destination) + l (link type); only the
+  // signature needs the server. When the tracker is down (e.g. HTTP 403 after a
+  // deployer-grant revocation, 2026-07-24 outage), non-PDF links can still
+  // deliver the reader to the real destination - only the click log is lost.
+  function decodeDest() {
+    try {
+      var raw = decodeURIComponent(token).split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+      while (raw.length % 4) raw += '=';
+      var o = JSON.parse(atob(raw));
+      return { dest: o.d || '', linkType: o.l || 'other' };
+    } catch (err) { return null; }
+  }
+
   function fallback() {
-    // Last resort: direct navigation to the tracker (old behavior).
+    var p = decodeDest();
+    if (p && p.linkType !== 'pdf' && /^https?:\/\//i.test(p.dest)) {
+      window.location.replace(p.dest);   // untracked, but the link WORKS
+      return;
+    }
+    if (p && p.linkType === 'pdf') {
+      // The raw Drive URL usually isn't shared with the teacher (the tracker
+      // serves the bytes server-side), so a Drive bounce would show a
+      // confusing "You need access" page. Say what's actually happening.
+      msg.textContent = 'The report service is temporarily unavailable. Please try this link again in a few minutes.';
+      return;
+    }
+    // Unknown token shape: last resort, old behavior.
     window.location.replace(EXEC + '?e=' + token);
   }
 

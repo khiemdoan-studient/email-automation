@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.22.2] - 2026-07-24
+
+### FIX: /exec tracker 403 killed ALL email links + PDF button; shim now survives tracker outages
+
+After the day's OAuth-grant purge, teachers clicking ANY email link dead-ended: the PDF button landed on a Drive "You need access" page and every hyperlink stopped at the shim. Verified live: `/exec?fmt=json&e=bogus` returned HTTP 403 "Access Denied" (same probe returned `{"kind":"invalid"}` that morning). Root cause: the web app executes as USER_DEPLOYING = khiem.doan@studient.com (the clasp account behind every deployment); revoking THAT account's grant during the linked-apps cleanup de-authorized the deployment for every visitor. Links pointing at `khiemdoan-studient.github.io/...r.html#e=...` is by design (the v2.15-v2.18 click-tracking shim wraps every link); with the tracker down, the shim's redirect lookup and its direct-/exec fallback both 403'd.
+
+- `docs/r.html` hardened: the token payload (base64url JSON before the signature) is now decoded CLIENT-SIDE on tracker failure. Non-PDF links `location.replace` straight to the real destination - the link works, only the click log is lost. PDF links show "The report service is temporarily unavailable" instead of bouncing to the confusing Drive denial (the raw Drive URL isn't shared with teachers; the tracker serves the bytes). Unknown token shapes keep the old direct-/exec last resort. Decode logic verified in node against the exact `signToken` output shape.
+- Ops: deployer grant restored (re-auth as khiem.doan@studient.com) + redeploy same /exec id.
+
 ## [v2.22.1] - 2026-07-24
 
 ### FIX: sync auth failure - explicit oauthScopes pinned
