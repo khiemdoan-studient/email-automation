@@ -47,6 +47,7 @@ text = (
     "When a future week (10-18) has its subject, focus, and both links filled in, it becomes a new email option automatically after the next sync.\n"
     "\n"
     "For IMs: after managers change the Doc, run Email Tools then Templates: Sync from 26-27 Doc. "
+    "The first time you run it, Google shows a one-time authorization window asking to approve the script's Google Docs permission. Approve it, then click the menu item again. "
     "You will see a preview listing each week as OK (with its subject line) or SKIPPED (with the reason). "
     "Choosing Yes applies the OK weeks and refreshes the Template dropdown in one step. "
     "A skipped week keeps sending exactly what it sends today, so a formatting mistake in the Doc can never reach a teacher. "

@@ -6742,8 +6742,18 @@ function syncTemplatesFromDoc() {
   try {
     doc = DocumentApp.openById(CONFIG.TEMPLATE_DOC_ID);
   } catch (e) {
+    // v2.22.1: the common cause is a stale OAuth grant (the script gained the
+    // Google Docs permission in v2.22.0; older grants predate it), NOT doc
+    // sharing - the first IM to hit this OWNED the doc. Explicit oauthScopes
+    // in the manifest now force the re-auth prompt up front, so this catch
+    // should be rare; keep both explanations, re-auth first.
     ui.alert('Error',
-      'Cannot open the 26_27 Implementation Emails doc. You need at least view access to it.\n\n' + (e.message || e),
+      'Cannot open the 26_27 Implementation Emails doc.\n\n'
+      + 'Most likely fix: the script needs you to RE-AUTHORIZE with its new Google Docs permission. '
+      + 'Close this dialog, click the menu item again, and approve the authorization window when it appears. '
+      + 'If no window appears, open a Google Sheets incognito-free tab, reload the spreadsheet, and retry.\n\n'
+      + 'If you have re-authorized and still see this: confirm you have at least view access to the doc.\n\n'
+      + 'Details: ' + (e.message || e),
       ui.ButtonSet.OK);
     return;
   }

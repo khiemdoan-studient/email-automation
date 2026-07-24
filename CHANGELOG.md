@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.22.1] - 2026-07-24
+
+### FIX: sync auth failure - explicit oauthScopes pinned
+
+First live sync attempt failed with "You do not have permission to call DocumentApp.openById. Required permissions: .../auth/documents" - for the IM who OWNS the 26_27 doc. Root cause: an OAuth SCOPE gap, not sharing. Her grant for the script predates v2.22.0's first-ever DocumentApp call; with no explicit `oauthScopes` in the manifest, scope auto-detection did not force a re-auth prompt for her existing grant, and the runtime refused the call. Apps Script enforces the script's granted scopes, not the user's Drive permissions, so owning the doc is irrelevant.
+
+- `appsscript.json` now PINS explicit `oauthScopes`: spreadsheets, drive, `mail.google.com`, documents, userinfo.email (inventory verified by grepping every `*App.`/`Session.` call in Code.js). With explicit scopes the authorization prompt fires up front on the next menu use, listing the Docs permission.
+- `syncTemplatesFromDoc` catch reworded: re-authorize instruction first, view-access second (the old text led with the wrong diagnosis).
+- Deployed @12, same /exec id. Verified post-deploy: remote md5 = local, remote manifest carries the documents scope, and the tracker still serves (`/exec?fmt=json&e=bogus` -> `{"kind":"invalid"}`), so the owner-grant path is unaffected.
+- IM action: click Templates: Sync from 26-27 Doc again, approve the authorization window, re-run. Her Week 10 (Week 1 content copied in) should then parse and auto-appear.
+
 ## [v2.22.0] - 2026-07-24
 
 ### FEAT: manager-editable templates - Sync from the 26-27 Doc
