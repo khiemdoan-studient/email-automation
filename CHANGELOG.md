@@ -17,6 +17,7 @@ Flow: managers edit the Doc → IM clicks **Email Tools → Templates: Sync from
 - **Parser hardened against the real doc** (live-sim run 2026-07-24): subject cut at a same-paragraph `<<Teacher Data Table>>` marker; 🎬/📊 links anchored at their own emoji when both share one paragraph; zero-width (empty-text) links resolved by run offsets with the bold label as link text; materials cut before a merged "- Teacher Hub" bullet; action fenced off an adjacent bold "This week's moves".
 - **Pre-verified against the LIVE doc**: the shipped `_parseWeekLines_` replayed over the real Docs API content parses 9/9 weeks clean; URLs/fields match, surfacing that managers already changed Week 8's video and Week 9's infographic since v2.21.0 (the sync will pick those up - the feature working as intended).
 - Tests: 163 -> 199 (resolver fallback byte-identical to the static builders, synced-spec override, dropdown ordering, registry-vs-spec subject drift guard, 20+ parser fixtures replicating live doc quirks).
+- The 26_27 Doc itself now opens with a READ ME first page (inserted 2026-07-24 via Docs API, page break before the original theme content): manager how-to, the formatting rules the parser needs, what cannot be broken from the doc, how future weeks auto-add, and the sharing requirements (IMs + the service account). Re-verified post-insert: the live sim still parses 9/9 weeks clean (the READ ME lives on the "Weeks 1-4" parent tab, which the week-title regex ignores).
 
 ## [v2.21.1] - 2026-07-22
 
