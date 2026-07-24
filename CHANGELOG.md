@@ -12,6 +12,7 @@ First live sync attempt failed with "You do not have permission to call Document
 - `syncTemplatesFromDoc` catch reworded: re-authorize instruction first, view-access second (the old text led with the wrong diagnosis).
 - Deployed @12, same /exec id. Verified post-deploy: remote md5 = local, remote manifest carries the documents scope, and the tracker still serves (`/exec?fmt=json&e=bogus` -> `{"kind":"invalid"}`), so the owner-grant path is unaffected.
 - IM action: click Templates: Sync from 26-27 Doc again, approve the authorization window, re-run. Her Week 10 (Week 1 content copied in) should then parse and auto-appear.
+- OPS 2026-07-24 (same day, after the owner ALSO hit the scope error even from the editor Run): first sync executed SERVER-SIDE via the service account instead - real parser replayed over the live doc, 10 weeks OK (incl. Week 10 with the copied Week 1 content), Template Content tab written (10 rows) and the Config dropdown set to 28 options via the Sheets API, both verified by readback. Draft generation needs only the Sheets scope IMs already have, so 26-27 drafts work TODAY; the OAuth re-grant (app shows as "Untitled project" in Google's linked-apps list) is only needed for future self-serve syncs.
 
 ## [v2.22.0] - 2026-07-24
 
