@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.24.2] - 2026-07-31
+
+### FIX: blank "Clicks by day" + "Clicks by campus" charts (series silently dropped)
+
+Both charts rendered "Add a series to start visualizing your data". Saved specs (read via API) showed NO `series` at all, while the structurally identical "Clicks by link type" chart kept its series. Proven live by three experiments (updateChartSpec with headerCount 1, with headerCount 0, fresh addChart): the Sheets chart layer silently DROPS a series whose source column is mostly empty/"" at creation - the day/campus columns held 1 value each, while the type chart's column held 9 real numbers (zeros count).
+
+Fix: charts now read always-numeric FEED columns in the hidden helper (AC/AD: fixed 30-day window with per-day COUNTIFS defaulting to 0 - which also upgrades the day chart to show a proper 30-day trend with zero-days; AF/AG: 15 campus slots defaulting to 0). Applied live via SA (all 3 charts verified `series: 1` by spec readback) and mirrored into the Code.js builder so in-sheet rebuilds can't regress.
+
+Note: the dashboard renders inverted colors under the Sheets dark theme (user screenshot); on the standard light theme it shows the intended SPD purple.
+
 ## [v2.24.1] - 2026-07-31
 
 ### FIX/FEAT: SPD-grade dashboard formatting + date bug + campus/never-clicked/recent sections

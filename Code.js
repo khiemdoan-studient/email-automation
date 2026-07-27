@@ -2450,6 +2450,25 @@ function rebuildEngagementDashboard() {
   helper.getRange('L2').setFormula('=IFERROR(SORT(UNIQUE(FILTER(' + SL + '!C2:C,' + SL + '!C2:C<>""))),"")');
   helper.getRange('U1').setValue('All');
   helper.getRange(2, 21, DASH_TYPES.length, 1).setValues(DASH_TYPES.map(function (t) { return [t]; }));
+
+  // Chart FEEDS (v2.24.2): the Sheets chart layer silently DROPS a series whose
+  // source column is mostly empty/"" at creation (proven live 2026-07-31: three
+  // structurally identical addChart requests, only the all-numeric one kept its
+  // series). Feeds guarantee always-numeric series columns: 30 fixed day rows
+  // and 15 campus slots, zeros when empty. Charts point HERE, not at the
+  // dashboard's QUERY spills.
+  if (helper.getMaxColumns() < 33) helper.insertColumnsAfter(helper.getMaxColumns(), 33 - helper.getMaxColumns());
+  helper.getRange('AC1:AD1').setValues([['chart_day', 'chart_clicks']]);
+  var dayFeed = [];
+  for (var df = 0; df < 30; df++) dayFeed.push(['=TODAY()-' + (29 - df), '=COUNTIFS($N$2:$N,AC' + (2 + df) + ')']);
+  helper.getRange('AC2:AD31').setFormulas(dayFeed);
+  helper.getRange('AC2:AC31').setNumberFormat('mmm d');
+  helper.getRange('AF1:AG1').setValues([['chart_campus', 'chart_campus_clicks']]);
+  var campFeed = [];
+  for (var cf = 0; cf < 15; cf++) {
+    campFeed.push(['=IF(K' + (2 + cf) + '="","",K' + (2 + cf) + ')', '=IF(K' + (2 + cf) + '="",0,COUNTIFS($Q$2:$Q,K' + (2 + cf) + '))']);
+  }
+  helper.getRange('AF2:AG16').setFormulas(campFeed);
   helper.hideSheet();
 
   // ---- Dashboard tab. clear() removes contents AND formats (required: the
@@ -2585,15 +2604,17 @@ function rebuildEngagementDashboard() {
     .setPosition(21, 1, 0, 0).setOption('title', 'Clicks by link type')
     .setOption('legend', { position: 'none' }).build();
   sheet.insertChart(typeChart);
+  // Day + campus charts read the always-numeric helper FEEDS (v2.24.2), never
+  // the dashboard's QUERY spills - see the feed comment in the helper section.
   var dayChart = sheet.newChart().asLineChart()
-    .addRange(sheet.getRange('D11:E60'))
-    .setPosition(21, 6, 0, 0).setOption('title', 'Clicks by day').setOption('useFirstRowAsHeaders', true)
-    .build();
+    .addRange(hs.getRange('AC2:AD31'))
+    .setPosition(21, 6, 0, 0).setOption('title', 'Clicks by day (last 30 days)')
+    .setOption('legend', { position: 'none' }).build();
   sheet.insertChart(dayChart);
   var campusChart = sheet.newChart().asColumnChart()
-    .addRange(sheet.getRange('A37:A52')).addRange(sheet.getRange('D37:D52'))
-    .setPosition(21, 11, 0, 0).setOption('title', 'Clicks by campus').setOption('useFirstRowAsHeaders', true)
-    .build();
+    .addRange(hs.getRange('AF2:AG16'))
+    .setPosition(21, 11, 0, 0).setOption('title', 'Clicks by campus')
+    .setOption('legend', { position: 'none' }).build();
   sheet.insertChart(campusChart);
 
   sheet.setFrozenRows(7);
