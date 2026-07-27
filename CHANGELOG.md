@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.24.1] - 2026-07-31
+
+### FIX/FEAT: SPD-grade dashboard formatting + date bug + campus/never-clicked/recent sections
+
+The v2.24.0 dashboard was mechanically live but visually bare (all white) and "Clicks by day" rendered `4623000%`. Root cause of the date bug: the SA build used `values().clear()`, which clears VALUES but NOT FORMATS - the old static dashboard's leftover percent formats bled onto the new date cells and chart axes (46230 IS the correct serial for 2026-07-29). Both builders now do a FULL format reset (`sheet.clear()` in Apps Script; `updateCells fields:*` + unmerge in the SA path) and set explicit number formats (dates "mmm d, yyyy", counts "0", CTR "0.0%").
+
+- **SPD styling** (mirrors parent sheets_builder.py purple theme): #3B1F6E banner + filter band with white bold labels, #5B3A8C section bands, 6 pastel KPI cards (SPD color pairs, 16pt values), #F1EDF9 page wash, #EDE9FE table headers, grey borders, set column widths, frozen rows.
+- **New live sections** (all honor the filters): Campus summary (sends, teachers clicked, clicks, PDF clicks, CTR per campus + column chart), Week x link type pivot, "Never clicked (sent, zero clicks - follow up)" list (helper gains a filtered Send Log view W:AB; `UNIQUE(FILTER(...ISNA(MATCH(...))))`), Recent clicks feed (last 10: time, teacher, campus, type).
+- Applied live via SA and verified by readback: banner bg #3B1F6E, D12 renders "Jul 27, 2026" with a DATE numberFormat, KPI parity vs raw log (1 click), all sections present, "All clicked" fallback correct.
+- Tests: 220 -> 225 (send-view conds, never-clicked formula shape, palette pin).
+
 ## [v2.24.0] - 2026-07-29
 
 ### FEAT: live interactive Click Dashboard - filters, all link types, zero rebuilds
