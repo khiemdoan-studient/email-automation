@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.24.0] - 2026-07-29
+
+### FEAT: live interactive Click Dashboard - filters, all link types, zero rebuilds
+
+Answered: yes, EVERY link click was already logged (Engagement Log carries link_type); the old dashboard just displayed only PDF stats and went stale until manually rebuilt. Re-imagined as a fully LIVE tab.
+
+- **Filters across the top**: Week, Campus, Teacher, Link type dropdowns (sourced from the logs, auto-growing). Every KPI/table/chart honors them.
+- **KPIs**: Sends, Teachers clicked, Total clicks, PDF clicks, Non-PDF clicks, PDF clicks/send.
+- **Sections**: Clicks by link type (+ column chart), Clicks by day (+ line chart), Teachers by clicks, Teacher x link type pivot.
+- **No rebuild, ever**: everything is spreadsheet formulas reading Engagement Log + Send Log through a hidden `Engagement Helper` tab (normalized + filter-aware FILTER view). New clicks appear on arrival; `resetClickData` zeroes it automatically (and no longer clears the tab - that would wipe the formulas). The menu item ("Engagement: Build Click Dashboard (self-updating)") is only for repairing the layout.
+- **Finer link types** (`classifyLink_`): video (canva.link), aim (canva.com), infographic (Drive/Docs), timeback, hub (studient.com), sheet, pdf, other. Legacy rows (canva/resource/portal) are normalized in the helper (canva -> "canva (legacy)", resource -> infographic, portal -> hub) so history stays comparable.
+- Old snapshot-computation dashboard code deleted (incl. the legacy blank-teacher attribution merge; live formulas show blank-teacher rows as "(unknown)").
+- Built LIVE server-side via the service account and verified by readback: KPIs compute, dropdown validations present, Total clicks matches an independent count of the raw log. Tests: 208 -> 220.
+
 ## [v2.23.0] - 2026-07-29
 
 ### FEAT/FIX: click-data reset tool + emoji entities + Studient-branded instant-redirect shim

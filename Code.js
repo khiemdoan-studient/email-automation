@@ -426,7 +426,7 @@ function onOpen() {
     .addItem('View Error Log', 'viewErrorLog')
     .addItem('Clear Error Log', 'clearErrorLog')
     .addSeparator()
-    .addItem('Engagement: Rebuild Click Dashboard', 'rebuildEngagementDashboard')
+    .addItem('Engagement: Build Click Dashboard (self-updating)', 'rebuildEngagementDashboard')
     .addItem('Engagement: Reset Click Data (archive + zero)', 'resetClickData')
     .addItem('Engagement: Set Up Report Links Folder', 'setupReportLinksFolder')
     .addItem('Run Unit Tests', 'runUnitTests')
@@ -1978,11 +1978,16 @@ function _trackingShimUrl() {
  * links picked up by rewriteBodyLinks_.
  */
 function classifyLink_(url) {
+  // v2.24.0: finer buckets so the live dashboard can break clicks down by what
+  // the teacher actually opened. Legacy rows keep their old labels
+  // (canva/resource/portal); the dashboard helper normalizes them.
   var u = String(url || '').toLowerCase();
-  if (/customer-portal|studient\.com/.test(u)) return 'portal';
+  if (/canva\.link/.test(u)) return 'video';          // 60-second video short links
+  if (/canva\.com/.test(u)) return 'aim';             // AIM Launch designs
+  if (/timeback\.com/.test(u)) return 'timeback';     // platform login
   if (/docs\.google\.com\/spreadsheets/.test(u)) return 'sheet';
-  if (/canva\./.test(u)) return 'canva';
-  if (/drive\.google\.com|docs\.google\.com\/document/.test(u)) return 'resource';
+  if (/drive\.google\.com|docs\.google\.com\/document/.test(u)) return 'infographic';
+  if (/customer-portal|studient\.com/.test(u)) return 'hub';
   return 'other';
 }
 
@@ -2346,187 +2351,151 @@ function resetClickData() {
     archived.push(archiveName);
   });
 
-  var dash = ss.getSheetByName(ENGAGEMENT_DASHBOARD_TAB);
-  if (dash) {
-    dash.clear();
-    dash.getRange(1, 1).setValue(
-      'Click data reset on ' + stamp + ' by ' + Session.getActiveUser().getEmail()
-      + '. Stats restart from the next drafts generated; run "Engagement: Rebuild Click Dashboard" after sends resume.');
-  }
+  // v2.24.0: do NOT touch the Engagement Dashboard tab - it is formula-driven
+  // and reads the logs live, so clearing the logs above already zeroes it.
+  // Clearing here would wipe the layout formulas.
 
-  ui.alert('Done', archived.length > 0
+  ui.alert('Done', (archived.length > 0
     ? 'Zeroed. Archived (hidden tabs):\n' + archived.join('\n')
-    : 'Logs were already empty. Dashboard zeroed.', ui.ButtonSet.OK);
+    : 'Logs were already empty.')
+    + '\n\nThe live Click Dashboard now reads zero automatically.', ui.ButtonSet.OK);
+}
+
+// v2.24.0: LIVE click dashboard. rebuildEngagementDashboard now writes a
+// formula-driven LAYOUT once (idempotent); the formulas read Engagement Log +
+// Send Log directly, so every new click appears with no rebuild and
+// resetClickData zeroes everything automatically. Contract: never write static
+// computed values into the dashboard tab - only labels + formulas.
+
+var ENGAGEMENT_HELPER_TAB = 'Engagement Helper';
+// Fixed link-type vocabulary (classifyLink_ v2.24.0 + normalized legacy label).
+var DASH_TYPES = ['pdf', 'video', 'aim', 'infographic', 'timeback', 'hub', 'sheet', 'other', 'canva (legacy)'];
+
+/** Filter conditions for the helper's FILTER() - "All" in a dropdown passes every row. */
+function _dashFilterConds_() {
+  var D = "'" + ENGAGEMENT_DASHBOARD_TAB + "'";
+  return '(' + D + '!$B$4="All")+(C2:C=' + D + '!$B$4),'
+    + '(' + D + '!$D$4="All")+(E2:E=' + D + '!$D$4),'
+    + '(' + D + '!$F$4="All")+(D2:D=' + D + '!$F$4),'
+    + '(' + D + '!$H$4="All")+(F2:F=' + D + '!$H$4)';
+}
+
+/** Sends KPI formula - COUNTIFS over Send Log; "All" -> "<>" (any non-empty). */
+function _dashSendsFormula_() {
+  var S = "'" + SEND_LOG_TAB + "'";
+  return '=COUNTIFS(' + S + '!B:B,IF($B$4="All","<>",$B$4),'
+    + S + '!E:E,IF($D$4="All","<>",$D$4),'
+    + S + '!C:C,IF($F$4="All","<>",$F$4))';
 }
 
 function rebuildEngagementDashboard() {
   var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sendSheet = ss.getSheetByName(SEND_LOG_TAB);
-  if (!sendSheet || sendSheet.getLastRow() < 2) {
-    ui.alert('No sends logged yet',
-      'Generate drafts first — the Send Log is written as drafts are created.',
-      ui.ButtonSet.OK);
-    return;
-  }
-  var send = sendSheet.getDataRange().getValues();  // [ts, week, teacher, email, campus, template]
-  var eng = [];
-  var engSheet = ss.getSheetByName(ENGAGEMENT_LOG_TAB);
-  if (engSheet && engSheet.getLastRow() > 1) eng = engSheet.getDataRange().getValues();
+  var EL = "'" + ENGAGEMENT_LOG_TAB + "'";
+  var SL = "'" + SEND_LOG_TAB + "'";
+  var H = "'" + ENGAGEMENT_HELPER_TAB + "'";
 
-  // v2.20.0: clicks + sends key on email||week||teacher so several teachers
-  // sharing one recipient email (smoke tests: ALL drafts go to the operator) no
-  // longer collapse into one row. Legacy clicks (pre-v2.20.0 tokens carry no
-  // teacher) go into a per-(email, week) pool and are attributed ONLY when that
-  // (email, week) has exactly one send row - never guessed.
-  function _clickRec() { return { any: false, pdf: false, count: 0, first: '' }; }
-  function _addClick(rec, r) {
-    rec.any = true;
-    rec.count++;
-    if (String(r[6] || '') === 'pdf') rec.pdf = true;
-    if (!rec.first || String(r[0]) < rec.first) rec.first = String(r[0]);
-    return rec;
-  }
-  var clicks = {};       // email||week||teacherLower -> rec
-  var legacyClicks = {}; // email||week -> rec (blank-teacher tokens)
-  for (var i = 1; i < eng.length; i++) {
-    var r = eng[i];
-    if ((r[1] || 'click') !== 'click') continue;
-    var emwk = String(r[4] || '').toLowerCase() + '||' + String(r[2] || '');
-    var tch = String(r[3] || '').toLowerCase();
-    if (tch) clicks[emwk + '||' + tch] = _addClick(clicks[emwk + '||' + tch] || _clickRec(), r);
-    else legacyClicks[emwk] = _addClick(legacyClicks[emwk] || _clickRec(), r);
-  }
+  // ---- Hidden helper tab: normalized log view (A:G), filtered view (M:S),
+  // dropdown sources (J/K/L/U). All formulas, zero stored data.
+  var helper = ss.getSheetByName(ENGAGEMENT_HELPER_TAB) || ss.insertSheet(ENGAGEMENT_HELPER_TAB);
+  helper.clear();
+  helper.getRange('A1:G1').setValues([['ts', 'date', 'week', 'teacher', 'campus', 'type_norm', 'event']]);
+  helper.getRange('A2').setFormula('=ARRAYFORMULA(IF(' + EL + '!A2:A="",,' + EL + '!A2:A))');
+  helper.getRange('B2').setFormula('=ARRAYFORMULA(IF(' + EL + '!A2:A="",,DATEVALUE(LEFT(' + EL + '!A2:A,10))))');
+  helper.getRange('C2').setFormula('=ARRAYFORMULA(IF(' + EL + '!A2:A="",,' + EL + '!C2:C))');
+  helper.getRange('D2').setFormula('=ARRAYFORMULA(IF(' + EL + '!A2:A="",,IF(' + EL + '!D2:D="","(unknown)",' + EL + '!D2:D)))');
+  helper.getRange('E2').setFormula('=ARRAYFORMULA(IF(' + EL + '!A2:A="",,' + EL + '!F2:F))');
+  // Normalize legacy labels so old rows group with the new vocabulary.
+  helper.getRange('F2').setFormula('=ARRAYFORMULA(IF(' + EL + '!A2:A="",,'
+    + 'IF(' + EL + '!G2:G="canva","canva (legacy)",'
+    + 'IF(' + EL + '!G2:G="resource","infographic",'
+    + 'IF(' + EL + '!G2:G="portal","hub",' + EL + '!G2:G)))))');
+  helper.getRange('G2').setFormula('=ARRAYFORMULA(IF(' + EL + '!A2:A="",,' + EL + '!B2:B))');
 
-  // De-dupe sends to one row per (email, week, teacher), newest template wins.
-  var sentMap = {}, orderList = [];
-  var sendsPerEmailWeek = {};  // email||week -> count of DISTINCT teacher rows
-  for (var j = 1; j < send.length; j++) {
-    var s = send[j];
-    var wk = String(s[1] || ''), em = String(s[3] || ''), tn = String(s[2] || '');
-    var sk = em.toLowerCase() + '||' + wk + '||' + tn.toLowerCase();
-    if (!sentMap[sk]) {
-      orderList.push(sk);
-      var ewk = em.toLowerCase() + '||' + wk;
-      sendsPerEmailWeek[ewk] = (sendsPerEmailWeek[ewk] || 0) + 1;
-    }
-    sentMap[sk] = { week: wk, teacher: tn, email: em, campus: String(s[4] || '') };
-  }
-  // Merge legacy (blank-teacher) clicks into the row IFF unambiguous.
-  for (var lk in legacyClicks) {
-    if (sendsPerEmailWeek[lk] === 1) {
-      for (var sk2 = 0; sk2 < orderList.length; sk2++) {
-        if (orderList[sk2].indexOf(lk + '||') === 0) {
-          var tgt = clicks[orderList[sk2]] || _clickRec();
-          var leg = legacyClicks[lk];
-          tgt.any = tgt.any || leg.any;
-          tgt.pdf = tgt.pdf || leg.pdf;
-          tgt.count += leg.count;
-          if (!tgt.first || (leg.first && leg.first < tgt.first)) tgt.first = leg.first;
-          clicks[orderList[sk2]] = tgt;
-          break;
-        }
-      }
-    }
-    // ambiguous (2+ teachers share the email that week): dropped from
-    // per-teacher attribution on purpose - never guess.
-  }
-  var order = orderList;
+  helper.getRange('M1:S1').setValues([['f_ts', 'f_date', 'f_week', 'f_teacher', 'f_campus', 'f_type', 'f_event']]);
+  helper.getRange('M2').setFormula('=IFERROR(FILTER(A2:G, A2:A<>"", ' + _dashFilterConds_() + '), "")');
 
-  var perWeek = {};    // week -> {sent, pdfClickers}
-  var perTeacher = {}; // email -> {teacher, campus, weeksSent, pdfClicked, totalClicks}
-  var detail = [];     // per-(teacher, week) rows
-  order.sort(function(a, b) {
-    return (sentMap[b].week + sentMap[b].teacher).localeCompare(sentMap[a].week + sentMap[a].teacher);
-  });
-  for (var k = 0; k < order.length; k++) {
-    var m = sentMap[order[k]];
-    // v2.20.0: order[k] IS the click key (email||week||teacherLower).
-    var c = clicks[order[k]] || _clickRec();
-    detail.push([m.week, m.teacher, m.email, m.campus, 'Y',
-      c.any ? 'Y' : 'N', c.pdf ? 'Y' : 'N', c.count, c.first]);
-    var pw = perWeek[m.week] || { sent: 0, pdf: 0 };
-    pw.sent++;
-    if (c.pdf) pw.pdf++;
-    perWeek[m.week] = pw;
-    // v2.19.0 aggregate; v2.20.0 keyed by (email, teacher) so teachers sharing
-    // one recipient email get their own fidelity rows.
-    var ptKey = m.email.toLowerCase() + '||' + m.teacher.toLowerCase();
-    var pt = perTeacher[ptKey] || { teacher: m.teacher, campus: m.campus, weeksSent: 0, pdfClicked: 0, totalClicks: 0, email: m.email };
-    pt.weeksSent++;
-    if (c.pdf) pt.pdfClicked++;
-    pt.totalClicks += c.count;
-    if (m.teacher) pt.teacher = m.teacher;  // keep a non-blank name if any send row had one
-    perTeacher[ptKey] = pt;
-  }
+  helper.getRange('J1').setValue('All');
+  helper.getRange('J2').setFormula('=IFERROR(SORT(UNIQUE(FILTER(' + SL + '!B2:B,' + SL + '!B2:B<>"")),1,FALSE),"")');
+  helper.getRange('K1').setValue('All');
+  helper.getRange('K2').setFormula('=IFERROR(SORT(UNIQUE(FILTER(' + SL + '!E2:E,' + SL + '!E2:E<>""))),"")');
+  helper.getRange('L1').setValue('All');
+  helper.getRange('L2').setFormula('=IFERROR(SORT(UNIQUE(FILTER(' + SL + '!C2:C,' + SL + '!C2:C<>""))),"")');
+  helper.getRange('U1').setValue('All');
+  helper.getRange(2, 21, DASH_TYPES.length, 1).setValues(DASH_TYPES.map(function (t) { return [t]; }));
+  helper.hideSheet();
 
-  // v2.19.0: SECTION 1 - Teacher Fidelity (% of report PDFs clicked, all weeks).
-  var fidelity = [['TEACHER FIDELITY - % of report PDFs clicked'],
-                  ['Teacher', 'Email', 'Campus', 'Reports sent', 'PDFs clicked', 'Total clicks', 'Fidelity %']];
-  var tKeys = Object.keys(perTeacher);
-  tKeys.sort(function(a, b) {
-    var fa = perTeacher[a].pdfClicked / perTeacher[a].weeksSent;
-    var fb = perTeacher[b].pdfClicked / perTeacher[b].weeksSent;
-    if (fb !== fa) return fb - fa;                                   // fidelity desc
-    return perTeacher[a].teacher.localeCompare(perTeacher[b].teacher); // then name
-  });
-  var fidelityPcts = [];  // parallel array for color banding
-  for (var t = 0; t < tKeys.length; t++) {
-    var pt2 = perTeacher[tKeys[t]];
-    var pct = pt2.weeksSent ? (pt2.pdfClicked / pt2.weeksSent) : 0;
-    fidelityPcts.push(pct);
-    fidelity.push([pt2.teacher, pt2.email, pt2.campus, pt2.weeksSent, pt2.pdfClicked,
-      pt2.totalClicks, Math.round(pct * 1000) / 10 + '%']);
-  }
-
-  // SECTION 2 - per-(teacher, week) detail.
-  var rows = [['Week', 'Teacher', 'Email', 'Campus', 'Sent', 'Clicked any', 'Clicked PDF', '# clicks', 'First click']];
-  for (var d = 0; d < detail.length; d++) rows.push(detail[d]);
-
-  // SECTION 3 - PDF CTR by week.
-  var summary = [['PDF click-through rate by week'], ['Week', 'Teachers sent', 'PDF clickers', 'PDF CTR']];
-  var weeks = Object.keys(perWeek).sort().reverse();
-  for (var w = 0; w < weeks.length; w++) {
-    var pw2 = perWeek[weeks[w]];
-    var ctr = pw2.sent ? (pw2.pdf / pw2.sent) : 0;
-    summary.push([weeks[w], pw2.sent, pw2.pdf, Math.round(ctr * 1000) / 10 + '%']);
-  }
-
-  var sheet = _ensureTab(ENGAGEMENT_DASHBOARD_TAB, fidelity[1]);
+  // ---- Dashboard tab: labels + formulas only.
+  var sheet = ss.getSheetByName(ENGAGEMENT_DASHBOARD_TAB) || ss.insertSheet(ENGAGEMENT_DASHBOARD_TAB);
   sheet.clear();
+  sheet.getCharts().forEach(function (c) { sheet.removeChart(c); });
 
-  // Write Section 1 (fidelity). Row 1 = section title, row 2 = header.
-  sheet.getRange(1, 1, 1, 1).setValue(fidelity[0][0]).setFontWeight('bold');
-  sheet.getRange(2, 1, 1, fidelity[1].length).setValues([fidelity[1]])
+  sheet.getRange('A1').setValue('Click Dashboard').setFontWeight('bold').setFontSize(14);
+  sheet.getRange('A2').setValue('Live - updates itself as clicks arrive. Use the filters below. Zero it via Email Tools > Engagement: Reset Click Data.')
+    .setFontStyle('italic').setFontColor('#666666');
+
+  // Filter row (labels in A/C/E/G, dropdowns in B/D/F/H).
+  var labels = [['Week:', 'All', 'Campus:', 'All', 'Teacher:', 'All', 'Link type:', 'All']];
+  sheet.getRange('A4:H4').setValues(labels);
+  sheet.getRange('A4').setFontWeight('bold'); sheet.getRange('C4').setFontWeight('bold');
+  sheet.getRange('E4').setFontWeight('bold'); sheet.getRange('G4').setFontWeight('bold');
+  var hs = ss.getSheetByName(ENGAGEMENT_HELPER_TAB);
+  function dv(rangeA1) {
+    return SpreadsheetApp.newDataValidation().requireValueInRange(hs.getRange(rangeA1), true).setAllowInvalid(false).build();
+  }
+  sheet.getRange('B4').setDataValidation(dv('J1:J200'));
+  sheet.getRange('D4').setDataValidation(dv('K1:K200'));
+  sheet.getRange('F4').setDataValidation(dv('L1:L500'));
+  sheet.getRange('H4').setDataValidation(dv('U1:U10'));
+  sheet.getRange('A4:H4').setBackground('#f3ecfb');
+
+  // KPI row.
+  sheet.getRange('A6:F6').setValues([['Sends', 'Teachers clicked', 'Total clicks', 'PDF clicks', 'Non-PDF clicks', 'PDF clicks / send']])
     .setFontWeight('bold').setBackground('#f3f3f3');
-  if (tKeys.length) {
-    sheet.getRange(3, 1, tKeys.length, fidelity[1].length)
-      .setValues(fidelity.slice(2));
-    // Color-band the Fidelity % column (col 7): green >= 80%, yellow >= 40%, red below.
-    for (var fb2 = 0; fb2 < fidelityPcts.length; fb2++) {
-      var color = fidelityPcts[fb2] >= 0.8 ? '#d9ead3' : (fidelityPcts[fb2] >= 0.4 ? '#fff2cc' : '#f4cccc');
-      sheet.getRange(3 + fb2, 7).setBackground(color);
-    }
+  sheet.getRange('A7').setFormula(_dashSendsFormula_());
+  sheet.getRange('B7').setFormula('=IFERROR(COUNTA(UNIQUE(FILTER(' + H + '!P2:P,' + H + '!P2:P<>""))),0)');
+  sheet.getRange('C7').setFormula('=COUNTIF(' + H + '!M2:M,"?*")');
+  sheet.getRange('D7').setFormula('=COUNTIF(' + H + '!R2:R,"pdf")');
+  sheet.getRange('E7').setFormula('=C7-D7');
+  sheet.getRange('F7').setFormula('=IF(A7=0,0,D7/A7)').setNumberFormat('0.0%');
+
+  // Clicks by link type (chart source; honors the filters incl. link type).
+  sheet.getRange('A10').setValue('Clicks by link type').setFontWeight('bold');
+  sheet.getRange(11, 1, DASH_TYPES.length, 1).setValues(DASH_TYPES.map(function (t) { return [t]; }));
+  for (var ti = 0; ti < DASH_TYPES.length; ti++) {
+    sheet.getRange(11 + ti, 2).setFormula('=COUNTIF(' + H + '!R:R,A' + (11 + ti) + ')');
   }
 
-  // Write Section 2 (detail) below with a blank spacer row.
-  var detailStart = 2 + tKeys.length + 2;
-  sheet.getRange(detailStart, 1, rows.length, rows[0].length).setValues(rows);
-  sheet.getRange(detailStart, 1, 1, rows[0].length).setFontWeight('bold').setBackground('#f3f3f3');
+  // Clicks by day.
+  sheet.getRange('D10').setValue('Clicks by day').setFontWeight('bold');
+  sheet.getRange('D11').setFormula('=IFERROR(QUERY(' + H + '!M2:S,"select N, count(M) where N is not null group by N order by N label N \'Date\', count(M) \'Clicks\'",0),"No clicks yet")');
 
-  // Write Section 3 (CTR by week) below that.
-  var startRow = detailStart + rows.length + 1;
-  for (var sRow = 0; sRow < summary.length; sRow++) {
-    if (summary[sRow].length) {
-      sheet.getRange(startRow + sRow, 1, 1, summary[sRow].length).setValues([summary[sRow]]);
-    }
-  }
-  sheet.getRange(startRow, 1, 2, 4).setFontWeight('bold');
-  sheet.setFrozenRows(2);
+  // Teachers ranked by clicks.
+  sheet.getRange('G10').setValue('Teachers by clicks').setFontWeight('bold');
+  sheet.getRange('G11').setFormula('=IFERROR(QUERY(' + H + '!M2:S,"select P, Q, count(M) where P is not null group by P, Q order by count(M) desc label P \'Teacher\', Q \'Campus\', count(M) \'Clicks\'",0),"No clicks yet")');
+
+  // Teacher x link type pivot.
+  sheet.getRange('K10').setValue('Teacher x link type').setFontWeight('bold');
+  sheet.getRange('K11').setFormula('=IFERROR(QUERY(' + H + '!M2:S,"select P, count(M) where P is not null group by P pivot R",0),"No clicks yet")');
+
+  // Charts: bar over the by-type table; line over the by-day query output.
+  var typeChart = sheet.newChart().asColumnChart()
+    .addRange(sheet.getRange(11, 1, DASH_TYPES.length, 2))
+    .setPosition(22, 1, 0, 0).setOption('title', 'Clicks by link type')
+    .setOption('legend', { position: 'none' }).build();
+  sheet.insertChart(typeChart);
+  var dayChart = sheet.newChart().asLineChart()
+    .addRange(sheet.getRange('D11:E60'))
+    .setPosition(22, 6, 0, 0).setOption('title', 'Clicks by day').setOption('useFirstRowAsHeaders', true)
+    .build();
+  sheet.insertChart(dayChart);
+
+  sheet.setFrozenRows(7);
   ss.setActiveSheet(sheet);
-  ui.alert('Engagement Dashboard rebuilt',
-    tKeys.length + ' teachers, ' + order.length + ' teacher-week rows across '
-    + weeks.length + ' week(s).', ui.ButtonSet.OK);
+  ui.alert('Click Dashboard built',
+    'The dashboard is now LIVE - it updates itself as clicks arrive and zeroes automatically after a reset. '
+    + 'You only need this menu item again if the layout itself gets damaged.',
+    ui.ButtonSet.OK);
 }
 
 /**
@@ -3617,6 +3586,26 @@ function runUnitTests() {
     wrapEmailHtml(['🎬']).indexOf('&#127916;') !== -1, true);
   // v2.23.0: reset tool registered in the menu source (behavioral run needs the sheet UI)
   _testAssertEq(results, 'resetClickData: function exists', typeof resetClickData, 'function');
+
+  // v2.24.0: live dashboard - classifier buckets + formula assembly
+  _testAssertEq(results, 'classify: canva.link short link -> video', classifyLink_('https://canva.link/odeniz479l85fy3'), 'video');
+  _testAssertEq(results, 'classify: canva.com design -> aim', classifyLink_('https://www.canva.com/design/DAHCV6eulqc/view'), 'aim');
+  _testAssertEq(results, 'classify: timeback login -> timeback', classifyLink_('https://alpha.timeback.com/login'), 'timeback');
+  _testAssertEq(results, 'classify: drive file -> infographic', classifyLink_('https://drive.google.com/file/d/1q88wf/view'), 'infographic');
+  _testAssertEq(results, 'classify: teacher hub -> hub', classifyLink_('https://studient.com/teacher'), 'hub');
+  _testAssertEq(results, 'classify: spreadsheet -> sheet', classifyLink_('https://docs.google.com/spreadsheets/d/1GK'), 'sheet');
+  _testAssertEq(results, 'classify: unknown -> other', classifyLink_('https://example.com/x'), 'other');
+  _testAssertEq(results, 'dash: type vocabulary covers legacy label',
+    DASH_TYPES.length === 9 && DASH_TYPES.indexOf('canva (legacy)') !== -1 && DASH_TYPES.indexOf('pdf') === 0, true);
+  var condStr = _dashFilterConds_();
+  _testAssertEq(results, 'dash: filter conds reference all 4 dropdown cells',
+    ['$B$4', '$D$4', '$F$4', '$H$4'].filter(function (c) { return condStr.indexOf(c) === -1; }).length, 0);
+  _testAssertEq(results, 'dash: filter conds use the All-passes-everything pattern',
+    (condStr.match(/="All"\)\+\(/g) || []).length, 4);
+  var sendsF = _dashSendsFormula_();
+  _testAssertEq(results, 'dash: sends formula uses All->wildcard on 3 Send Log columns',
+    (sendsF.match(/IF\(\$[BDF]\$4="All","<>"/g) || []).length, 3);
+  _testAssertEq(results, 'dash: sends formula targets Send Log', sendsF.indexOf("'Send Log'!B:B") !== -1, true);
 
   // Render
   var pass = 0, fail = 0;
