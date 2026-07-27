@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.23.0] - 2026-07-29
+
+### FEAT/FIX: click-data reset tool + emoji entities + Studient-branded instant-redirect shim
+
+Three fixes out of the first full 26-27 test run.
+
+**1. Engagement: Reset Click Data (archive + zero)** - new menu item. Archives current Engagement Log + Send Log rows into HIDDEN dated tabs (`Archive <tab> <stamp>`, recoverable), clears both logs to header-only, blanks the Engagement Dashboard with a reset stamp. YES_NO confirm. Use after test runs so test clicks never pollute real stats.
+
+**2. Gray-diamond emoji fixed at the choke point.** GmailApp.createDraft mangles NON-BMP (4-byte) characters: 🎯🎬📊📚 arrived as replacement diamonds while BMP emoji (⏰✅) and the `&#128196;` PDF-button entity rendered fine. This is the v1.2.0 lesson re-learned - synced doc content re-introduced literal emoji. Fix: `_entityifyNonBmp_` converts every surrogate pair to a numeric character reference INSIDE `wrapEmailHtml`, covering all templates (hardcoded + synced + future weeks) in one place. Never bypass wrapEmailHtml for email bodies.
+
+**3. Shim UX rebuilt (docs/r.html)** - managers reported every link opening a white "Downloading report..." page that reads as broken. Now:
+- Non-PDF links: destination decoded client-side, click logged via a background `keepalive` fetch, `location.replace` fires IMMEDIATELY - the teacher sees at most a flash of the branded page.
+- PDF: Studient-branded card (embedded logo data URI from studient-map-visualizations templates, purple #3B1F6E/#6B46C1 + teal spinner) with "Loading your report" → auto-download → "Your report is downloading" + button.
+- Errors/tracker-down: branded, honest copy (kept from v2.22.2).
+Token contract + EXEC id unchanged; page stays self-contained + noindex.
+
+Tests: 199 -> 208 (entity conversion cases, rendered-body-has-no-raw-surrogates, choke-point assertion, reset registration). Deployed @14, same /exec id.
+
 ## [v2.22.2] - 2026-07-24
 
 ### FIX: /exec tracker 403 killed ALL email links + PDF button; shim now survives tracker outages

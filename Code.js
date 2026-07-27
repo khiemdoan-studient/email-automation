@@ -427,6 +427,7 @@ function onOpen() {
     .addItem('Clear Error Log', 'clearErrorLog')
     .addSeparator()
     .addItem('Engagement: Rebuild Click Dashboard', 'rebuildEngagementDashboard')
+    .addItem('Engagement: Reset Click Data (archive + zero)', 'resetClickData')
     .addItem('Engagement: Set Up Report Links Folder', 'setupReportLinksFolder')
     .addItem('Run Unit Tests', 'runUnitTests')
     .addSeparator()
@@ -2316,6 +2317,48 @@ function doGet(e) {
  * PDF, and the per-week PDF click-through rate. Formula-driven off Send Log +
  * Engagement Log so it stays live between rebuilds.
  */
+/**
+ * v2.23.0: Reset the click stats to zero, e.g. after a test run. Archives the
+ * current Engagement Log + Send Log rows into HIDDEN dated tabs (recoverable),
+ * clears both logs back to header-only, and blanks the Engagement Dashboard.
+ */
+function resetClickData() {
+  var ui = SpreadsheetApp.getUi();
+  var resp = ui.alert('Reset Click Data',
+    'This archives the current Engagement Log and Send Log into hidden tabs, then zeroes both logs and the Engagement Dashboard.\n\n'
+    + 'Use this after test runs so test clicks do not count. All current click stats will read zero afterward. Continue?',
+    ui.ButtonSet.YES_NO);
+  if (resp !== ui.Button.YES) return;
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var stamp = Utilities.formatDate(new Date(), 'America/New_York', 'yyyy-MM-dd HH:mm');
+  var archived = [];
+  [ENGAGEMENT_LOG_TAB, SEND_LOG_TAB].forEach(function (name) {
+    var sheet = ss.getSheetByName(name);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    var base = 'Archive ' + name + ' ' + stamp;
+    var archiveName = base;
+    var n = 2;
+    while (ss.getSheetByName(archiveName)) { archiveName = base + ' (' + n + ')'; n++; }
+    var copy = sheet.copyTo(ss).setName(archiveName);
+    copy.hideSheet();
+    sheet.deleteRows(2, sheet.getLastRow() - 1);
+    archived.push(archiveName);
+  });
+
+  var dash = ss.getSheetByName(ENGAGEMENT_DASHBOARD_TAB);
+  if (dash) {
+    dash.clear();
+    dash.getRange(1, 1).setValue(
+      'Click data reset on ' + stamp + ' by ' + Session.getActiveUser().getEmail()
+      + '. Stats restart from the next drafts generated; run "Engagement: Rebuild Click Dashboard" after sends resume.');
+  }
+
+  ui.alert('Done', archived.length > 0
+    ? 'Zeroed. Archived (hidden tabs):\n' + archived.join('\n')
+    : 'Logs were already empty. Dashboard zeroed.', ui.ButtonSet.OK);
+}
+
 function rebuildEngagementDashboard() {
   var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -3558,6 +3601,23 @@ function runUnitTests() {
   _testAssertEq(results, '26-27 parser: unfilled blank rejected',
     pBlank.errors.join(',').indexOf('unfilled blank') !== -1, true);
 
+  // v2.23.0: non-BMP emoji ship as numeric entities (GmailApp mangles raw 4-byte chars)
+  _testAssertEq(results, 'entityify: target emoji -> &#127919;', _entityifyNonBmp_('🎯'), '&#127919;');
+  _testAssertEq(results, 'entityify: books emoji -> &#128218;', _entityifyNonBmp_('📚 Resources'), '&#128218; Resources');
+  _testAssertEq(results, 'entityify: BMP chars untouched', _entityifyNonBmp_('⏰ ✅ plain - text'), '⏰ ✅ plain - text');
+  _testAssertEq(results, 'entityify: existing entities untouched (idempotent)',
+    _entityifyNonBmp_('&#128196; View'), '&#128196; View');
+  _testAssertEq(results, 'entityify: mixed string converts only pairs',
+    _entityifyNonBmp_('a🎬b'), 'a&#127916;b');
+  var entBody = resolveTemplate_('26-27 Week 3: Persistence').buildBody(t2627, []);
+  _testAssertEq(results, 'entityify: rendered body has target entity', entBody.indexOf('&#127919;') !== -1, true);
+  _testAssertEq(results, 'entityify: rendered body has ZERO raw surrogate pairs',
+    /[\uD800-\uDFFF]/.test(entBody), false);
+  _testAssertEq(results, 'entityify: wrapEmailHtml is the choke point',
+    wrapEmailHtml(['🎬']).indexOf('&#127916;') !== -1, true);
+  // v2.23.0: reset tool registered in the menu source (behavioral run needs the sheet UI)
+  _testAssertEq(results, 'resetClickData: function exists', typeof resetClickData, 'function');
+
   // Render
   var pass = 0, fail = 0;
   var lines = [];
@@ -4042,10 +4102,24 @@ function buildWeeklyChallenge(challengeText, reflectionText) {
 /**
  * Wraps content sections into the standard email container.
  */
+/**
+ * v2.23.0: GmailApp.createDraft mangles NON-BMP (4-byte) characters - 🎯🎬📊📚
+ * arrive as replacement diamonds while BMP emoji (⏰✅) and numeric entities
+ * (the &#128196; PDF button) render fine. Convert every surrogate pair to a
+ * numeric character reference. Runs inside wrapEmailHtml so ALL template
+ * bodies - hardcoded and synced-from-doc alike - are covered; never bypass it.
+ */
+function _entityifyNonBmp_(html) {
+  return String(html || '').replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, function (pair) {
+    return '&#' + pair.codePointAt(0) + ';';
+  });
+}
+
 function wrapEmailHtml(sections) {
-  return '<meta charset="utf-8"><div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.6;color:#333;">'
+  return _entityifyNonBmp_(
+    '<meta charset="utf-8"><div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.6;color:#333;">'
     + sections.join('')
-    + '</div>';
+    + '</div>');
 }
 
 
