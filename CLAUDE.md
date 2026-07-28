@@ -70,6 +70,18 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
 **Apps Script Project ID:** `1IbokxMbI7i3FrGGFEQfVtnYHB7ir8vRMcpX9Fs7xDTG3Vlrtuy65ubaP`
 **Root Drive Folder ID:** `1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR` (stored in `CONFIG.ROOT_FOLDER_ID`)
 
+> **PENDING CHANGE - this folder is scheduled to move into a Shared Drive** (dashboard repo v3.81.0,
+> 2026-07-28). It is currently a My Drive folder owned by mark.katigbak@alpha.school, which is why the
+> dashboard pipeline's fidelity uploader cannot use its service account (service accounts have no storage
+> quota in My Drive). Moving it into the *Studient Reports* Shared Drive keeps the folder **ID and every
+> link identical**, so `getFolderById(CONFIG.ROOT_FOLDER_ID)` - the primary lookup in `getRootFolder()` -
+> keeps working. **The risk is the fallbacks:** `findFolderByName` / `DriveApp.getFilesByName` /
+> `DriveApp.searchFiles` (used by `findTeacherPdfBySearch` and `_adminPdfFilename_` lookup) are
+> corpus-scoped, and their Shared Drive behavior has NOT been verified here. After the move, run
+> **Email Tools > Debug: Drive Access** and **Debug: Validate All PDFs** before the next email cycle. If
+> discovery breaks, switch those lookups to the Advanced Drive Service with `supportsAllDrives: true` and
+> `includeItemsFromAllDrives: true`.
+
 ### Sheet Tabs
 
 1. **Config** (A1:B4)

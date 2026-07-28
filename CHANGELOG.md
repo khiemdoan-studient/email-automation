@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-07-28 - Heads-up: the root PDF folder is moving into a Shared Drive
+
+No code change here. Recording a cross-repo dependency raised by the dashboard repo's v3.81.0 work:
+`CONFIG.ROOT_FOLDER_ID` (`1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR`, "Bruna and Mark's Schools - Weekly Report")
+is a My Drive folder owned by mark.katigbak@alpha.school. The dashboard's midweek fidelity uploader cannot
+write there with a service account (`403 "Service Accounts do not have storage quota"`, verified
+2026-07-28), so the folder is slated to move into the *Studient Reports* Shared Drive.
+
+The folder ID and all existing links are preserved by the move, so `getFolderById` keeps resolving. The
+open risk is the name/search fallbacks (`findFolderByName`, `DriveApp.getFilesByName`,
+`DriveApp.searchFiles` behind `findTeacherPdfBySearch` and the admin-PDF lookup), which are corpus-scoped
+and unverified against Shared Drives. **After the move, run Email Tools > Debug: Drive Access and
+Debug: Validate All PDFs before the next cycle**; if discovery breaks, move those lookups to the Advanced
+Drive Service with `supportsAllDrives` / `includeItemsFromAllDrives`. See CLAUDE.md for the full note.
+
+## [v2.26.2] - 2026-08-04
+
+### Cross-pipeline reconciliation: culprit identified, fixed at source, and a probe so the consumer verifies
+
+v2.26.1 repaired the corrupted tabs and blocked runs on the broken shape, but left the cause outside this repo unidentified. Cloned and audited the sibling `timeback-data-pipeline`. Culprit: `email_export_timeback.py`.
+
+Its module docstring claimed *"This writer is APPEND (not overwrite) to preserve Studient's existing rows"*, while `_append_rows()` called `_clear_tab()` first, with a comment justifying it as mirroring "the clear-then-write pattern used by Studient email_winners.py". The fatal difference: Studient clears a tab it OWNS and rewrites it complete with a header; Timeback cleared a tab it SHARES and appended only its own rows, with no header and `teacher_name = ""` (Vita/ScienceSIS have no OneRoster teacher assignments). Every Timeback run therefore destroyed Studient's dataset. Two separate service accounts write this spreadsheet on interleaved schedules, so it recurs on its own.
+
+**Fixed at source** (timeback-data-pipeline v0.30.0, pushed): `_append_rows` deleted in favour of `_merge_own_rows` (preserves foreign rows, always rewrites the header, replaces only its own rows, ownership derived from the payload's campuses rather than `schools_config.SCHOOLS` which also lists the Studient schools); plus `_unusable_by_consumer`, which skips the write entirely while every row lacks a teacher name. 6 regression tests added there.
+
+**Added here** (`scripts/check_email_data.py`): `_probe_shared_tabs_not_clobbered`, wired into the strict gate. Writer-agnostic by design, because this spreadsheet has two independent writers and the consumer should verify rather than trust. It asserts a header row plus a populated teacher column across All Teacher Metrics, Student Winners, Student Year Highlights and Year Teacher Totals. Verified both directions: passes on live data (1232/1232, 324/339, 125/125, 63/63 rows named) and fires on the exact incident shape.
+
 ## [v2.26.1] - 2026-08-04
 
 ### FIX: repaired a corrupted metrics tab + stop reporting corruption as "no data"

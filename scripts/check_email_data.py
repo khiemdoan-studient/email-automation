@@ -396,6 +396,15 @@ def main(week: str, strict: bool = False):
     if not map_scores_ok:
         print("  -> Run `python email_only.py` from parent repo to populate.")
 
+    # v2.26.1: the shared email tabs have TWO independent writers (Studient
+    # email_winners.py and Timeback email_export_timeback.py). Verify the
+    # consumer-critical structure survived the last write from either.
+    print()
+    print("=" * 70)
+    print("SHARED TAB INTEGRITY (v2.26.1 - cross-pipeline clobber guard)")
+    print("=" * 70)
+    shared_tabs_ok = _probe_shared_tabs_not_clobbered(sheets)
+
     if strict and (
         likely_typo
         or upstream_gap
@@ -406,6 +415,7 @@ def main(week: str, strict: bool = False):
         or not no_dupe_teachers_ok
         or not school_coverage_ok
         or not map_scores_ok
+        or not shared_tabs_ok
     ):
         sys.exit(1)
 
@@ -708,6 +718,73 @@ def _probe_map_scores_tab_populated(sheets):
         return False
     print(f"  ✓ Spring 2026 MAP Scores: {n_rows} score rows, schema OK")
     return True
+
+
+def _probe_shared_tabs_not_clobbered(sheets):
+    """v2.26.1: assert the shared email tabs still have a header row AND a
+    populated teacher-name column.
+
+    INCIDENT (2026-08-04): the Timeback pipeline's email_export_timeback.py
+    cleared these tabs and appended its own rows with NO header and an empty
+    teacher_name (Vita/ScienceSIS have no OneRoster teacher assignments).
+    "All Teacher Metrics" was found with 300 rows, no header, and a blank
+    Teacher column; "Student Winners" was destroyed the same way. Apps Script
+    keys every one of these tabs by lowercased teacher_name, so all lookups
+    returned nothing and teacher emails plus admin summaries rendered blank
+    for all 9 public schools, while every log still looked clean.
+
+    Writer-agnostic on purpose: it catches the damage no matter which pipeline
+    causes it. The Timeback side is guarded as of its v0.11.1, but this
+    spreadsheet has two independent writers, so the consumer verifies rather
+    than trusts.
+    """
+    checks = [
+        ("All Teacher Metrics", "week_start", 1, "A1:L"),
+        ("Student Winners", "campus_name", 1, "A1:G"),
+        ("Student Year Highlights", "campus_name", 1, "A1:H"),
+        ("Year Teacher Totals", "campus_name", 1, "A1:H"),
+    ]
+    all_ok = True
+    for tab, first_header, teacher_idx, rng in checks:
+        try:
+            res = (
+                sheets.spreadsheets()
+                .values()
+                .get(spreadsheetId=SPREADSHEET_ID, range=f"'{tab}'!{rng}")
+                .execute()
+            )
+        except Exception as e:
+            print(f"  X {tab}: not readable ({e})")
+            all_ok = False
+            continue
+        values = res.get("values", [])
+        if not values:
+            print(f"  X {tab}: EMPTY")
+            all_ok = False
+            continue
+        header_ok = str(values[0][0]).strip().lower() == first_header
+        rows = values[1:] if header_ok else values
+        named = sum(
+            1 for r in rows if len(r) > teacher_idx and str(r[teacher_idx]).strip()
+        )
+        if not header_ok:
+            got = values[0][0] if values[0] else ""
+            print(
+                f"  X {tab}: HEADER ROW MISSING (row 1 starts with '{got}', "
+                f"expected '{first_header}')"
+            )
+            all_ok = False
+        if rows and named == 0:
+            print(
+                f"  X {tab}: {len(rows)} rows but ZERO teacher names. The tab was "
+                f"clobbered by another writer; every email lookup returns nothing."
+            )
+            all_ok = False
+        elif header_ok and named:
+            print(f"  OK {tab}: header present, {named}/{len(rows)} rows carry a teacher name")
+    if not all_ok:
+        print("  Repair: run `python email_only.py` in the pipeline repo.")
+    return all_ok
 
 
 def _probe_highlights_within_actuals(sheets, bq_client):
