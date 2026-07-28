@@ -156,7 +156,13 @@ var TEMPLATES = {
     subjectBuilder: _midweekSubject_,
     buildBody: generateMidweekBody,
     pdfPrefix: 'Midweek ',
-    pdfCtaLabel: 'View your midweek snapshot (PDF)'
+    pdfCtaLabel: 'View your midweek snapshot (PDF)',
+    // v2.25.2: users pick the NORMAL weekly range from the dropdown; the
+    // Thu-Wed midweek window ((Mon-4d) to (Mon+2d), matching the pipeline's
+    // last-7-days-ending-Wednesday files) is derived automatically. No metrics
+    // partition: the email has no table, the PDF is the payload.
+    deriveDateRange: _midweekWindow_,
+    skipMetricsPartition: true
   },
   'Week 0: Data': {
     subject: 'Data Delivery: Try to Contain Your Excitement -- MAP Scores Are In!',
@@ -1062,26 +1068,17 @@ function deleteExistingDraft(teacherEmail, subject) {
 // MAIN GENERATION FLOW
 // ============================================
 function generateDraftsForCurrentUser() {
-  // v2.25.0: preview mode - validates, counts, then shows the HTML confirm
-  // dialog (with the days-in-week dropdown). The dialog calls
-  // confirmDraftGeneration(days), which re-runs this same flow in execute mode.
-  return _generateDraftsFlow_({ mode: 'preview' });
-}
-
-/** Called from the confirm dialog's Generate button (google.script.run). */
-function confirmDraftGeneration(days) {
-  return _generateDraftsFlow_({ mode: 'execute', days: days });
-}
-
-function _generateDraftsFlow_(opts) {
-  var isExecute = opts && opts.mode === 'execute';
+  // v2.25.2: fully SYNCHRONOUS flow (native prompts + alert). The v2.25.0 HTML
+  // dialog's google.script.run callback bound to the wrong account for
+  // multi-signed-in users ("Authorization is required" - the same /u/N routing
+  // that broke direct /exec links). Plain Ui prompts run inside this very
+  // execution and are immune.
   var ui = SpreadsheetApp.getUi();
 
   // Re-entrancy guard: prevent duplicate Gmail drafts if the menu item fires twice
   // (double-click, accidental re-run while a previous run is still going).
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(0)) {
-    if (isExecute) return 'Another generation is already running. Wait for it to finish, then try again.';
     ui.alert('Already Running',
       'Email generation is already in progress. Please wait for the current run to finish before starting another.',
       ui.ButtonSet.OK);
@@ -1089,7 +1086,6 @@ function _generateDraftsFlow_(opts) {
   }
 
   try {
-  if (isExecute) _setDaysInWeek_(opts.days);
   // v2.5.1: reset run_id cache so Error Log entries from this invocation are
   // grouped under a fresh run_id. Apps Script V8 isolates can persist module
   // globals across consecutive runs in the same warm process, which would
@@ -1210,26 +1206,41 @@ function _generateDraftsFlow_(opts) {
     teachersWithData = partitioned.withData;
     teachersSkipped = partitioned.skipped;
   }
-
-  // v2.25.0: PREVIEW mode ends here - show the HTML confirm dialog (facts +
-  // days-in-week dropdown) and return. Its Generate button re-enters this flow
-  // via confirmDraftGeneration(days) in execute mode.
-  if (!isExecute) {
-    var facts = [
-      ['Date Range', dateRange],
-      ['Template', templateName],
-      ['Teachers in roster', String(teachers.length)],
-      ['Drafts to generate', String(teachersWithData.length)]
-    ];
-    if (teachersSkipped.length > 0) facts.push(['Skipped (no metrics this week)', String(teachersSkipped.length)]);
-    facts.push(['Metrics data', metricsExist ? 'Available' : 'NOT FOUND']);
-    var warning = (!metricsExist && !isFinalEmail && !isMapScores)
-      ? 'No metrics data found for week ' + weekStart + '. Emails will be generated WITHOUT metrics tables.'
-      : '';
-    _showConfirmDialog_('Confirm Generation', 'Ready to generate email drafts.', facts, warning,
-      'confirmDraftGeneration', 'Generate drafts');
-    return;
+  // v2.25.2: link-only templates (Midweek Snapshot) carry no metrics table, so
+  // a missing metrics row must NOT skip the teacher - the PDF is the payload.
+  if (resolvedTemplate.skipMetricsPartition) {
+    teachersWithData = teachers;
+    teachersSkipped = [];
   }
+
+  // v2.25.2: days-in-week prompt (blank = 5). Runs synchronously in THIS
+  // execution - no dialog callback, no account-routing failure mode.
+  var daysResp = ui.prompt('Days in this school week',
+    'How many school days are in this week? (1-7)\n\nLeave blank for a normal 5-day week.\n'
+    + 'Color thresholds in the emails scale to the week length.',
+    ui.ButtonSet.OK_CANCEL);
+  if (daysResp.getSelectedButton() !== ui.Button.OK) return;
+  var daysText = daysResp.getResponseText().trim();
+  _setDaysInWeek_(daysText === '' ? 5 : daysText);
+
+  // Confirmation alert (facts + chosen days).
+  var dialogMsg = 'Ready to generate email drafts.\n\n'
+    + 'Date Range: ' + dateRange + '\n'
+    + 'Template: ' + templateName + '\n'
+    + 'Days in week: ' + _daysInWeek + (_daysInWeek !== 5 ? ' (color thresholds scaled)' : '') + '\n'
+    + 'Teachers in roster: ' + teachers.length + '\n'
+    + 'Drafts to generate: ' + teachersWithData.length + '\n';
+  if (teachersSkipped.length > 0) {
+    dialogMsg += 'Skipped (no metrics this week): ' + teachersSkipped.length + '\n';
+  }
+  dialogMsg += 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n';
+  if (!metricsExist && !isFinalEmail && !isMapScores && !resolvedTemplate.skipMetricsPartition) {
+    dialogMsg += '\nWARNING: No metrics data found for week ' + weekStart + '.\n'
+      + 'Emails will be generated WITHOUT metrics tables.\n';
+  }
+  dialogMsg += '\nProceed?';
+  var confirm = ui.alert('Confirm Generation', dialogMsg, ui.ButtonSet.YES_NO);
+  if (confirm !== ui.Button.YES) return;
 
   var successCount = 0, errorCount = 0;
   var errors = [];
@@ -1275,59 +1286,12 @@ function _generateDraftsFlow_(opts) {
     console.log('Full skipped list:\n' + skipNames.join('\n'));
   }
   msg += ' | Check your Gmail Drafts!';
-  return msg;  // v2.25.0: execute mode returns the summary to the confirm dialog.
+  ui.alert('Complete', msg, ui.ButtonSet.OK);
   } finally {
     _daysInWeek = 5;  // per-run only - never leak a short week into the next run
     // Always release the lock, even if an unexpected exception bubbled up.
     lock.releaseLock();
   }
-}
-
-/**
- * v2.25.0: shared styled confirm dialog with a days-in-week dropdown.
- * `serverFn` is the google.script.run function name called with the chosen
- * days (number). The dialog shows the returned summary string when done.
- */
-function _showConfirmDialog_(title, intro, facts, warning, serverFn, buttonLabel) {
-  var rows = facts.map(function (f) {
-    return '<tr><td style="padding:4px 12px 4px 0;color:#666;">' + f[0] + ':</td>'
-      + '<td style="padding:4px 0;font-weight:bold;">' + f[1] + '</td></tr>';
-  }).join('');
-  var warnHtml = warning
-    ? '<div style="background:#fff3cd;border:1px solid #ffe699;border-radius:6px;padding:8px 10px;margin:10px 0;font-size:12px;">WARNING: ' + warning + '</div>'
-    : '';
-  var html = '<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;padding:4px 6px;">'
-    + '<p style="margin:0 0 8px 0;">' + intro + '</p>'
-    + '<table style="border-collapse:collapse;">' + rows + '</table>'
-    + warnHtml
-    + '<p style="margin:12px 0 4px 0;"><strong>Days in this school week:</strong> '
-    + '<select id="days" style="font-size:13px;padding:2px;">'
-    + [1, 2, 3, 4, 5, 6, 7].map(function (d) {
-        return '<option value="' + d + '"' + (d === 5 ? ' selected' : '') + '>' + d + ' day' + (d === 1 ? '' : 's') + '</option>';
-      }).join('')
-    + '</select><br><span style="color:#888;font-size:11px;">Color thresholds scale to the week length (default 5).</span></p>'
-    + '<div id="result" style="display:none;background:#f1edf9;border-radius:6px;padding:10px;margin:10px 0;font-size:12px;white-space:pre-wrap;"></div>'
-    + '<div style="margin-top:14px;">'
-    + '<button id="go" style="background:#6B46C1;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-weight:bold;cursor:pointer;">' + buttonLabel + '</button> '
-    + '<button id="cancel" style="background:#eee;border:1px solid #ccc;border-radius:6px;padding:8px 14px;cursor:pointer;">Cancel</button>'
-    + '</div></div>'
-    + '<script>'
-    + 'var go=document.getElementById("go"),cancel=document.getElementById("cancel"),res=document.getElementById("result");'
-    + 'cancel.onclick=function(){google.script.host.close();};'
-    + 'go.onclick=function(){'
-    + '  go.disabled=true;cancel.disabled=true;go.textContent="Working...";'
-    + '  var days=Number(document.getElementById("days").value);'
-    + '  google.script.run.withSuccessHandler(function(msg){'
-    + '    res.style.display="block";res.textContent=msg||"Done.";'
-    + '    go.style.display="none";cancel.disabled=false;cancel.textContent="Close";'
-    + '  }).withFailureHandler(function(err){'
-    + '    res.style.display="block";res.textContent="Error: "+(err&&err.message?err.message:err);'
-    + '    go.disabled=false;cancel.disabled=false;go.textContent="' + buttonLabel + '";'
-    + '  }).' + serverFn + '(days);'
-    + '};'
-    + '<\/script>';
-  var out = HtmlService.createHtmlOutput(html).setWidth(430).setHeight(360 + (warning ? 60 : 0));
-  SpreadsheetApp.getUi().showModalDialog(out, title);
 }
 
 // ============================================
@@ -3930,9 +3894,20 @@ function runUnitTests() {
   _testAssertEq(results, 'admin: fail-soft body notes the missing PDF',
     adminBody.indexOf('was not found') !== -1 && adminBody.indexOf('3.3') !== -1, true);
   _testAssertEq(results, 'admin: range label helper', _rangeLabel_('2026-04-13_to_2026-04-19'), '4/13-4/19');
-  _testAssertEq(results, 'admin: dialog + confirm functions exist',
-    typeof generateAdminEmails === 'function' && typeof confirmAdminEmails === 'function'
-    && typeof confirmDraftGeneration === 'function' && typeof _showConfirmDialog_ === 'function', true);
+  _testAssertEq(results, 'admin: menu + executor functions exist',
+    typeof generateAdminEmails === 'function' && typeof confirmAdminEmails === 'function', true);
+
+  // v2.25.2: midweek window derivation + partition bypass
+  _testAssertEq(results, 'midweek: weekly range derives the Thu-Wed window (matches live file)',
+    _midweekWindow_('2026-03-09_to_2026-03-15'), '2026-03-05_to_2026-03-11');
+  _testAssertEq(results, 'midweek: derivation crosses month boundaries',
+    _midweekWindow_('2026-04-01_to_2026-04-07'), '2026-03-28_to_2026-04-03');
+  _testAssertEq(results, 'midweek: template derives + skips metrics partition',
+    TEMPLATES['Midweek Snapshot'].deriveDateRange === _midweekWindow_
+    && TEMPLATES['Midweek Snapshot'].skipMetricsPartition === true, true);
+  _testAssertEq(results, 'midweek: derived candidate equals the real Drive filename end-to-end',
+    buildPdfCandidateFilenames({ name: 'Toni Case' }, _midweekWindow_('2026-03-09_to_2026-03-15'), 'Midweek ')[0],
+    'Midweek Toni Case - 2026-03-05 - 2026-03-11.pdf');
 
   var nvr = _dashNeverClickedFormula_();
   _testAssertEq(results, 'dash v2.24.1: never-clicked = send teachers MATCH-excluded vs click teachers',
@@ -3973,6 +3948,11 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
   var needsPdf = template.requiresPdf !== false;
   // v2.25.0: Midweek Snapshot looks for "Midweek {Teacher} - {range}.pdf" in
   // the same teacher folders; subject can embed the date range.
+  // v2.25.2: templates can derive their own effective range from the selected
+  // weekly range (Midweek Snapshot: Thu-Wed window). Reassigning the param
+  // routes the derived range through the PDF lookup, subject, tracking meta,
+  // and Send Log consistently.
+  if (template.deriveDateRange) dateRange = template.deriveDateRange(dateRange);
   var pdfPrefix = template.pdfPrefix || '';
   var draftSubject = template.subjectBuilder ? template.subjectBuilder(dateRange) : template.subject;
 
@@ -7237,6 +7217,27 @@ function _midweekSubject_(dateRange) {
   return 'Studient: Your Midweek Snapshot (' + _rangeLabel_(dateRange) + ')';
 }
 
+/**
+ * Derive the Thu-Wed midweek window from a normal Monday-start weekly range:
+ * (Mon - 4 days) to (Mon + 2 days). Matches generate_fidelity_reports.py's
+ * last-7-days-ending-Wednesday files, e.g. weekly 2026-03-09_to_2026-03-15 ->
+ * midweek 2026-03-05_to_2026-03-11 (the live "Midweek Toni Case" filename).
+ * UTC date math - no timezone drift.
+ */
+function _midweekWindow_(dateRange) {
+  var start = String(dateRange || '').split('_to_')[0];
+  var p = start.split('-');
+  if (p.length !== 3) return dateRange;
+  var mon = Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  function iso(ms) {
+    var d = new Date(ms);
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate());
+  }
+  var DAY = 24 * 60 * 60 * 1000;
+  return iso(mon - 4 * DAY) + '_to_' + iso(mon + 2 * DAY);
+}
+
 /** Midweek body: greeting + one line. The tracked PDF button is injected by
  * createDraftForTeacher (pdfCtaLabel on the template). Deliberately no table,
  * legend, or trend - this is a link-delivery email. */
@@ -7316,8 +7317,10 @@ function _buildAdminEmailBody_(school, abbrev, dateRange, stats, trackedPdfUrl, 
   return wrapEmailHtml(sections);
 }
 
-/** Menu entry: dialog with school checkboxes + date range + days-in-week. */
+/** Menu entry (v2.25.2): fully SYNCHRONOUS prompts - no HTML dialog, so no
+ * google.script.run account-routing failures for multi-signed-in users. */
 function generateAdminEmails() {
+  var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
   var seen = {};
@@ -7329,48 +7332,43 @@ function generateAdminEmails() {
     schools.push(displayName);
   }
   schools.sort();
-  var dateRange = getConfigValue('Date Range') || '';
+  if (schools.length === 0) return ui.alert('Error', 'No schools found in School-IM Mapping.', ui.ButtonSet.OK);
 
-  var boxes = schools.map(function (s, i) {
-    return '<label style="display:block;margin:2px 0;"><input type="checkbox" class="sch" value="' + s.replace(/"/g, '&quot;') + '"> ' + s + '</label>';
-  }).join('');
-  var html = '<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;padding:4px 6px;">'
-    + '<p style="margin:0 0 6px 0;">Drafts go to <strong>your own Gmail</strong>, one per selected school.</p>'
-    + '<p style="margin:8px 0 4px 0;"><strong>Schools:</strong> <a href="#" id="selall" style="font-size:11px;">select all</a></p>'
-    + '<div style="max-height:150px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;padding:6px;">' + boxes + '</div>'
-    + '<p style="margin:10px 0 4px 0;"><strong>Date range:</strong><br>'
-    + '<input id="range" value="' + dateRange.replace(/"/g, '&quot;') + '" style="width:95%;font-size:13px;padding:3px;" placeholder="2026-04-13_to_2026-04-19"></p>'
-    + '<p style="margin:10px 0 4px 0;"><strong>Days in this school week:</strong> '
-    + '<select id="days" style="font-size:13px;padding:2px;">'
-    + [1, 2, 3, 4, 5, 6, 7].map(function (d) { return '<option value="' + d + '"' + (d === 5 ? ' selected' : '') + '>' + d + '</option>'; }).join('')
-    + '</select></p>'
-    + '<div id="result" style="display:none;background:#f1edf9;border-radius:6px;padding:10px;margin:10px 0;font-size:12px;white-space:pre-wrap;"></div>'
-    + '<div style="margin-top:12px;">'
-    + '<button id="go" style="background:#6B46C1;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-weight:bold;cursor:pointer;">Generate admin drafts</button> '
-    + '<button id="cancel" style="background:#eee;border:1px solid #ccc;border-radius:6px;padding:8px 14px;cursor:pointer;">Cancel</button>'
-    + '</div></div>'
-    + '<script>'
-    + 'document.getElementById("selall").onclick=function(e){e.preventDefault();document.querySelectorAll(".sch").forEach(function(c){c.checked=true;});};'
-    + 'var go=document.getElementById("go"),cancel=document.getElementById("cancel"),res=document.getElementById("result");'
-    + 'cancel.onclick=function(){google.script.host.close();};'
-    + 'go.onclick=function(){'
-    + '  var schools=[].slice.call(document.querySelectorAll(".sch:checked")).map(function(c){return c.value;});'
-    + '  if(schools.length===0){res.style.display="block";res.textContent="Pick at least one school.";return;}'
-    + '  go.disabled=true;cancel.disabled=true;go.textContent="Working...";'
-    + '  google.script.run.withSuccessHandler(function(msg){'
-    + '    res.style.display="block";res.textContent=msg||"Done.";'
-    + '    go.style.display="none";cancel.disabled=false;cancel.textContent="Close";'
-    + '  }).withFailureHandler(function(err){'
-    + '    res.style.display="block";res.textContent="Error: "+(err&&err.message?err.message:err);'
-    + '    go.disabled=false;cancel.disabled=false;go.textContent="Generate admin drafts";'
-    + '  }).confirmAdminEmails({schools:schools,dateRange:document.getElementById("range").value,days:Number(document.getElementById("days").value)});'
-    + '};'
-    + '<\/script>';
-  var out = HtmlService.createHtmlOutput(html).setWidth(430).setHeight(470);
-  SpreadsheetApp.getUi().showModalDialog(out, 'Generate Admin Emails');
+  var listing = schools.map(function (s, i) { return (i + 1) + '. ' + s; }).join('\n');
+  var pick = ui.prompt('Generate Admin Emails (1 of 3)',
+    'Which schools? Enter numbers separated by commas (e.g. 1,3), or ALL:\n\n' + listing,
+    ui.ButtonSet.OK_CANCEL);
+  if (pick.getSelectedButton() !== ui.Button.OK) return;
+  var txt = pick.getResponseText().trim();
+  var chosen = [];
+  if (/^all$/i.test(txt)) {
+    chosen = schools.slice();
+  } else {
+    txt.split(',').forEach(function (tok) {
+      var n = Number(tok.trim());
+      if (n >= 1 && n <= schools.length && chosen.indexOf(schools[n - 1]) === -1) chosen.push(schools[n - 1]);
+    });
+  }
+  if (chosen.length === 0) return ui.alert('Error', 'No valid school numbers entered.', ui.ButtonSet.OK);
+
+  var cfgRange = getConfigValue('Date Range') || '';
+  var rangeResp = ui.prompt('Generate Admin Emails (2 of 3)',
+    'Weekly date range (YYYY-MM-DD_to_YYYY-MM-DD).\n\nLeave blank to use the Config value: ' + (cfgRange || '(none set)'),
+    ui.ButtonSet.OK_CANCEL);
+  if (rangeResp.getSelectedButton() !== ui.Button.OK) return;
+  var dateRange = rangeResp.getResponseText().trim() || cfgRange;
+
+  var daysResp = ui.prompt('Generate Admin Emails (3 of 3)',
+    'How many school days are in this week? (1-7)\n\nLeave blank for a normal 5-day week.',
+    ui.ButtonSet.OK_CANCEL);
+  if (daysResp.getSelectedButton() !== ui.Button.OK) return;
+  var daysText = daysResp.getResponseText().trim();
+
+  var summary = confirmAdminEmails({ schools: chosen, dateRange: dateRange, days: daysText === '' ? 5 : daysText });
+  ui.alert('Admin Emails', summary, ui.ButtonSet.OK);
 }
 
-/** Executes the admin-email run (called from the dialog). Returns a summary. */
+/** Executes the admin-email run. Returns a summary string. */
 function confirmAdminEmails(payload) {
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(0)) return 'Another generation is already running. Wait for it to finish, then try again.';

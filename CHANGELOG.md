@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.25.2] - 2026-08-04
+
+### FIX: dialogs replaced with synchronous prompts (multi-account) + midweek range derived automatically
+
+Field test of v2.25.0/1 surfaced two blockers:
+
+**1. "Error: Authorization is required to perform that action"** on the confirm dialog's Generate button. The dialog OPENED (scope fix worked) but its google.script.run callback binds to the browser's DEFAULT Google account for multi-signed-in users - the same /u/N account-routing that killed direct /exec links in v2.18.0. HTML-dialog server callbacks are now BANNED in this project (gotcha added). Both flows rebuilt as fully SYNCHRONOUS native prompts that run inside the menu-click execution: Generate My Email Drafts asks days (blank = 5) then shows the classic confirm alert with days included; Generate Admin Emails is a 3-prompt sequence (numbered school list w/ ALL, date range defaulting to Config, days). Dead dialog code deleted.
+
+**2. Midweek range not in the Date Range dropdown.** It never needs to be: the Thu-Wed midweek window is now DERIVED from the normal weekly dropdown range ((Mon-4d) to (Mon+2d), matching generate_fidelity_reports.py's last-7-days-ending-Wednesday files; weekly 2026-03-09_to_2026-03-15 -> midweek 2026-03-05_to_2026-03-11, byte-equal to the live Toni Case file, asserted end-to-end in tests). Users just pick the normal week. Also: `skipMetricsPartition` on the Midweek template - it was skipping all teachers "no metrics", but a link-only email needs no metrics row; every roster teacher now drafts.
+
+Tests: 248 -> 252. Deployed @19, same /exec id.
+
 ## [v2.25.1] - 2026-08-03
 
 ### FIX: dialogs blocked by missing script.container.ui scope
