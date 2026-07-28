@@ -147,6 +147,17 @@ var TEMPLATES = {
     subject: 'Studient: Stop hoping for confidence. Start building it.',
     buildBody: generate2627Week9Body
   },
+  // v2.25.0: Midweek Snapshot. Short email whose only payload is the tracked
+  // link to the midweek PDF ("Midweek {Teacher} - {range}.pdf", written by the
+  // parent pipeline into the SAME teacher folders as the weekly PDFs). Set the
+  // Config Date Range to the midweek window (e.g. 2026-03-05_to_2026-03-11).
+  'Midweek Snapshot': {
+    subject: 'Studient: Your Midweek Snapshot',
+    subjectBuilder: _midweekSubject_,
+    buildBody: generateMidweekBody,
+    pdfPrefix: 'Midweek ',
+    pdfCtaLabel: 'View your midweek snapshot (PDF)'
+  },
   'Week 0: Data': {
     subject: 'Data Delivery: Try to Contain Your Excitement -- MAP Scores Are In!',
     buildBody: generateWeek0Body
@@ -285,6 +296,43 @@ var TEMPLATES = {
 var TEMPLATE_NAMES = Object.keys(TEMPLATES);
 
 // ============================================
+// v2.25.0 — DAYS-IN-WEEK SCALING
+// ============================================
+// The color thresholds in CONFIG.THRESHOLDS assume a 5-day school week. Short
+// weeks (holidays) scale them linearly: a 4-day week greens at 4/5 of the
+// values. PER-RUN only: each generation dialog picks the value (default 5);
+// nothing persists. Reset to 5 in the finally block of every run entry point.
+var _daysInWeek = 5;
+
+function _setDaysInWeek_(d) {
+  var n = Number(d);
+  if (!isFinite(n)) n = 5;
+  _daysInWeek = Math.max(1, Math.min(7, Math.round(n)));
+  return _daysInWeek;
+}
+
+/** Thresholds scaled by the current days-in-week (pure given _daysInWeek). */
+function _scaledThresholds_() {
+  var f = _daysInWeek / 5;
+  return {
+    daysGreen: CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN * f,
+    daysYellow: CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW * f,
+    minsGreen: CONFIG.THRESHOLDS.AVG_MINS_GREEN * f,
+    minsYellow: CONFIG.THRESHOLDS.AVG_MINS_YELLOW * f
+  };
+}
+
+/** Shared cell-color logic for the metrics tables (single source; the old
+ * inline copies drifted). Returns {days: cssColor, mins: cssColor}. */
+function _metricCellColors_(activeDays, avgMins) {
+  var t = _scaledThresholds_();
+  return {
+    days: activeDays >= t.daysGreen ? '#d9ead3' : (activeDays >= t.daysYellow ? '#fff2cc' : '#f4cccc'),
+    mins: avgMins >= t.minsGreen ? '#d9ead3' : (avgMins >= t.minsYellow ? '#fff2cc' : '#f4cccc')
+  };
+}
+
+// ============================================
 // v2.22.0 — MANAGER-EDITABLE 26-27 TEMPLATES (resolver layer)
 // ============================================
 // The 26-27 weekly templates resolve their content through _getSpec2627_:
@@ -412,6 +460,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Email Tools')
     .addItem('Generate My Email Drafts', 'generateDraftsForCurrentUser')
+    .addItem('Generate Admin Emails', 'generateAdminEmails')
     .addItem('Retry Last Run\'s Failed Teachers', 'retryLastRunFailed')
     .addSeparator()
     .addItem('Test Mode: Generate Smoke Test (drafts to me)', 'generateSmokeTest')
@@ -1013,12 +1062,26 @@ function deleteExistingDraft(teacherEmail, subject) {
 // MAIN GENERATION FLOW
 // ============================================
 function generateDraftsForCurrentUser() {
+  // v2.25.0: preview mode - validates, counts, then shows the HTML confirm
+  // dialog (with the days-in-week dropdown). The dialog calls
+  // confirmDraftGeneration(days), which re-runs this same flow in execute mode.
+  return _generateDraftsFlow_({ mode: 'preview' });
+}
+
+/** Called from the confirm dialog's Generate button (google.script.run). */
+function confirmDraftGeneration(days) {
+  return _generateDraftsFlow_({ mode: 'execute', days: days });
+}
+
+function _generateDraftsFlow_(opts) {
+  var isExecute = opts && opts.mode === 'execute';
   var ui = SpreadsheetApp.getUi();
 
   // Re-entrancy guard: prevent duplicate Gmail drafts if the menu item fires twice
   // (double-click, accidental re-run while a previous run is still going).
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(0)) {
+    if (isExecute) return 'Another generation is already running. Wait for it to finish, then try again.';
     ui.alert('Already Running',
       'Email generation is already in progress. Please wait for the current run to finish before starting another.',
       ui.ButtonSet.OK);
@@ -1026,6 +1089,7 @@ function generateDraftsForCurrentUser() {
   }
 
   try {
+  if (isExecute) _setDaysInWeek_(opts.days);
   // v2.5.1: reset run_id cache so Error Log entries from this invocation are
   // grouped under a fresh run_id. Apps Script V8 isolates can persist module
   // globals across consecutive runs in the same warm process, which would
@@ -1147,27 +1211,25 @@ function generateDraftsForCurrentUser() {
     teachersSkipped = partitioned.skipped;
   }
 
-  // Show confirmation dialog
-  var dialogMsg = 'Ready to generate email drafts.\n\n'
-    + 'Date Range: ' + dateRange + '\n'
-    + 'Template: ' + templateName + '\n'
-    + 'Teachers in roster: ' + teachers.length + '\n'
-    + 'Drafts to generate: ' + teachersWithData.length + '\n';
-
-  if (teachersSkipped.length > 0) {
-    dialogMsg += 'Skipped (no metrics this week): ' + teachersSkipped.length + '\n';
+  // v2.25.0: PREVIEW mode ends here - show the HTML confirm dialog (facts +
+  // days-in-week dropdown) and return. Its Generate button re-enters this flow
+  // via confirmDraftGeneration(days) in execute mode.
+  if (!isExecute) {
+    var facts = [
+      ['Date Range', dateRange],
+      ['Template', templateName],
+      ['Teachers in roster', String(teachers.length)],
+      ['Drafts to generate', String(teachersWithData.length)]
+    ];
+    if (teachersSkipped.length > 0) facts.push(['Skipped (no metrics this week)', String(teachersSkipped.length)]);
+    facts.push(['Metrics data', metricsExist ? 'Available' : 'NOT FOUND']);
+    var warning = (!metricsExist && !isFinalEmail && !isMapScores)
+      ? 'No metrics data found for week ' + weekStart + '. Emails will be generated WITHOUT metrics tables.'
+      : '';
+    _showConfirmDialog_('Confirm Generation', 'Ready to generate email drafts.', facts, warning,
+      'confirmDraftGeneration', 'Generate drafts');
+    return;
   }
-
-  dialogMsg += 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n';
-
-  if (!metricsExist && !isFinalEmail && !isMapScores) {
-    dialogMsg += '\nWARNING: No metrics data found for week ' + weekStart + '.\n'
-      + 'Emails will be generated WITHOUT metrics tables.\n';
-  }
-
-  dialogMsg += '\nProceed?';
-  var confirm = ui.alert('Confirm Generation', dialogMsg, ui.ButtonSet.YES_NO);
-  if (confirm !== ui.Button.YES) return;
 
   var successCount = 0, errorCount = 0;
   var errors = [];
@@ -1213,11 +1275,59 @@ function generateDraftsForCurrentUser() {
     console.log('Full skipped list:\n' + skipNames.join('\n'));
   }
   msg += ' | Check your Gmail Drafts!';
-  ui.alert('Complete', msg, ui.ButtonSet.OK);
+  return msg;  // v2.25.0: execute mode returns the summary to the confirm dialog.
   } finally {
+    _daysInWeek = 5;  // per-run only - never leak a short week into the next run
     // Always release the lock, even if an unexpected exception bubbled up.
     lock.releaseLock();
   }
+}
+
+/**
+ * v2.25.0: shared styled confirm dialog with a days-in-week dropdown.
+ * `serverFn` is the google.script.run function name called with the chosen
+ * days (number). The dialog shows the returned summary string when done.
+ */
+function _showConfirmDialog_(title, intro, facts, warning, serverFn, buttonLabel) {
+  var rows = facts.map(function (f) {
+    return '<tr><td style="padding:4px 12px 4px 0;color:#666;">' + f[0] + ':</td>'
+      + '<td style="padding:4px 0;font-weight:bold;">' + f[1] + '</td></tr>';
+  }).join('');
+  var warnHtml = warning
+    ? '<div style="background:#fff3cd;border:1px solid #ffe699;border-radius:6px;padding:8px 10px;margin:10px 0;font-size:12px;">WARNING: ' + warning + '</div>'
+    : '';
+  var html = '<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;padding:4px 6px;">'
+    + '<p style="margin:0 0 8px 0;">' + intro + '</p>'
+    + '<table style="border-collapse:collapse;">' + rows + '</table>'
+    + warnHtml
+    + '<p style="margin:12px 0 4px 0;"><strong>Days in this school week:</strong> '
+    + '<select id="days" style="font-size:13px;padding:2px;">'
+    + [1, 2, 3, 4, 5, 6, 7].map(function (d) {
+        return '<option value="' + d + '"' + (d === 5 ? ' selected' : '') + '>' + d + ' day' + (d === 1 ? '' : 's') + '</option>';
+      }).join('')
+    + '</select><br><span style="color:#888;font-size:11px;">Color thresholds scale to the week length (default 5).</span></p>'
+    + '<div id="result" style="display:none;background:#f1edf9;border-radius:6px;padding:10px;margin:10px 0;font-size:12px;white-space:pre-wrap;"></div>'
+    + '<div style="margin-top:14px;">'
+    + '<button id="go" style="background:#6B46C1;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-weight:bold;cursor:pointer;">' + buttonLabel + '</button> '
+    + '<button id="cancel" style="background:#eee;border:1px solid #ccc;border-radius:6px;padding:8px 14px;cursor:pointer;">Cancel</button>'
+    + '</div></div>'
+    + '<script>'
+    + 'var go=document.getElementById("go"),cancel=document.getElementById("cancel"),res=document.getElementById("result");'
+    + 'cancel.onclick=function(){google.script.host.close();};'
+    + 'go.onclick=function(){'
+    + '  go.disabled=true;cancel.disabled=true;go.textContent="Working...";'
+    + '  var days=Number(document.getElementById("days").value);'
+    + '  google.script.run.withSuccessHandler(function(msg){'
+    + '    res.style.display="block";res.textContent=msg||"Done.";'
+    + '    go.style.display="none";cancel.disabled=false;cancel.textContent="Close";'
+    + '  }).withFailureHandler(function(err){'
+    + '    res.style.display="block";res.textContent="Error: "+(err&&err.message?err.message:err);'
+    + '    go.disabled=false;cancel.disabled=false;go.textContent="' + buttonLabel + '";'
+    + '  }).' + serverFn + '(days);'
+    + '};'
+    + '<\/script>';
+  var out = HtmlService.createHtmlOutput(html).setWidth(430).setHeight(360 + (warning ? 60 : 0));
+  SpreadsheetApp.getUi().showModalDialog(out, title);
 }
 
 // ============================================
@@ -2009,11 +2119,12 @@ function rewriteBodyLinks_(html, meta) {
 }
 
 /** A prominent "View your weekly report" CTA button linking to a tracked URL. */
-function buildPdfCtaHtml_(trackedUrl) {
+function buildPdfCtaHtml_(trackedUrl, label) {
+  // v2.25.0: label is template-aware (Midweek Snapshot / Admin Report buttons).
   return '<div style="margin:16px 0;">'
     + '<a href="' + trackedUrl + '" style="display:inline-block;background-color:#1a73e8;'
     + 'color:#ffffff;padding:12px 24px;border-radius:6px;text-decoration:none;'
-    + 'font-weight:bold;font-size:14px;">&#128196; View your weekly report (PDF)</a>'
+    + 'font-weight:bold;font-size:14px;">&#128196; ' + (label || 'View your weekly report (PDF)') + '</a>'
     + '</div>';
 }
 
@@ -2734,14 +2845,18 @@ function clearErrorLog() {
  * @param {string} dateRange  Config Date Range, e.g. "2026-04-20_to_2026-04-26"
  * @return {string[]} unique candidate exact filenames
  */
-function buildPdfCandidateFilenames(teacher, dateRange) {
+function buildPdfCandidateFilenames(teacher, dateRange, pdfPrefix) {
+  // v2.25.0: optional prefix supports the Midweek Snapshot template, whose
+  // PDFs live in the SAME teacher folders named "Midweek {Teacher} - {range}.pdf"
+  // (parent scripts/generate_fidelity_reports.py naming).
+  var prefix = pdfPrefix || '';
   var pdfPattern = dateRangeToPdfPattern(dateRange); // "2026-04-20 - 2026-04-26"
   var raw = [];
-  if (teacher.name) raw.push(teacher.name + ' - ' + pdfPattern + '.pdf');
+  if (teacher.name) raw.push(prefix + teacher.name + ' - ' + pdfPattern + '.pdf');
   if (teacher.firstName && teacher.lastName) {
-    raw.push(teacher.firstName + ' ' + teacher.lastName + ' - ' + pdfPattern + '.pdf');
+    raw.push(prefix + teacher.firstName + ' ' + teacher.lastName + ' - ' + pdfPattern + '.pdf');
   }
-  if (teacher.folderName) raw.push(teacher.folderName + ' - ' + pdfPattern + '.pdf');
+  if (teacher.folderName) raw.push(prefix + teacher.folderName + ' - ' + pdfPattern + '.pdf');
   // Dedupe (preserve order)
   var seen = {};
   var out = [];
@@ -2840,9 +2955,9 @@ function _verifyFileInSchool(file, schoolFolderCache, teacher) {
  * This is the same mechanism that makes `getFoldersByName` work for
  * shared-with-me users in v2.4.2's school-folder cache.
  */
-function findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache) {
+function findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache, pdfPrefix) {
   if (!teacher || !dateRange) return null;
-  var candidates = buildPdfCandidateFilenames(teacher, dateRange);
+  var candidates = buildPdfCandidateFilenames(teacher, dateRange, pdfPrefix);
   for (var c = 0; c < candidates.length; c++) {
     var fname = candidates[c];
     var pdfMatches = [];
@@ -2906,7 +3021,7 @@ function findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache) {
  * exact name. Returns the File or null. If iteration fails for permission
  * reasons (shared-with-me parent), log + return null instead of throwing.
  */
-function findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache) {
+function findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache, pdfPrefix) {
   var schoolFolderName = (schoolFolderMap && schoolFolderMap[teacher.campus]) || '';
 
   // School folder lookup with cache + stale check.
@@ -2959,7 +3074,14 @@ function findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderM
       try {
         var file = files.next();
         var fileName = file.getName();
-        if (fileName.indexOf(pdfPattern) !== -1 && fileName.toUpperCase().indexOf('.PDF') !== -1) {
+        // v2.25.0: Midweek PDFs share the teacher folder AND the date pattern
+        // with the weekly PDFs, so the contains-match must discriminate:
+        // midweek templates require the "Midweek " prefix; weekly templates
+        // must REJECT it (else a weekly draft could link the midweek file).
+        var prefixOk = pdfPrefix
+          ? fileName.indexOf(pdfPrefix) === 0
+          : fileName.indexOf('Midweek ') !== 0;
+        if (prefixOk && fileName.indexOf(pdfPattern) !== -1 && fileName.toUpperCase().indexOf('.PDF') !== -1) {
           return file;
         }
       } catch (e) {
@@ -3742,6 +3864,76 @@ function runUnitTests() {
     sendConds.indexOf('$H$4'), -1);
   _testAssertEq(results, 'dash v2.24.1: send-view conds use All-passes pattern x3',
     (sendConds.match(/="All"\)\+\(/g) || []).length, 3);
+  // v2.25.0: days-in-week scaling
+  _setDaysInWeek_(5);
+  var t5 = _scaledThresholds_();
+  _testAssertEq(results, 'days: 5-day week = base thresholds', t5.daysGreen, CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN);
+  _setDaysInWeek_(4);
+  var t4 = _scaledThresholds_();
+  _testAssertEq(results, 'days: 4-day week scales x0.8',
+    Math.abs(t4.daysGreen - CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN * 0.8) < 1e-9
+    && Math.abs(t4.minsGreen - CONFIG.THRESHOLDS.AVG_MINS_GREEN * 0.8) < 1e-9, true);
+  _testAssertEq(results, 'days: legend goes dynamic + names the short week',
+    buildColorLegend().indexOf('(4-day week)') !== -1 && buildColorLegend().indexOf('3.2+') !== -1, true);
+  _testAssertEq(results, 'days: trend copy names the short week',
+    buildTrendAlert([{ activeDays: 1 }]).indexOf('over this 4-day week') !== -1, true);
+  _testAssertEq(results, 'days: cell colors green at scaled threshold',
+    _metricCellColors_(3.2, 80).days, '#d9ead3');
+  _testAssertEq(results, 'days: cell colors red below scaled yellow',
+    _metricCellColors_(2.0, 50).days, '#f4cccc');
+  _setDaysInWeek_(9);
+  _testAssertEq(results, 'days: clamp to 7', _daysInWeek, 7);
+  _setDaysInWeek_('abc');
+  _testAssertEq(results, 'days: non-numeric -> 5', _daysInWeek, 5);
+  _setDaysInWeek_(3);
+  _testAssertEq(results, 'days: 3-day week scales x0.6',
+    Math.abs(_scaledThresholds_().minsYellow - CONFIG.THRESHOLDS.AVG_MINS_YELLOW * 0.6) < 1e-9, true);
+  _setDaysInWeek_(5);  // reset so later assertions see defaults
+  _testAssertEq(results, 'days: default legend restored after reset',
+    buildColorLegend().indexOf('(') === -1 || buildColorLegend().indexOf('4-day') === -1, true);
+
+  // v2.25.0: Midweek Snapshot
+  _testAssertEq(results, 'midweek: registered + in dropdown',
+    !!TEMPLATES['Midweek Snapshot'] && getTemplateNames_().indexOf('Midweek Snapshot') !== -1, true);
+  _testAssertEq(results, 'midweek: subject embeds M/D range',
+    _midweekSubject_('2026-03-05_to_2026-03-11'), 'Studient: Your Midweek Snapshot (3/5-3/11)');
+  _testAssertEq(results, 'midweek: pdfPrefix + CTA label set',
+    TEMPLATES['Midweek Snapshot'].pdfPrefix === 'Midweek ' && TEMPLATES['Midweek Snapshot'].pdfCtaLabel.indexOf('midweek') !== -1, true);
+  var mwBody = generateMidweekBody({ name: 'Toni Case', firstName: 'Toni' }, [], []);
+  _testAssertEq(results, 'midweek: body is short - no table/legend/markers',
+    mwBody.indexOf('<table') === -1 && mwBody.indexOf('Green') === -1 && mwBody.indexOf('<<') === -1, true);
+  // Candidate filename must EQUAL the live Drive file captured in plan mode.
+  var mwCands = buildPdfCandidateFilenames({ name: 'Toni Case' }, '2026-03-05_to_2026-03-11', 'Midweek ');
+  _testAssertEq(results, 'midweek: candidate equals the real Drive filename',
+    mwCands[0], 'Midweek Toni Case - 2026-03-05 - 2026-03-11.pdf');
+  _testAssertEq(results, 'midweek: no-prefix candidates unchanged (weekly path)',
+    buildPdfCandidateFilenames({ name: 'Toni Case' }, '2026-03-05_to_2026-03-11')[0],
+    'Toni Case - 2026-03-05 - 2026-03-11.pdf');
+
+  // v2.25.0: admin emails
+  _testAssertEq(results, 'admin: filename matches pipeline pattern',
+    _adminPdfFilename_('JHES - Hardeeville Elementary School', '2026-04-13_to_2026-04-19'),
+    'JHES Admin Report 4-13.pdf');
+  _testAssertEq(results, 'admin: filename strips leading zeros',
+    _adminPdfFilename_('AFMS - X', '2026-05-04_to_2026-05-10'), 'AFMS Admin Report 5-4.pdf');
+  var wavg = _weightedCampusAverages_([
+    [{ numStudents: 10, activeDays: 4, avgMins: 100 }],
+    [{ numStudents: 5, activeDays: 2, avgMins: 40 }]
+  ]);
+  _testAssertEq(results, 'admin: student-weighted averages',
+    wavg.avgActiveDays.toFixed(2) + '|' + wavg.avgMins.toFixed(1) + '|' + wavg.students + '|' + wavg.teachersWithData,
+    '3.33|80.0|15|2');
+  _testAssertEq(results, 'admin: empty metrics -> zeros not NaN',
+    _weightedCampusAverages_([]).avgMins, 0);
+  var adminBody = _buildAdminEmailBody_('JHES - Hardeeville Elementary School', 'JHES', '2026-04-13_to_2026-04-19',
+    { teachersWithData: 2, students: 15, avgActiveDays: 3.33, avgMins: 80 }, '', 'JHES Admin Report 4-13.pdf');
+  _testAssertEq(results, 'admin: fail-soft body notes the missing PDF',
+    adminBody.indexOf('was not found') !== -1 && adminBody.indexOf('3.3') !== -1, true);
+  _testAssertEq(results, 'admin: range label helper', _rangeLabel_('2026-04-13_to_2026-04-19'), '4/13-4/19');
+  _testAssertEq(results, 'admin: dialog + confirm functions exist',
+    typeof generateAdminEmails === 'function' && typeof confirmAdminEmails === 'function'
+    && typeof confirmDraftGeneration === 'function' && typeof _showConfirmDialog_ === 'function', true);
+
   var nvr = _dashNeverClickedFormula_();
   _testAssertEq(results, 'dash v2.24.1: never-clicked = send teachers MATCH-excluded vs click teachers',
     nvr.indexOf('ISNA(MATCH(') !== -1 && nvr.indexOf('!Y2:Y') !== -1 && nvr.indexOf('!P2:P') !== -1, true);
@@ -3779,6 +3971,10 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
   // so skip the PDF lookup entirely. Default true preserves Week 0-8 / Wrap
   // Up / 4/20 / 4/27 / SC Final Email behavior.
   var needsPdf = template.requiresPdf !== false;
+  // v2.25.0: Midweek Snapshot looks for "Midweek {Teacher} - {range}.pdf" in
+  // the same teacher folders; subject can embed the date range.
+  var pdfPrefix = template.pdfPrefix || '';
+  var draftSubject = template.subjectBuilder ? template.subjectBuilder(dateRange) : template.subject;
 
   // v2.5.0 PIVOT: PDF lookup now tries Drive's search API FIRST (works for
   // shared-with-me users; bypasses parent-folder permission gap entirely).
@@ -3789,7 +3985,7 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
     try {
       // v2.5.1: pass schoolFolderCache so collision-detection can verify parent
       // chain when 2+ search hits exist (cross-school name collision defense).
-      summaryPdf = findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache);
+      summaryPdf = findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache, pdfPrefix);
     } catch (e) {
       logError('WARN', 'createDraftForTeacher', teacher,
         'search-API path threw: ' + (e.message || e), e.stack || '');
@@ -3800,7 +3996,7 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
     // unexpected name format). Failures here log + return null instead of crashing.
     if (!summaryPdf) {
       try {
-        summaryPdf = findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache);
+        summaryPdf = findTeacherPdfByTraversal(teacher, dateRange, rootFolder, schoolFolderMap, schoolFolderCache, pdfPrefix);
       } catch (e) {
         logError('WARN', 'createDraftForTeacher', teacher,
           'traversal fallback threw: ' + (e.message || e), e.stack || '');
@@ -3844,7 +4040,7 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
         week: dateRange, email: teacher.email, campus: teacher.campus,
         teacher: teacher.name, linkType: 'pdf'
       });
-      body = _injectPdfCta(body, buildPdfCtaHtml_(trackedPdf));
+      body = _injectPdfCta(body, buildPdfCtaHtml_(trackedPdf, template.pdfCtaLabel));
     } else {
       attachFallback = summaryPdf;  // no url somehow -> attach original
       logError('WARN', 'createDraftForTeacher', teacher,
@@ -3857,7 +4053,7 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
     withGmailRetry(function() {
       var draftOptions = { htmlBody: body };
       if (attachFallback) draftOptions.attachments = [attachFallback];
-      GmailApp.createDraft(teacher.email, template.subject, '', draftOptions);
+      GmailApp.createDraft(teacher.email, draftSubject, '', draftOptions);
     });
   } catch (e) {
     var pdfName = summaryPdf ? '<unknown>' : '(no-pdf template)';
@@ -3870,7 +4066,7 @@ function createDraftForTeacher(teacher, rootFolder, dateRange, metrics, winners,
       error: 'createDraft failed for "' + pdfName + '" (' + pdfSize + ' bytes): ' + (e.message || e)
     };
   }
-  logSendEvent(teacher, dateRange, (template && template.subject) || '');
+  logSendEvent(teacher, dateRange, draftSubject || '');
   return { success: true };
 }
 
@@ -3913,11 +4109,10 @@ function buildMetricsTable(teacher, metricsArray) {
     var activeDays = Number(m.activeDays || 0);
     var avgMins = Number(m.avgMins || 0);
     var avgLessons = Number(m.avgLessons || 0);
-    // v2.6.0: thresholds extracted to CONFIG.THRESHOLDS.
-    var daysColor = activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN ? '#d9ead3' :
-                    (activeDays >= CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW ? '#fff2cc' : '#f4cccc');
-    var minsColor = avgMins >= CONFIG.THRESHOLDS.AVG_MINS_GREEN ? '#d9ead3' :
-                    (avgMins >= CONFIG.THRESHOLDS.AVG_MINS_YELLOW ? '#fff2cc' : '#f4cccc');
+    // v2.25.0: shared, days-in-week-scaled color logic.
+    var cellColors = _metricCellColors_(activeDays, avgMins);
+    var daysColor = cellColors.days;
+    var minsColor = cellColors.mins;
     html += '<tr>';
     html += '<td style="padding:8px;">' + String(teacher.name || '') + '</td>';
     html += '<td style="padding:8px;">' + String(m.grade || '') + '</td>';
@@ -3931,10 +4126,16 @@ function buildMetricsTable(teacher, metricsArray) {
 }
 
 function buildColorLegend() {
-  var html = '<p><strong>Average Active Days:</strong> ';
-  html += dotSpan('#2e7d32') + '<span style="color:#2e7d32;font-weight:bold;">Green 4+</span> &nbsp; ';
-  html += dotSpan('#DAA520') + '<span style="color:#DAA520;font-weight:bold;">Yellow 3</span> &nbsp; ';
-  html += dotSpan('#c62828') + '<span style="color:#c62828;font-weight:bold;">Red 1-2</span></p>';
+  // v2.25.0: legend generated from the SCALED thresholds so a short-week run
+  // shows honest bands (the old hardcoded "Green 4+" had already drifted from
+  // the 3.95 threshold).
+  var t = _scaledThresholds_();
+  var g = Math.round(t.daysGreen * 10) / 10;
+  var y = Math.round(t.daysYellow * 10) / 10;
+  var html = '<p><strong>Average Active Days' + (_daysInWeek !== 5 ? ' (' + _daysInWeek + '-day week)' : '') + ':</strong> ';
+  html += dotSpan('#2e7d32') + '<span style="color:#2e7d32;font-weight:bold;">Green ' + g + '+</span> &nbsp; ';
+  html += dotSpan('#DAA520') + '<span style="color:#DAA520;font-weight:bold;">Yellow ' + y + '-' + g + '</span> &nbsp; ';
+  html += dotSpan('#c62828') + '<span style="color:#c62828;font-weight:bold;">Red below ' + y + '</span></p>';
   html += '<p><strong>Key metrics:</strong> Average mastered lessons, active days, Daily logins, Average minutes</p>';
   return html;
 }
@@ -3946,17 +4147,21 @@ function getOverallTrendColor(metricsArray) {
     totalActiveDays += parseFloat(metricsArray[i].activeDays) || 0;
   }
   var avg = totalActiveDays / metricsArray.length;
-  if (avg >= CONFIG.THRESHOLDS.ACTIVE_DAYS_GREEN) return 'green';
-  if (avg >= CONFIG.THRESHOLDS.ACTIVE_DAYS_YELLOW) return 'yellow';
+  var t = _scaledThresholds_();
+  if (avg >= t.daysGreen) return 'green';
+  if (avg >= t.daysYellow) return 'yellow';
   return 'red';
 }
 
 function buildTrendAlert(metricsArray) {
   var trendColor = getOverallTrendColor(metricsArray);
+  // v2.25.0: the 35-minutes figure is a DAILY goal (days-independent); short
+  // weeks just get named so the expectation reads correctly.
+  var weekNote = _daysInWeek !== 5 ? ' over this ' + _daysInWeek + '-day week' : '';
   var trendMessages = {
     green: 'Great work! Your students are on track and meeting their goals.',
-    yellow: "You're close -- schedule at least 35 minutes daily so students can meet their goals.",
-    red: "Your class isn't meeting time goals yet -- students need 35 minutes daily in Motivention."
+    yellow: "You're close -- schedule at least 35 minutes daily" + weekNote + " so students can meet their goals.",
+    red: "Your class isn't meeting time goals yet -- students need 35 minutes daily in Motivention" + weekNote + "."
   };
   var trendDotColors = { green: '#2e7d32', yellow: '#DAA520', red: '#c62828' };
   var trendBgColors = { green: '#d9ead3', yellow: '#fff2cc', red: '#f4cccc' };
@@ -7008,4 +7213,220 @@ function syncTemplatesFromDoc() {
   _syncedSpecs2627Cache = null;
 
   setupTemplateDropdown();  // shows its own "Done" alert listing the new names
+}
+
+
+// ============================================
+// v2.25.0 — MIDWEEK SNAPSHOT + ADMIN EMAILS
+// ============================================
+
+/** "2026-03-05_to_2026-03-11" -> "3/5-3/11" (no leading zeros). */
+function _rangeLabel_(dateRange) {
+  var parts = String(dateRange || '').split('_to_');
+  function md(iso) {
+    var p = String(iso || '').split('-');
+    if (p.length < 3) return iso;
+    return Number(p[1]) + '/' + Number(p[2]);
+  }
+  if (parts.length !== 2) return dateRange;
+  return md(parts[0]) + '-' + md(parts[1]);
+}
+
+/** Midweek subject: "Studient: Your Midweek Snapshot (3/5-3/11)". */
+function _midweekSubject_(dateRange) {
+  return 'Studient: Your Midweek Snapshot (' + _rangeLabel_(dateRange) + ')';
+}
+
+/** Midweek body: greeting + one line. The tracked PDF button is injected by
+ * createDraftForTeacher (pdfCtaLabel on the template). Deliberately no table,
+ * legend, or trend - this is a link-delivery email. */
+function generateMidweekBody(teacher, metricsArray, winnersArray) {
+  return wrapEmailHtml([
+    buildGreeting(teacher),
+    '<p>Here is your midweek snapshot - a quick pulse check on your class before the week wraps.</p>'
+  ]);
+}
+
+/**
+ * Admin PDF filename as the parent pipeline writes it (generate_pdf_reports.py:
+ * "{ABBREV} Admin Report {M-D}.pdf", M-D from the week's Monday, no leading
+ * zeros, flat in the "Studient Weekly Reports" Shared Drive). CROSS-REPO DRIFT
+ * SURFACE: if the pipeline renames its PDFs, update this to match.
+ */
+function _adminPdfFilename_(displayName, dateRange) {
+  var abbrev = String(displayName || '').split(' - ')[0].trim() || String(displayName || '');
+  var weekStart = String(dateRange || '').split('_to_')[0];
+  var p = weekStart.split('-');
+  var md = p.length === 3 ? Number(p[1]) + '-' + Number(p[2]) : weekStart;
+  return abbrev + ' Admin Report ' + md + '.pdf';
+}
+
+/**
+ * Student-weighted campus averages over per-teacher metric-row arrays (the
+ * arrays getTeacherMetricsForWeek/lookupByName return; a teacher can have
+ * multiple grade rows). Weight = numStudents per row (fallback 1).
+ */
+function _weightedCampusAverages_(rowsArrays) {
+  var wSum = 0, daysSum = 0, minsSum = 0, students = 0, teachersWithData = 0;
+  for (var i = 0; i < rowsArrays.length; i++) {
+    var rows = rowsArrays[i];
+    if (!rows || rows.length === 0) continue;
+    teachersWithData++;
+    for (var j = 0; j < rows.length; j++) {
+      var r = rows[j];
+      var w = Number(r.numStudents) > 0 ? Number(r.numStudents) : 1;
+      wSum += w;
+      students += Number(r.numStudents) > 0 ? Number(r.numStudents) : 0;
+      daysSum += (Number(r.activeDays) || 0) * w;
+      minsSum += (Number(r.avgMins) || 0) * w;
+    }
+  }
+  return {
+    teachersWithData: teachersWithData,
+    students: students,
+    avgActiveDays: wSum > 0 ? daysSum / wSum : 0,
+    avgMins: wSum > 0 ? minsSum / wSum : 0
+  };
+}
+
+/** Admin email body: campus KPI mini-table + tracked report button (or a
+ * visible not-found note). Colors use the days-scaled thresholds. */
+function _buildAdminEmailBody_(school, abbrev, dateRange, stats, trackedPdfUrl, pdfFilename) {
+  var colors = _metricCellColors_(stats.avgActiveDays, stats.avgMins);
+  var daysNote = _daysInWeek !== 5 ? ' (' + _daysInWeek + '-day week)' : '';
+  var sections = [
+    '<p>Hi,</p>',
+    '<p>Campus summary for <strong>' + school + '</strong>, ' + _rangeLabel_(dateRange) + daysNote + ':</p>',
+    '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;max-width:520px;">'
+    + '<tr style="background-color:#f3f3f3;"><th style="padding:8px;">Avg Active Days</th><th style="padding:8px;">Avg Minutes</th><th style="padding:8px;">Teachers w/ data</th><th style="padding:8px;">Students</th></tr>'
+    + '<tr>'
+    + '<td style="padding:8px;background-color:' + colors.days + ';font-weight:bold;">' + stats.avgActiveDays.toFixed(1) + '</td>'
+    + '<td style="padding:8px;background-color:' + colors.mins + ';font-weight:bold;">' + stats.avgMins.toFixed(1) + '</td>'
+    + '<td style="padding:8px;">' + stats.teachersWithData + '</td>'
+    + '<td style="padding:8px;">' + stats.students + '</td>'
+    + '</tr></table>',
+    buildColorLegend()
+  ];
+  if (trackedPdfUrl) {
+    sections.push(buildPdfCtaHtml_(trackedPdfUrl, 'View the ' + abbrev + ' Admin Report (PDF)'));
+  } else {
+    sections.push('<p style="background:#fff3cd;border:1px solid #ffe699;border-radius:6px;padding:8px 10px;font-size:13px;">'
+      + 'The report file "' + pdfFilename + '" was not found in the Studient Weekly Reports drive for this week. Stats above are live from the metrics tab.</p>');
+  }
+  return wrapEmailHtml(sections);
+}
+
+/** Menu entry: dialog with school checkboxes + date range + days-in-week. */
+function generateAdminEmails() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var mappingData = ss.getSheetByName(CONFIG.MAPPING_SHEET_NAME).getDataRange().getValues();
+  var seen = {};
+  var schools = [];
+  for (var i = 1; i < mappingData.length; i++) {
+    var displayName = String(mappingData[i][1] || '').trim() || String(mappingData[i][0] || '').trim();
+    if (!displayName || seen[displayName]) continue;
+    seen[displayName] = true;
+    schools.push(displayName);
+  }
+  schools.sort();
+  var dateRange = getConfigValue('Date Range') || '';
+
+  var boxes = schools.map(function (s, i) {
+    return '<label style="display:block;margin:2px 0;"><input type="checkbox" class="sch" value="' + s.replace(/"/g, '&quot;') + '"> ' + s + '</label>';
+  }).join('');
+  var html = '<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;padding:4px 6px;">'
+    + '<p style="margin:0 0 6px 0;">Drafts go to <strong>your own Gmail</strong>, one per selected school.</p>'
+    + '<p style="margin:8px 0 4px 0;"><strong>Schools:</strong> <a href="#" id="selall" style="font-size:11px;">select all</a></p>'
+    + '<div style="max-height:150px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;padding:6px;">' + boxes + '</div>'
+    + '<p style="margin:10px 0 4px 0;"><strong>Date range:</strong><br>'
+    + '<input id="range" value="' + dateRange.replace(/"/g, '&quot;') + '" style="width:95%;font-size:13px;padding:3px;" placeholder="2026-04-13_to_2026-04-19"></p>'
+    + '<p style="margin:10px 0 4px 0;"><strong>Days in this school week:</strong> '
+    + '<select id="days" style="font-size:13px;padding:2px;">'
+    + [1, 2, 3, 4, 5, 6, 7].map(function (d) { return '<option value="' + d + '"' + (d === 5 ? ' selected' : '') + '>' + d + '</option>'; }).join('')
+    + '</select></p>'
+    + '<div id="result" style="display:none;background:#f1edf9;border-radius:6px;padding:10px;margin:10px 0;font-size:12px;white-space:pre-wrap;"></div>'
+    + '<div style="margin-top:12px;">'
+    + '<button id="go" style="background:#6B46C1;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-weight:bold;cursor:pointer;">Generate admin drafts</button> '
+    + '<button id="cancel" style="background:#eee;border:1px solid #ccc;border-radius:6px;padding:8px 14px;cursor:pointer;">Cancel</button>'
+    + '</div></div>'
+    + '<script>'
+    + 'document.getElementById("selall").onclick=function(e){e.preventDefault();document.querySelectorAll(".sch").forEach(function(c){c.checked=true;});};'
+    + 'var go=document.getElementById("go"),cancel=document.getElementById("cancel"),res=document.getElementById("result");'
+    + 'cancel.onclick=function(){google.script.host.close();};'
+    + 'go.onclick=function(){'
+    + '  var schools=[].slice.call(document.querySelectorAll(".sch:checked")).map(function(c){return c.value;});'
+    + '  if(schools.length===0){res.style.display="block";res.textContent="Pick at least one school.";return;}'
+    + '  go.disabled=true;cancel.disabled=true;go.textContent="Working...";'
+    + '  google.script.run.withSuccessHandler(function(msg){'
+    + '    res.style.display="block";res.textContent=msg||"Done.";'
+    + '    go.style.display="none";cancel.disabled=false;cancel.textContent="Close";'
+    + '  }).withFailureHandler(function(err){'
+    + '    res.style.display="block";res.textContent="Error: "+(err&&err.message?err.message:err);'
+    + '    go.disabled=false;cancel.disabled=false;go.textContent="Generate admin drafts";'
+    + '  }).confirmAdminEmails({schools:schools,dateRange:document.getElementById("range").value,days:Number(document.getElementById("days").value)});'
+    + '};'
+    + '<\/script>';
+  var out = HtmlService.createHtmlOutput(html).setWidth(430).setHeight(470);
+  SpreadsheetApp.getUi().showModalDialog(out, 'Generate Admin Emails');
+}
+
+/** Executes the admin-email run (called from the dialog). Returns a summary. */
+function confirmAdminEmails(payload) {
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(0)) return 'Another generation is already running. Wait for it to finish, then try again.';
+  try {
+    _runIdCache = null;
+    var schools = (payload && payload.schools) || [];
+    var dateRange = String((payload && payload.dateRange) || '').trim();
+    _setDaysInWeek_(payload && payload.days);
+    if (schools.length === 0) return 'Pick at least one school.';
+    if (!/^\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}$/.test(dateRange)) {
+      return 'Date range must look like 2026-04-13_to_2026-04-19.';
+    }
+    var operator = Session.getActiveUser().getEmail();
+    var weekStart = dateRange.split('_to_')[0];
+    var teacherMetrics = getTeacherMetricsForWeek(weekStart);
+    var lines = [];
+    var created = 0;
+    for (var i = 0; i < schools.length; i++) {
+      var school = schools[i];
+      var abbrev = school.split(' - ')[0].trim() || school;
+      try {
+        var teachers = getTeachersForSchools([school]);
+        var rowsArrays = [];
+        for (var t = 0; t < teachers.length; t++) {
+          var rows = lookupByName(teacherMetrics, teachers[t].firstName, teachers[t].lastName, teachers[t].name);
+          if (rows) rowsArrays.push(rows);
+        }
+        var stats = _weightedCampusAverages_(rowsArrays);
+        var fname = _adminPdfFilename_(school, dateRange);
+        var pdfUrl = '';
+        try {
+          var it = DriveApp.getFilesByName(fname);
+          if (it.hasNext()) pdfUrl = it.next().getUrl();
+        } catch (e) {
+          logError('WARN', 'confirmAdminEmails', null, 'Admin PDF search failed for "' + fname + '": ' + (e.message || e), '');
+        }
+        var tracked = pdfUrl
+          ? buildTrackedUrl(pdfUrl, { week: dateRange, email: operator, campus: school, linkType: 'pdf', teacher: 'Admin - ' + abbrev })
+          : '';
+        var subject = 'Studient Admin Report - ' + school + ' (' + _rangeLabel_(dateRange) + ')';
+        var body = _buildAdminEmailBody_(school, abbrev, dateRange, stats, tracked, fname);
+        body = rewriteBodyLinks_(body, { week: dateRange, email: operator, campus: school, teacher: 'Admin - ' + abbrev });
+        GmailApp.createDraft(operator, subject, '', { htmlBody: body });
+        logSendEvent({ name: 'Admin - ' + abbrev, email: operator, campus: school }, dateRange, subject);
+        created++;
+        lines.push(abbrev + ': draft created'
+          + (stats.teachersWithData === 0 ? ' [no metrics rows for this week]' : '')
+          + (pdfUrl ? '' : ' [report PDF "' + fname + '" not found - stats only]'));
+      } catch (e) {
+        lines.push(abbrev + ': FAILED - ' + (e.message || e));
+        logError('ERROR', 'confirmAdminEmails', null, school + ': ' + (e.message || e), e.stack || '');
+      }
+    }
+    return 'Created ' + created + ' admin draft(s) in YOUR Gmail (' + operator + '):\n\n' + lines.join('\n');
+  } finally {
+    _daysInWeek = 5;
+    lock.releaseLock();
+  }
 }

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.25.0] - 2026-08-03
+
+### FEAT: Midweek Snapshot template + days-in-week scaling + Generate Admin Emails
+
+**1. Midweek Snapshot template** (dropdown). Short email: greeting, one line, and the tracked "View your midweek snapshot (PDF)" button - click-through tracked like everything else. Finds `Midweek {Teacher} - {start} - {end}.pdf` (parent generate_fidelity_reports.py naming) in the SAME teacher folders via a new `pdfPrefix` on the template threaded through `buildPdfCandidateFilenames`/search/traversal. Subject embeds the range: "Studient: Your Midweek Snapshot (3/5-3/11)". Users set the midweek window in the normal Config Date Range. BONUS FIX: the traversal fallback now discriminates by prefix BOTH ways - previously a weekly draft could silently link a Midweek PDF (same folder, same date pattern) and vice versa.
+
+**2. Days-in-week selection + threshold scaling.** "Generate My Email Drafts" now shows a styled confirm dialog (same facts as before) with a "Days in this school week" dropdown (1-7, default 5, PER-RUN only). All four color thresholds scale linearly (days/5): a 4-day week greens at 3.2 active days / 79.6 min. The color legend is now GENERATED from the scaled values (the hardcoded "Green 4+" had already drifted from the real 3.95) and trend copy names short weeks. Implemented as `_scaledThresholds_` + shared `_metricCellColors_` (also de-duplicates two inline copies of the shading logic). Flow split: `generateDraftsForCurrentUser` (preview -> dialog) / `confirmDraftGeneration(days)` (execute), single `_generateDraftsFlow_` code path, lock re-acquired in execute mode, `_daysInWeek` reset in finally.
+
+**3. Generate Admin Emails** (new Email Tools item). One dialog: checkbox list of ALL schools (select-all), date range prefilled from Config, days dropdown. One draft per school to YOUR OWN Gmail: student-weighted campus averages (minutes + active days, colored by the scaled thresholds, weighted by numStudents) from All Teacher Metrics, plus a tracked link to the pipeline's weekly `{ABBREV} Admin Report {M-D}.pdf`. Fail-soft: report missing for that week -> draft still generated with live stats and a visible note. Filename pattern VERIFIED against the live Shared Drive: generated names for JHES 4-13 and JHMS 4-20 exactly match real files. Sends logged to Send Log as "Admin - {ABBREV}" so the Click Dashboard counts them.
+
+Tests: 225 -> 248 (scaling identity/0.8/0.6/clamp, dynamic legend/trend, midweek candidate EQUALS the live Drive filename, admin filename pattern incl. no-leading-zeros, weighted averages fixture, fail-soft body, dialog function registration). Requires IMs to have access to the "Studient Weekly Reports" Shared Drive for the admin PDF link (stats render regardless).
+
 ## [v2.24.2] - 2026-07-31
 
 ### FIX: blank "Clicks by day" + "Clicks by campus" charts (series silently dropped)
