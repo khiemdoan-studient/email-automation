@@ -1237,7 +1237,21 @@ function generateDraftsForCurrentUser() {
   // v2.26.0: report metrics availability FOR THESE TEACHERS. The old
   // "Metrics data: Available" only meant the week had rows for somebody, so a
   // run that skipped every teacher still looked healthy.
-  var withDataCount = teachersWithData.length;
+  // v2.26.1: count teachers that ACTUALLY have rows. teachersWithData equals the
+  // full roster whenever the partition was skipped (metricsExist === false), so
+  // reading its length printed the contradictory "3 of 3 (this week has no
+  // metrics rows at all)" seen in the field.
+  var withDataCount = 0;
+  for (var wd = 0; wd < teachers.length; wd++) {
+    try { if (hasDataFn(teachers[wd])) withDataCount++; } catch (e) { /* count as no-data */ }
+  }
+  // v2.26.1: detect an upstream-corrupted metrics tab (rows present but the
+  // Teacher column empty / header missing) instead of reporting "no metrics".
+  var metricsTabIssue = _metricsTabProblem_();
+  if (metricsTabIssue) {
+    ui.alert('Metrics tab looks broken', metricsTabIssue, ui.ButtonSet.OK);
+    return;
+  }
   var dialogMsg = 'Ready to generate email drafts.\n\n'
     + 'Date Range: ' + dateRange + '\n'
     + 'Template: ' + templateName + '\n'
@@ -1251,6 +1265,13 @@ function generateDraftsForCurrentUser() {
     + (metricsExist ? '' : ' (this week has no metrics rows at all)') + '\n';
 
   var noneHaveData = withDataCount === 0 && !resolvedTemplate.skipMetricsPartition;
+  // v2.26.1: keep the partition honest when metricsExist was false but some
+  // teachers DO have rows (or vice versa).
+  if (!noneHaveData && withDataCount > 0 && teachersWithData.length !== withDataCount) {
+    var repartition = partitionTeachersByDataAvailability(teachers, hasDataFn);
+    teachersWithData = repartition.withData;
+    teachersSkipped = repartition.skipped;
+  }
   if (noneHaveData) {
     var goodWeeks = _weeksWithDataForTeachers_(teachers);
     dialogMsg += '\nNONE of your teachers have metrics for week ' + weekStart + '.\n';
@@ -3962,6 +3983,23 @@ function runUnitTests() {
   _testAssertEq(results, 'admin: range label helper', _rangeLabel_('2026-04-13_to_2026-04-19'), '4/13-4/19');
   _testAssertEq(results, 'admin: menu + executor functions exist',
     typeof generateAdminEmails === 'function' && typeof confirmAdminEmails === 'function', true);
+
+  // v2.26.1: corrupted-metrics-tab detector (the exact field failure: a pipeline
+  // write left 300 rows with no header and a blank Teacher column, so every
+  // lookup returned nothing and the run reported "no metrics for this week")
+  var goodGrid = [['week_start', 'Teacher', 'Grade'], ['2026-04-27', 'Janice Arriesgado', '6']];
+  _testAssertEq(results, 'metrics health: good grid -> no problem', _metricsTabProblemFromRows_(goodGrid), '');
+  var blankTeacherGrid = [['2025-09-29', '', '2', '2'], ['2025-09-29', '', '3', '7']];
+  var blankMsg = _metricsTabProblemFromRows_(blankTeacherGrid);
+  _testAssertEq(results, 'metrics health: blank Teacher column is caught',
+    blankMsg.indexOf('NO teacher names') !== -1 && blankMsg.indexOf('header row is missing') !== -1, true);
+  _testAssertEq(results, 'metrics health: message names the repair (email_only.py)',
+    blankMsg.indexOf('email_only.py') !== -1, true);
+  var headerOnlyMissing = [['2026-04-27', 'Janice Arriesgado', '6'], ['2026-04-27', 'Eunice Kimani', '7']];
+  _testAssertEq(results, 'metrics health: missing header alone is flagged',
+    _metricsTabProblemFromRows_(headerOnlyMissing).indexOf('missing its header row') !== -1, true);
+  _testAssertEq(results, 'metrics health: empty tab is not a corruption error',
+    _metricsTabProblemFromRows_([]), '');
 
   // v2.26.0: master-roster header mapping (the 10 REAL layouts, captured live)
   _testAssertEq(results, 'roster: standard layout 24/25/26',
@@ -7542,6 +7580,10 @@ function confirmAdminEmails(payload) {
     }
     var operator = Session.getActiveUser().getEmail();
     var weekStart = dateRange.split('_to_')[0];
+    // v2.26.1: refuse to mail zeroed campus summaries when the metrics tab is
+    // structurally broken upstream.
+    var adminMetricsIssue = _metricsTabProblem_();
+    if (adminMetricsIssue) return adminMetricsIssue;
     var teacherMetrics = getTeacherMetricsForWeek(weekStart);
     var lines = [];
     var created = 0;
@@ -7678,6 +7720,52 @@ function _adminAvailableDatesNote_(filenames, abbrev) {
   if (dates.length === 0) return 'No ' + abbrev + ' Admin Report files were found in the drive at all.';
   return 'Reports that DO exist for ' + abbrev + ': ' + dates.slice(0, 8).join(', ')
     + (dates.length > 8 ? ' (+' + (dates.length - 8) + ' more)' : '') + '.';
+}
+
+/**
+ * PURE: is the All Teacher Metrics grid structurally sound? Returns '' when
+ * healthy, else an operator-facing message.
+ *
+ * v2.26.1: a pipeline write once left this tab with the header row gone and
+ * the Teacher column blank on all 300 rows. Every lookup silently returned
+ * nothing, so the run reported "no metrics for this week" and drafted empty
+ * emails. Structural corruption must be named, not swallowed.
+ */
+function _metricsTabProblemFromRows_(rows) {
+  if (!rows || rows.length === 0) return '';   // empty tab: existing messaging covers it
+  var header = rows[0] || [];
+  var headerLooksRight = String(header[0] || '').toLowerCase().indexOf('week') !== -1
+    && String(header[1] || '').toLowerCase().indexOf('teacher') !== -1;
+  var named = 0;
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i] && String(rows[i][1] || '').trim()) named++;
+  }
+  if (rows.length > 1 && named === 0) {
+    return 'The "' + CONFIG.ALL_METRICS_SHEET_NAME + '" tab has ' + (rows.length - 1)
+      + ' data rows but NO teacher names in column B'
+      + (headerLooksRight ? '' : ', and its header row is missing')
+      + '.\n\nThat tab was written incorrectly by the data pipeline, so no email can be '
+      + 'matched to a teacher. Nothing was generated.\n\nFix: ask for the email-sheet '
+      + 'writer to be re-run (email_only.py in the pipeline repo), then try again.';
+  }
+  if (!headerLooksRight) {
+    return 'The "' + CONFIG.ALL_METRICS_SHEET_NAME + '" tab is missing its header row '
+      + '(expected "week_start" and "Teacher" in row 1). The first data row will be '
+      + 'ignored and lookups may be wrong.\n\nFix: re-run the pipeline\'s email-sheet '
+      + 'writer (email_only.py), then try again.';
+  }
+  return '';
+}
+
+/** Sheet-reading wrapper. Fail-soft '' so a read error never blocks a run. */
+function _metricsTabProblem_() {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.ALL_METRICS_SHEET_NAME);
+    if (!sheet) return '';
+    return _metricsTabProblemFromRows_(sheet.getDataRange().getValues());
+  } catch (e) {
+    return '';
+  }
 }
 
 /** Normalize a header cell for matching: lowercase, letters only. */

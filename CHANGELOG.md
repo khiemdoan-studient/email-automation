@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.26.1] - 2026-08-04
+
+### FIX: repaired a corrupted metrics tab + stop reporting corruption as "no data"
+
+Field report: weekly generation drafted nothing and admin emails still showed `0.0 / 0.0 / 0 / 0`, on weeks that DO have data. Root cause was NOT in this repo.
+
+**The `All Teacher Metrics` tab had been overwritten with a broken table.** Live inspection: 300 rows, **header row gone**, and **column B (Teacher) empty on every row**. `getTeacherMetricsForWeek` skips rows without a teacher name, so every lookup returned `{}` - hence "this week has no metrics rows at all" and zeroed campus summaries. `Student Winners` was corrupted the same way and carried `ScienceSIS` / `Alpha School Brownsville` campuses, i.e. an Alpha/Timeback dataset written over the public-school one. This repo's writer (`email_winners.write_all_metrics_to_email_sheet`) does emit a header and was last changed months ago, so the bad write came from another producer against the same spreadsheet - most likely the sibling Timeback pipeline. **Cross-repo hazard, recorded for follow-up.**
+
+**Repair performed:** re-ran the pipeline's `email_only.py`. Verified after: proper header, 2847 rows, 63 teachers, 39 weeks (2025-09-01 .. 2026-05-25); all three JRHS teachers present in every week including 2026-03-16 and 2026-04-27; `Student Winners` back to the public-school campuses.
+
+**Code fixes so this can never masquerade as a normal run again:**
+- `_metricsTabProblem_` / `_metricsTabProblemFromRows_` (pure, tested): detects rows-without-teacher-names and a missing header, and BLOCKS both the weekly and admin runs with a message that names the repair (`email_only.py`) instead of drafting empty emails.
+- Fixed a contradictory count of my own: the confirm screen printed "Metrics for YOUR teachers: 3 of 3 (this week has no metrics rows at all)" because it read `teachersWithData.length`, which equals the whole roster whenever the partition is skipped. It now counts teachers that actually resolve, and re-partitions when that count disagrees with the earlier partition.
+
+**End-to-end verification against LIVE data (driving the shipped functions, not a re-implementation):** JHES admin = 18 teachers with data, avg 2.64 active days, 33.4 minutes, 455 students (was 0/0/0/0); JHMS = 9 teachers, 2.40 days, 42.4 min, 318 students; `getTeacherMetricsForWeek` returns 63 teachers for both 2026-03-16 and 2026-04-27; all 3 JRHS teachers resolve in both weeks; a rendered Week 1 body contains a real metrics table and no "No metrics rows found" placeholder. Unit tests 272 -> 277.
+
 ## [v2.26.0] - 2026-08-04
 
 ### FIX: the roster source was broken (real cause of the blank admin emails) + honest empty-week UX
