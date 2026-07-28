@@ -83,9 +83,15 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
    - Column C: IM Email
    - `findFolderByName` normalizes underscores/spaces so column A still works
 
-3. **Teacher Emails** (dynamically populated via IMPORTRANGE)
-   - Key columns: Campus (C/2), Teacher First (Y/24), Last (Z/25), Email (AA/26)
-   - Reading Community uses dedicated "Reading Teachers" tab instead
+3. **Teacher Emails** (IMPORTRANGE mirror - NO LONGER the roster source as of v2.26.0)
+   - One cell (A1) stacking 9 `(Dash)` tabs from the MAP Master Roster. It loads
+     partially at random AND the source tabs have different column layouts, so the
+     stack mis-columns some campuses. Kept only as a fail-soft fallback.
+   - **Real source: `CONFIG.ROSTER_SOURCE_ID`** (MAP Master Roster), read directly by
+     `_loadMasterRoster_` with per-tab HEADER-based column resolution. See the
+     IMPLEMENTATION_NOTES gotcha before touching any of it.
+   - Reading Community still uses the dedicated "Reading Teachers" tab (master roster
+     is its fallback)
 
 4. **All Teacher Metrics** (auto-populated, ALL weeks preloaded)
    - ~3000 rows across 30+ weeks

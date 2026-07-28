@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.26.0] - 2026-08-04
+
+### FIX: the roster source was broken (real cause of the blank admin emails) + honest empty-week UX
+
+"Everything is blank" had TWO different causes, neither of them in the v2.25.x code. Both were found by probing live data, not by reading code.
+
+**A. `Teacher Emails` is not a roster - it is one cell.** A1 holds a stacked 9-way `IMPORTRANGE` of `(Dash)` tabs from the MAP Master Roster (`1scEay...`). Two defects:
+1. **Flaky load** - three reads minutes apart returned 9 campuses, then only 2 (JRES+JRHS), then zero rows. At run time JHES resolved to 0 teachers, so the admin email mailed `0.0 / 0.0 / 0 / 0`. This is the same failure `_probe_no_silently_dropped_school` already tracks.
+2. **Column drift** - the source tabs do NOT share a layout. Verified live: Reading CCSD first/last/email = 25/26/28 (with a `Teacher_Name` decoy at 27), AASP = 25/26/27, the rest = 24/25/26. IMPORTRANGE stacks them as though identical, so 2 of 10 campuses land teacher data in the wrong columns even on a clean load.
+
+Fix: `_loadMasterRoster_` reads the source spreadsheet directly and resolves columns BY HEADER per tab (never by index), with a tab-name to campus fallback for blank/`#REF!` campus cells. `getTeachersForSchools` now runs off that, behavior-preserving: same return shape, same `folderName.toLowerCase()` dedupe (first row wins), same `campusMatchesAnyDisplay` semantics, Reading Community still served by its dedicated tab (now with the master roster as a fallback if that tab is empty). The legacy tab remains the fail-soft fallback if the source cannot be opened.
+
+**Live proof before shipping:** replaying the shipped rules against the real roster yields **JHES 20, JRES 20, AFMS 11, JHMS 9, Reading 9, Metro 8, AFES 5, SPIRE 5, AASP 3, JRHS 3** and every School-IM Mapping campus resolves to at least one teacher. JHES went 0 -> 20.
+
+A first-match trap was caught during that verification and is now a regression test: AFES/AFMS carry a mostly-empty `Summer School Teacher Email` decoy at col 30 next to the real `Teacher 1 Email` at 26. A last-match resolver silently drops 4 of AFMS's 11 teachers.
+
+**B. The weekly "Skipped 3 (no metrics)" run was CORRECT - the UI lied about why.** Week 2026-03-02 has metrics rows only for 7 Reading-district teachers; the 3 JRHS teachers have rows in 11 weeks, 2026-03-16 through 2026-05-25. "Metrics data: Available" only meant "this week has rows for somebody", so a run that skipped every teacher looked healthy and produced nothing. Now: `Metrics for YOUR teachers: 0 of 3`, plus the weeks that DO have their data (`_weeksWithDataForTeachers_`, alias-aware) with the latest called out, and YES means "generate anyway without data tables" instead of a silent 0-draft run.
+
+**Partial-roster guard** (both paths): a selected campus resolving to zero teachers now stops the run with a message naming that campus, instead of drafting a wrong subset or a zeroed summary.
+
+**Admin missing-PDF note** now lists the report dates that DO exist for that school.
+
+Tests: 252 -> 272.
+
 ## [v2.25.2] - 2026-08-04
 
 ### FIX: dialogs replaced with synchronous prompts (multi-account) + midweek range derived automatically

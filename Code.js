@@ -22,6 +22,11 @@ var CONFIG = {
   CONFIG_SHEET_NAME: "Config",
   MAPPING_SHEET_NAME: "School-IM Mapping",
   ROSTER_SHEET_NAME: "Teacher Emails",
+  // v2.26.0: the REAL roster source. "Teacher Emails" is only an IMPORTRANGE
+  // mirror of this doc and is both flaky and column-misaligned - see the
+  // MASTER ROSTER section near the end of this file. Same id as
+  // SUMMER_SCHOOL.ROSTER_ID (IM access already proven by the summer flow).
+  ROSTER_SOURCE_ID: "1scEay0a8OR6vU3uJuxbHKWCEx_RVgSsRXF9naJh3XYw",
   ALL_METRICS_SHEET_NAME: "All Teacher Metrics",
   WINNERS_SHEET_NAME: "Student Winners",
   READING_TEACHERS_SHEET_NAME: "Reading Teachers",
@@ -1127,8 +1132,13 @@ function generateDraftsForCurrentUser() {
     return;
   }
 
-  var teachers = getTeachersForSchools(mySchools.map(function(s) { return s.displayName; }));
+  var myDisplayNames = mySchools.map(function(s) { return s.displayName; });
+  var teachers = getTeachersForSchools(myDisplayNames);
   if (teachers.length === 0) return ui.alert('Error', 'No teachers found for your schools.\n\nRun Email Tools > Debug: Check Teacher Names for a diagnostic that explains why (most commonly: upstream source spreadsheet has empty Campus column for your school).', ui.ButtonSet.OK);
+  // v2.26.0: partial-roster guard. A campus resolving to zero teachers means the
+  // roster loaded incompletely; stop rather than draft a wrong subset.
+  var rosterProblem = _rosterHealthProblem_(myDisplayNames, teachers);
+  if (rosterProblem) return ui.alert('Roster problem', rosterProblem, ui.ButtonSet.OK);
 
   // Validate Drive folder exists for this date range
   // Primary: use ROOT_FOLDER_ID (bulletproof). Fallback: name lookup.
@@ -1224,23 +1234,49 @@ function generateDraftsForCurrentUser() {
   _setDaysInWeek_(daysText === '' ? 5 : daysText);
 
   // Confirmation alert (facts + chosen days).
+  // v2.26.0: report metrics availability FOR THESE TEACHERS. The old
+  // "Metrics data: Available" only meant the week had rows for somebody, so a
+  // run that skipped every teacher still looked healthy.
+  var withDataCount = teachersWithData.length;
   var dialogMsg = 'Ready to generate email drafts.\n\n'
     + 'Date Range: ' + dateRange + '\n'
     + 'Template: ' + templateName + '\n'
     + 'Days in week: ' + _daysInWeek + (_daysInWeek !== 5 ? ' (color thresholds scaled)' : '') + '\n'
     + 'Teachers in roster: ' + teachers.length + '\n'
-    + 'Drafts to generate: ' + teachersWithData.length + '\n';
+    + 'Drafts to generate: ' + withDataCount + '\n';
   if (teachersSkipped.length > 0) {
     dialogMsg += 'Skipped (no metrics this week): ' + teachersSkipped.length + '\n';
   }
-  dialogMsg += 'Metrics data: ' + (metricsExist ? 'Available' : 'NOT FOUND') + '\n';
-  if (!metricsExist && !isFinalEmail && !isMapScores && !resolvedTemplate.skipMetricsPartition) {
+  dialogMsg += 'Metrics for YOUR teachers: ' + withDataCount + ' of ' + teachers.length
+    + (metricsExist ? '' : ' (this week has no metrics rows at all)') + '\n';
+
+  var noneHaveData = withDataCount === 0 && !resolvedTemplate.skipMetricsPartition;
+  if (noneHaveData) {
+    var goodWeeks = _weeksWithDataForTeachers_(teachers);
+    dialogMsg += '\nNONE of your teachers have metrics for week ' + weekStart + '.\n';
+    if (goodWeeks.length > 0) {
+      var showN = goodWeeks.slice(-6);
+      dialogMsg += 'Weeks that DO have their data: ' + showN.join(', ')
+        + (goodWeeks.length > showN.length ? ' (+' + (goodWeeks.length - showN.length) + ' earlier)' : '')
+        + '\nLatest: ' + goodWeeks[goodWeeks.length - 1] + '\n';
+    } else {
+      dialogMsg += 'No week in the metrics tab has rows for these teachers.\n';
+    }
+    dialogMsg += '\nYES = generate anyway (emails will have NO data table).'
+      + '\nNO = cancel so you can pick another week.\n';
+  } else if (!metricsExist && !isFinalEmail && !isMapScores && !resolvedTemplate.skipMetricsPartition) {
     dialogMsg += '\nWARNING: No metrics data found for week ' + weekStart + '.\n'
       + 'Emails will be generated WITHOUT metrics tables.\n';
   }
   dialogMsg += '\nProceed?';
   var confirm = ui.alert('Confirm Generation', dialogMsg, ui.ButtonSet.YES_NO);
   if (confirm !== ui.Button.YES) return;
+  // v2.26.0: YES on the none-have-data path means "send without tables" -
+  // restore the full teacher list so the run is not a silent no-op.
+  if (noneHaveData) {
+    teachersWithData = teachers;
+    teachersSkipped = [];
+  }
 
   var successCount = 0, errorCount = 0;
   var errors = [];
@@ -1531,11 +1567,23 @@ function getTeacherMetricsForWeek(weekStart) {
 
 function getTeachersForSchools(schoolDisplayNames) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var data = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME).getDataRange().getValues();
-  var teacherMap = new Map();
-
   // v2.6.9: precompute normalized Reading sentinel so we don't recompute per row.
   var readingNormalized = normalizeFolderName('Reading Community City School District');
+
+  // v2.26.0: PRIMARY path - read the master roster directly (header-mapped per
+  // tab). The Teacher Emails IMPORTRANGE mirror is only the fallback now: it
+  // loads partially at random and mis-columns 4 of 10 campuses.
+  var rosterRows = _loadMasterRoster_();
+  var teacherMap;
+  if (rosterRows && rosterRows.length > 0) {
+    teacherMap = new Map();
+    var direct = _teachersFromRosterRows_(rosterRows, schoolDisplayNames, readingNormalized);
+    for (var d = 0; d < direct.length; d++) teacherMap.set(direct[d].folderName.toLowerCase(), direct[d]);
+    return _appendReadingTeachers_(teacherMap, schoolDisplayNames, ss, rosterRows, readingNormalized);
+  }
+
+  var data = ss.getSheetByName(CONFIG.ROSTER_SHEET_NAME).getDataRange().getValues();
+  teacherMap = new Map();
 
   for (var i = 1; i < data.length; i++) {
     var campus = String(data[i][CONFIG.CAMPUS_COL] || '').trim();
@@ -1560,8 +1608,18 @@ function getTeachersForSchools(schoolDisplayNames) {
     }
   }
 
-  // Reading Community: dedicated tab (v2.6.9: normalized match for consistency).
+  return _appendReadingTeachers_(teacherMap, schoolDisplayNames, ss, rosterRows, readingNormalized);
+}
+
+/**
+ * Reading Community keeps its dedicated hand-maintained tab as the PRIMARY
+ * source (pre-v2.26.0 behavior). v2.26.0 adds a fallback: if that tab is
+ * missing/empty, use the master roster's "Reading CCSD (Dash)" rows rather
+ * than silently returning no Reading teachers.
+ */
+function _appendReadingTeachers_(teacherMap, schoolDisplayNames, ss, rosterRows, readingNormalized) {
   if (campusMatchesAnyDisplay('Reading Community City School District', schoolDisplayNames)) {
+    var added = 0;
     var readingSheet = ss.getSheetByName(CONFIG.READING_TEACHERS_SHEET_NAME);
     if (readingSheet) {
       var readingData = readingSheet.getDataRange().getValues();
@@ -1575,11 +1633,19 @@ function getTeachersForSchools(schoolDisplayNames) {
           if (!teacherMap.has(fKey)) {
             teacherMap.set(fKey, { firstName: fn.split(' ')[0], lastName: ln, name: fn + ' ' + ln, folderName: fName, email: em, campus: 'Reading Community City School District' });
           }
+          added++;
         }
       }
     }
+    if (added === 0 && rosterRows && rosterRows.length > 0) {
+      for (var rr = 0; rr < rosterRows.length; rr++) {
+        var t = rosterRows[rr];
+        if (normalizeFolderName(t.campus) !== readingNormalized) continue;
+        var k = t.folderName.toLowerCase();
+        if (!teacherMap.has(k)) teacherMap.set(k, t);
+      }
+    }
   }
-
   return Array.from(teacherMap.values());
 }
 
@@ -3896,6 +3962,98 @@ function runUnitTests() {
   _testAssertEq(results, 'admin: range label helper', _rangeLabel_('2026-04-13_to_2026-04-19'), '4/13-4/19');
   _testAssertEq(results, 'admin: menu + executor functions exist',
     typeof generateAdminEmails === 'function' && typeof confirmAdminEmails === 'function', true);
+
+  // v2.26.0: master-roster header mapping (the 10 REAL layouts, captured live)
+  _testAssertEq(results, 'roster: standard layout 24/25/26',
+    JSON.stringify(_rosterColIndex_(['Student ID', 'Student Email', 'Campus'].concat(
+      new Array(21)).concat(['Teacher 1 First Name', 'Teacher 1 Last Name', 'Teacher 1 Email']))),
+    JSON.stringify({ campus: 2, first: 24, last: 25, email: 26 }));
+  // Reading CCSD real header: School_Name(24), Teacher_First(25), Teacher_Last(26),
+  // Teacher_Name(27 - contains "teacher" but is neither first/last/email and must
+  // fall through), Teacher_Email(28).
+  var readingHdr = ['Student ID', 'Student Email', 'Campus'].concat(new Array(21))
+    .concat(['School_Name', 'Teacher_First', 'Teacher_Last', 'Teacher_Name', 'Teacher_Email']);
+  _testAssertEq(results, 'roster: Reading CCSD layout 25/26/28 (Teacher_Name falls through)',
+    JSON.stringify(_rosterColIndex_(readingHdr)),
+    JSON.stringify({ campus: 2, first: 25, last: 26, email: 28 }));
+  var aaspHdr = ['a', 'b', 'Campus'].concat(new Array(22))
+    .concat(['Teacher 1 First Name', 'Teacher 1 Last Name', 'Teacher 1 Email']);
+  _testAssertEq(results, 'roster: AASP layout 25/26/27',
+    JSON.stringify(_rosterColIndex_(aaspHdr)),
+    JSON.stringify({ campus: 2, first: 25, last: 26, email: 27 }));
+  // AFES/AFMS carry a DECOY "Summer School Teacher Email" at 30 that is mostly
+  // empty. FIRST match must win (26), else 4 of 11 AFMS teachers vanish - this
+  // exact bug produced a wrong count during v2.26.0 verification.
+  var afmsHdr = ['a', 'b', 'Campus'].concat(new Array(21))
+    .concat(['Teacher 1 First Name', 'Teacher 1 Last Name', 'Teacher 1 Email', 'z1', 'z2', 'z3', 'Summer School Teacher Email']);
+  _testAssertEq(results, 'roster: AFMS/AFES decoy summer-email col must NOT win',
+    JSON.stringify(_rosterColIndex_(afmsHdr)),
+    JSON.stringify({ campus: 2, first: 24, last: 25, email: 26 }));
+  _testAssertEq(results, 'roster: missing teacher headers -> -1s',
+    JSON.stringify(_rosterColIndex_(['Student ID', 'Campus'])),
+    JSON.stringify({ campus: 1, first: -1, last: -1, email: -1 }));
+  // campus fallback when the source cell is broken/blank (a real recurring failure)
+  _testAssertEq(results, 'roster: campus cell wins when present',
+    _rosterRowCampus_('JHES - Hardeeville Elementary School', 'Hardeeville Elementary School (Dash)'),
+    'JHES - Hardeeville Elementary School');
+  _testAssertEq(results, 'roster: #REF! falls back to the tab-name map',
+    _rosterRowCampus_('#REF!', 'Reading CCSD (Dash)'), 'Reading Community City School District');
+  _testAssertEq(results, 'roster: blank campus falls back to the tab-name map',
+    _rosterRowCampus_('', 'Hardeeville Junior & Senior High School (Dash)'),
+    'JHMS - Hardeeville Junior Senior High School');
+  _testAssertEq(results, 'roster: unknown tab + blank campus -> empty (row dropped)',
+    _rosterRowCampus_('', 'Mystery School (Dash)'), '');
+  // dedupe contract must match pre-v2.26.0 exactly: key = folderName lowercased
+  var rosterFixture = [
+    { firstName: 'Janice', lastName: 'Arriesgado', name: 'Janice Arriesgado', folderName: 'Janice_Arriesgado', email: 'j@x', campus: 'JRHS - Ridgeland Secondary Academy of Excellence' },
+    { firstName: 'Janice', lastName: 'Arriesgado', name: 'Janice Arriesgado', folderName: 'Janice_Arriesgado', email: 'dupe@x', campus: 'JRHS - Ridgeland Secondary Academy of Excellence' },
+    { firstName: 'Kim', lastName: 'Bell', name: 'Kim Bell', folderName: 'Kim_Bell', email: 'k@x', campus: 'Reading Community City School District' },
+    { firstName: 'Pat', lastName: 'Campolongo', name: 'Pat Campolongo', folderName: 'Pat_Campolongo', email: 'p@x', campus: 'AASP - Allendale Aspire Academy' }
+  ];
+  var readingNorm = normalizeFolderName('Reading Community City School District');
+  var picked = _teachersFromRosterRows_(rosterFixture, ['JRHS - Ridgeland Secondary Academy of Excellence'], readingNorm);
+  _testAssertEq(results, 'roster: dedupes by folderName, first row wins',
+    picked.length + '|' + picked[0].email, '1|j@x');
+  _testAssertEq(results, 'roster: Reading excluded from the roster pass (own tab)',
+    _teachersFromRosterRows_(rosterFixture, ['Reading Community City School District'], readingNorm).length, 0);
+  _testAssertEq(results, 'roster: multi-campus selection returns each campus',
+    _teachersFromRosterRows_(rosterFixture,
+      ['JRHS - Ridgeland Secondary Academy of Excellence', 'AASP - Allendale Aspire Academy'], readingNorm).length, 2);
+  // health guard
+  _testAssertEq(results, 'roster guard: healthy -> empty string',
+    _rosterHealthProblem_(['JRHS - Ridgeland Secondary Academy of Excellence'], picked), '');
+  var problem = _rosterHealthProblem_(['JHES - Hardeeville Elementary School'], picked);
+  _testAssertEq(results, 'roster guard: empty campus is named + refuses',
+    problem.indexOf('JHES - Hardeeville Elementary School') !== -1 && problem.indexOf('Nothing was generated') !== -1, true);
+
+  // v2.26.0: weeks-with-data for THESE teachers (the "blank run" diagnosis)
+  var metricsFixture = [
+    ['week_start', 'Teacher', 'Grade'],
+    ['2026-03-02', 'Danielle Roberts', '3'],
+    ['2026-03-09', 'Toni Tumbusch', '4'],
+    ['2026-03-16', 'Janice Arriesgado', '6'],
+    ['2026-04-13', 'Janice Arriesgado', '6'],
+    ['2026-04-13', 'Eunice Kimani', '7'],
+    ['2026-05-25', 'Eunice Kimani', '7']
+  ];
+  var jrhs = [{ name: 'Janice Arriesgado' }, { name: 'Eunice Kimani' }];
+  _testAssertEq(results, 'weeks: only weeks where THESE teachers appear',
+    _weeksWithDataForTeachersFromRows_(metricsFixture, jrhs).join(','),
+    '2026-03-16,2026-04-13,2026-05-25');
+  _testAssertEq(results, 'weeks: teacher absent everywhere -> empty',
+    _weeksWithDataForTeachersFromRows_(metricsFixture, [{ name: 'Nobody Here' }]).length, 0);
+  _testAssertEq(results, 'weeks: the reported empty week is genuinely excluded',
+    _weeksWithDataForTeachersFromRows_(metricsFixture, jrhs).indexOf('2026-03-02'), -1);
+
+  // v2.26.0: admin available-report-dates note
+  _testAssertEq(results, 'admin dates: parsed + sorted by month/day',
+    _adminAvailableDatesNote_(['JHES Admin Report 5-25.pdf', 'JHES Admin Report 4-13.pdf', 'JHES Admin Report 4-6.pdf'], 'JHES'),
+    'Reports that DO exist for JHES: 4-6, 4-13, 5-25.');
+  _testAssertEq(results, 'admin dates: none found -> honest message',
+    _adminAvailableDatesNote_([], 'AASP').indexOf('were found in the drive at all') !== -1, true);
+  _testAssertEq(results, 'admin dates: ignores unrelated filenames',
+    _adminAvailableDatesNote_(['JHES Class Challenge 4-13.pdf', 'JHES Admin Report 4-13.pdf'], 'JHES'),
+    'Reports that DO exist for JHES: 4-13.');
 
   // v2.25.2: midweek window derivation + partition bypass
   _testAssertEq(results, 'midweek: weekly range derives the Thu-Wed window (matches live file)',
@@ -7292,7 +7450,7 @@ function _weightedCampusAverages_(rowsArrays) {
 
 /** Admin email body: campus KPI mini-table + tracked report button (or a
  * visible not-found note). Colors use the days-scaled thresholds. */
-function _buildAdminEmailBody_(school, abbrev, dateRange, stats, trackedPdfUrl, pdfFilename) {
+function _buildAdminEmailBody_(school, abbrev, dateRange, stats, trackedPdfUrl, pdfFilename, availNote) {
   var colors = _metricCellColors_(stats.avgActiveDays, stats.avgMins);
   var daysNote = _daysInWeek !== 5 ? ' (' + _daysInWeek + '-day week)' : '';
   var sections = [
@@ -7312,7 +7470,8 @@ function _buildAdminEmailBody_(school, abbrev, dateRange, stats, trackedPdfUrl, 
     sections.push(buildPdfCtaHtml_(trackedPdfUrl, 'View the ' + abbrev + ' Admin Report (PDF)'));
   } else {
     sections.push('<p style="background:#fff3cd;border:1px solid #ffe699;border-radius:6px;padding:8px 10px;font-size:13px;">'
-      + 'The report file "' + pdfFilename + '" was not found in the Studient Weekly Reports drive for this week. Stats above are live from the metrics tab.</p>');
+      + 'The report file "' + pdfFilename + '" was not found in the Studient Weekly Reports drive for this week. Stats above are live from the metrics tab.'
+      + (availNote ? '<br>' + availNote : '') + '</p>');
   }
   return wrapEmailHtml(sections);
 }
@@ -7391,6 +7550,12 @@ function confirmAdminEmails(payload) {
       var abbrev = school.split(' - ')[0].trim() || school;
       try {
         var teachers = getTeachersForSchools([school]);
+        // v2.26.0: a campus with zero teachers means a partial roster load -
+        // say so instead of mailing a 0.0/0.0/0/0 summary.
+        if (teachers.length === 0) {
+          lines.push(abbrev + ': SKIPPED - no teachers found in the master roster for this campus (roster load looks partial; nothing drafted).');
+          continue;
+        }
         var rowsArrays = [];
         for (var t = 0; t < teachers.length; t++) {
           var rows = lookupByName(teacherMetrics, teachers[t].firstName, teachers[t].lastName, teachers[t].name);
@@ -7405,11 +7570,24 @@ function confirmAdminEmails(payload) {
         } catch (e) {
           logError('WARN', 'confirmAdminEmails', null, 'Admin PDF search failed for "' + fname + '": ' + (e.message || e), '');
         }
+        // v2.26.0: when the exact report is missing, name the dates that exist.
+        var availNote = '';
+        if (!pdfUrl) {
+          try {
+            var found = [];
+            var searchIt = DriveApp.searchFiles('title contains "' + abbrev + ' Admin Report"');
+            var guard = 0;
+            while (searchIt.hasNext() && guard < 60) { found.push(searchIt.next().getName()); guard++; }
+            availNote = _adminAvailableDatesNote_(found, abbrev);
+          } catch (e2) {
+            availNote = '';
+          }
+        }
         var tracked = pdfUrl
           ? buildTrackedUrl(pdfUrl, { week: dateRange, email: operator, campus: school, linkType: 'pdf', teacher: 'Admin - ' + abbrev })
           : '';
         var subject = 'Studient Admin Report - ' + school + ' (' + _rangeLabel_(dateRange) + ')';
-        var body = _buildAdminEmailBody_(school, abbrev, dateRange, stats, tracked, fname);
+        var body = _buildAdminEmailBody_(school, abbrev, dateRange, stats, tracked, fname, availNote);
         body = rewriteBodyLinks_(body, { week: dateRange, email: operator, campus: school, teacher: 'Admin - ' + abbrev });
         GmailApp.createDraft(operator, subject, '', { htmlBody: body });
         logSendEvent({ name: 'Admin - ' + abbrev, email: operator, campus: school }, dateRange, subject);
@@ -7427,4 +7605,216 @@ function confirmAdminEmails(payload) {
     _daysInWeek = 5;
     lock.releaseLock();
   }
+}
+
+// ============================================
+// v2.26.0 — MASTER ROSTER (direct, header-mapped)
+// ============================================
+// The "Teacher Emails" tab is NOT a roster: it is one cell (A1) holding a
+// stacked 9-way IMPORTRANGE of "(Dash)" tabs from the MAP Master Roster. Two
+// independent defects made it unusable:
+//   1. FLAKY LOAD - reads minutes apart returned 9 campuses, then 2, then zero
+//      rows. A run that lands on a partial load silently drafts for the wrong
+//      teacher set (this is what produced the blank JHES admin email), and it
+//      is the same failure `_probe_no_silently_dropped_school` already tracks.
+//   2. COLUMN DRIFT - the source tabs do NOT share a layout. Header-mapped
+//      truth: Reading CCSD first/last/email = 25/26/28, AASP = 25/26/27,
+//      AFES+AFMS email = 30, the rest = 24/25/26. IMPORTRANGE stacks them as
+//      if identical, so 4 of 10 campuses land data in the wrong columns.
+// Fix: read the source spreadsheet directly and resolve columns BY HEADER per
+// tab. Never index-address these tabs.
+
+/**
+ * PURE: which week_starts in an All Teacher Metrics value grid have a row for
+ * at least one of these teachers. `rows` is the raw grid (row 0 = header,
+ * col A = week_start, col B = teacher). Sorted ascending.
+ */
+function _weeksWithDataForTeachersFromRows_(rows, teachers) {
+  var want = {};
+  for (var t = 0; t < teachers.length; t++) {
+    var n = String(teachers[t].name || '').toLowerCase().trim();
+    if (n) want[n] = true;
+    // alias-aware: the metrics tab may spell the teacher differently
+    var alias = NAME_ALIASES[n];
+    if (alias) want[alias] = true;
+  }
+  var seen = {};
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r || r.length < 2) continue;
+    var who = String(r[1] || '').toLowerCase().trim();
+    if (!want[who]) continue;
+    var wk = r[0] instanceof Date ? cellToDateString(r[0]) : String(r[0] || '').slice(0, 10);
+    if (wk) seen[wk] = true;
+  }
+  return Object.keys(seen).sort();
+}
+
+/** Sheet-reading wrapper for _weeksWithDataForTeachersFromRows_. Fail-soft []. */
+function _weeksWithDataForTeachers_(teachers) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.ALL_METRICS_SHEET_NAME);
+    if (!sheet) return [];
+    return _weeksWithDataForTeachersFromRows_(sheet.getDataRange().getValues(), teachers);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * PURE: format the admin-report dates that DO exist for a campus, from Drive
+ * filenames like "JHES Admin Report 4-13.pdf". Sorted by month/day.
+ */
+function _adminAvailableDatesNote_(filenames, abbrev) {
+  var dates = [];
+  for (var i = 0; i < filenames.length; i++) {
+    var m = /Admin Report (\d{1,2})-(\d{1,2})\.pdf$/i.exec(String(filenames[i] || ''));
+    if (m && dates.indexOf(m[1] + '-' + m[2]) === -1) dates.push(m[1] + '-' + m[2]);
+  }
+  dates.sort(function (a, b) {
+    var pa = a.split('-'), pb = b.split('-');
+    return (Number(pa[0]) - Number(pb[0])) || (Number(pa[1]) - Number(pb[1]));
+  });
+  if (dates.length === 0) return 'No ' + abbrev + ' Admin Report files were found in the drive at all.';
+  return 'Reports that DO exist for ' + abbrev + ': ' + dates.slice(0, 8).join(', ')
+    + (dates.length > 8 ? ' (+' + (dates.length - 8) + ' more)' : '') + '.';
+}
+
+/** Normalize a header cell for matching: lowercase, letters only. */
+function _rosterNormHeader_(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[^a-z]/g, '');
+}
+
+/**
+ * PURE: resolve {campus, first, last, email} column indices from a header row.
+ * Handles every real layout in the master roster (verified live 2026-08-04).
+ * Returns -1 for anything absent.
+ */
+function _rosterColIndex_(headerRow) {
+  var out = { campus: -1, first: -1, last: -1, email: -1 };
+  var row = headerRow || [];
+  for (var i = 0; i < row.length; i++) {
+    var h = _rosterNormHeader_(row[i]);
+    if (!h) continue;
+    if (out.campus === -1 && h === 'campus') out.campus = i;
+    // "Teacher 1 First Name" and "Teacher_First" both normalize to contain
+    // 'teacher' + 'first'. Guard against "School_Name"-style neighbours.
+    if (h.indexOf('teacher') !== -1) {
+      if (out.first === -1 && h.indexOf('first') !== -1) out.first = i;
+      else if (out.last === -1 && h.indexOf('last') !== -1) out.last = i;
+      else if (out.email === -1 && h.indexOf('email') !== -1) out.email = i;
+    }
+  }
+  return out;
+}
+
+/** Tab-name -> School-IM Mapping display name, used when a source Campus cell
+ * is blank or #REF! (a documented recurring upstream failure). */
+var ROSTER_TAB_CAMPUS = {
+  'ridgeland secondary academy of excellence': 'JRHS - Ridgeland Secondary Academy of Excellence',
+  'ridgeland elementary school': 'JRES - Ridgeland Elementary School',
+  'hardeeville junior & senior high school': 'JHMS - Hardeeville Junior Senior High School',
+  'hardeeville elementary school': 'JHES - Hardeeville Elementary School',
+  'allendale aspire academy': 'AASP - Allendale Aspire Academy',
+  'allendale fairfax middle school': 'AFMS - Allendale Fairfax Middle School',
+  'allendale fairfax elementary school': 'AFES - Allendale Fairfax Elementary School',
+  'metro schools': 'Metro Schools',
+  'reading ccsd': 'Reading Community City School District',
+  'spire academy': 'SPIRE Academy'
+};
+
+/** PURE: campus for a row - the Campus cell, else the tab-name fallback. */
+function _rosterRowCampus_(cellValue, tabTitle) {
+  var v = String(cellValue == null ? '' : cellValue).trim();
+  if (v && v.indexOf('#REF') !== 0 && v.indexOf('#N/A') !== 0) return v;
+  var key = String(tabTitle || '').replace(/\(Dash\)/i, '').trim().toLowerCase();
+  return ROSTER_TAB_CAMPUS[key] || '';
+}
+
+var _masterRosterCache = null;
+
+/**
+ * Load every teacher from the master roster: [{firstName,lastName,name,
+ * folderName,email,campus}]. Execution-scoped cache. Fail-soft: returns null
+ * if the source cannot be opened, so callers fall back to the legacy tab.
+ */
+function _loadMasterRoster_() {
+  if (_masterRosterCache !== null) return _masterRosterCache;
+  var out = [];
+  try {
+    var src = SpreadsheetApp.openById(CONFIG.ROSTER_SOURCE_ID);
+    var sheets = src.getSheets();
+    for (var s = 0; s < sheets.length; s++) {
+      var title = sheets[s].getName();
+      if (title.indexOf('(Dash)') === -1) continue;
+      var values = sheets[s].getDataRange().getValues();
+      if (!values || values.length < 2) continue;
+      var idx = _rosterColIndex_(values[0]);
+      if (idx.first === -1 || idx.last === -1 || idx.email === -1) {
+        logError('WARN', '_loadMasterRoster_', null,
+          'Tab "' + title + '" has no teacher first/last/email headers; skipped.', '');
+        continue;
+      }
+      for (var r = 1; r < values.length; r++) {
+        var row = values[r];
+        var first = String(row[idx.first] || '').trim();
+        var last = String(row[idx.last] || '').trim();
+        var email = String(row[idx.email] || '').trim();
+        if (!first || !last || !email) continue;
+        var campus = _rosterRowCampus_(idx.campus === -1 ? '' : row[idx.campus], title);
+        if (!campus) continue;
+        out.push({
+          firstName: first.split(' ')[0],
+          lastName: last,
+          name: first + ' ' + last,
+          folderName: (first + '_' + last).replace(/ /g, '_'),
+          email: email,
+          campus: campus
+        });
+      }
+    }
+  } catch (e) {
+    logError('WARN', '_loadMasterRoster_', null,
+      'Cannot open master roster ' + CONFIG.ROSTER_SOURCE_ID + ': ' + (e.message || e)
+      + ' - falling back to the Teacher Emails tab.', '');
+    _masterRosterCache = null;
+    return null;
+  }
+  _masterRosterCache = out;
+  return out;
+}
+
+/**
+ * PURE: dedupe roster rows to teachers for the requested campuses, preserving
+ * the pre-v2.26.0 contract exactly - key is folderName.toLowerCase(), first
+ * row wins, Reading Community excluded here (it has its own tab).
+ */
+function _teachersFromRosterRows_(rows, schoolDisplayNames, readingNormalized) {
+  var map = new Map();
+  for (var i = 0; i < rows.length; i++) {
+    var t = rows[i];
+    if (!campusMatchesAnyDisplay(t.campus, schoolDisplayNames)) continue;
+    if (normalizeFolderName(t.campus) === readingNormalized) continue;
+    var key = t.folderName.toLowerCase();
+    if (!map.has(key)) map.set(key, t);
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * v2.26.0: refuse to run when a selected campus resolves to zero teachers -
+ * the partial-roster signature. Returns '' when healthy, else a message.
+ */
+function _rosterHealthProblem_(schoolDisplayNames, teachers) {
+  var have = {};
+  for (var i = 0; i < teachers.length; i++) have[normalizeFolderName(teachers[i].campus)] = true;
+  var empty = [];
+  for (var s = 0; s < schoolDisplayNames.length; s++) {
+    if (!have[normalizeFolderName(schoolDisplayNames[s])]) empty.push(schoolDisplayNames[s]);
+  }
+  if (empty.length === 0) return '';
+  return 'No teachers found for: ' + empty.join(', ')
+    + '\n\nThe roster is read from the MAP Master Roster spreadsheet. Either that school\'s '
+    + 'tab is empty/renamed there, or your account cannot open it. Nothing was generated '
+    + 'so partial output cannot go out. Run Email Tools > Debug: Check Teacher Names for detail.';
 }
