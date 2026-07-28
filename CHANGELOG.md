@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.25.1] - 2026-08-03
+
+### FIX: dialogs blocked by missing script.container.ui scope
+
+First run of the new confirm dialog threw "Specified permissions are not sufficient to call Ui.showModalDialog. Required permissions: .../script.container.ui". The v2.22.1 explicit oauthScopes pin predates any HtmlService dialog on the menu path (plain alerts never needed the scope), so v2.25.0's dialogs hit the wall the pin gotcha warned about: add the scope in the same commit as the new capability. Added `script.container.ui` to the manifest; deployed @18 (same /exec id, tracker probe healthy). Every user sees a one-time re-auth prompt on next menu use - approve it (it adds "Display and run third-party web content in prompts and sidebars").
+
 ## [v2.25.0] - 2026-08-03
 
 ### FEAT: Midweek Snapshot template + days-in-week scaling + Generate Admin Emails
