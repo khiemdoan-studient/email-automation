@@ -121,6 +121,68 @@ try {
   process.exit(1);
 }
 
+// ── v2.27.1: tracking-shim open-redirect guard (docs/r.html) ──
+// These run against the SHIPPED file, not a copy of the logic. A test that
+// re-implemented hostAllowed would pass while the live page stayed vulnerable.
+(function testShimRedirectGuard() {
+  const fs = require('fs');
+  const path = require('path');
+  const shimPath = path.join(__dirname, 'docs', 'r.html');
+  let src;
+  try {
+    src = fs.readFileSync(shimPath, 'utf8');
+  } catch (e) {
+    allResults.push({ pass: false, name: 'shim: docs/r.html is readable',
+      actual: JSON.stringify(String(e)), expected: '"readable"' });
+    return;
+  }
+
+  // Pull the real allowlist + matcher out of the page and run them.
+  const hostsSrc = (src.match(/var INSTANT_HOSTS = \[[\s\S]*?\];/) || [])[0];
+  const fnSrc = (src.match(/function hostAllowed\(u\) \{[\s\S]*?\n  \}/) || [])[0];
+  if (!hostsSrc || !fnSrc) {
+    allResults.push({ pass: false, name: 'shim: INSTANT_HOSTS + hostAllowed present in docs/r.html',
+      actual: JSON.stringify({ hostsSrc: !!hostsSrc, fnSrc: !!fnSrc }), expected: '{"hostsSrc":true,"fnSrc":true}' });
+    return;
+  }
+  const hostAllowed = new Function(hostsSrc + '\n' + fnSrc + '\nreturn hostAllowed;')();
+
+  const cases = [
+    ['https://studient.com/teacher', true, 'teacher hub'],
+    ['https://www.canva.com/design/abc/view', true, 'AIM launch (subdomain)'],
+    ['https://canva.link/xyz123', true, 'short video link'],
+    ['https://drive.google.com/file/d/abc/view', true, 'infographic'],
+    ['https://docs.google.com/document/d/abc', true, 'doc'],
+    ['https://alpha.timeback.com/login', true, 'timeback platform'],
+    // The bypasses an allowlist gets wrong when it uses substring matching.
+    ['https://canva.com.evil.tld/phish', false, 'suffix-append bypass blocked'],
+    ['https://notstudient.com/phish', false, 'prefix-append bypass blocked'],
+    ['https://evil.tld/?x=drive.google.com', false, 'allowed host in query blocked'],
+    ['https://evil.tld/#studient.com', false, 'allowed host in fragment blocked'],
+    ['https://evil.example/phish', false, 'arbitrary attacker host blocked'],
+    ['not-a-url', false, 'garbage blocked'],
+  ];
+  cases.forEach(function (c) {
+    global._testAssertEq(allResults, 'shim hostAllowed: ' + c[2], hostAllowed(c[0]), c[1]);
+  });
+
+  // The matcher existing is worthless if the redirect does not call it. Assert
+  // the instant-redirect branch is actually gated on it.
+  const gated = /linkType !== 'pdf'[\s\S]{0,120}?hostAllowed\(p\.dest\)[\s\S]{0,200}?location\.replace\(p\.dest\)/.test(src);
+  global._testAssertEq(allResults, 'shim: instant redirect is gated on hostAllowed', gated, true);
+
+  // Unverified payload must never drive a redirect to an unlisted host: the only
+  // other location.replace on a client-decoded value would be a regression.
+  const rawReplaces = (src.match(/location\.replace\(p\.dest\)/g) || []).length;
+  global._testAssertEq(allResults, 'shim: exactly one client-payload redirect site', rawReplaces, 1);
+
+  // Deployment contract that must survive any shim edit.
+  global._testAssertEq(allResults, 'shim: pinned /exec id intact',
+    src.indexOf('AKfycbzxwauuhinj9htVMrlgPBTDCQxSGaOgLPZO8a9mRNNKBx8d9R_SeDTMBl0bh6r2IBg') !== -1, true);
+  global._testAssertEq(allResults, 'shim: no dead Pages host',
+    src.indexOf('khiemdoan-studient.github.io') === -1, true);
+})();
+
 // ── Render results to stdout ──
 const passed = allResults.filter(r => r.pass).length;
 const failed = allResults.filter(r => !r.pass).length;

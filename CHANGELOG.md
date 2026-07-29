@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.27.1] - 2026-07-29 - Close the open redirect v2.23.0 opened in the tracking shim
+
+**v2.23.0 traded away a signature check to get the instant-redirect UX, and nobody noticed.** Found by an end-to-end audit of whether the email system works, not by a report from the field.
+
+`docs/r.html` decodes the token payload client-side with `token.split('.')[0]`, which is the part BEFORE the signature. Since v2.23.0 the non-PDF branch redirected on that payload alone: `window.location.replace(p.dest)` fired immediately, and the `/exec` call alongside it was a fire-and-forget click log, not a gate. The HMAC was never checked on that path.
+
+Anyone could therefore build `#e=<base64url payload>.garbage` with no knowledge of `TRACKING_HMAC_SECRET` and point `studient-data.github.io/email-automation/r.html` anywhere. That domain appears in every teacher's weekly email, so it carries exactly the trust a phishing redirect wants. This broke the "unsigned/tampered tokens are refused, no open-redirect" invariant that v2.15.0 documented as deliberate design.
+
+Confirmed against the LIVE page before fixing (forged token, garbage signature): `guard present: false | redirects to attacker host: true`. Not XSS, because line 72 already required `http(s)` and so blocked `javascript:`. It is a redirect abuse vector.
+
+**Fix: allowlist the hosts our own emails actually use, and make everything else prove its signature.**
+
+- `INSTANT_HOSTS` = `studient.com`, `canva.com`, `canva.link`, `drive.google.com`, `docs.google.com`, `alpha.timeback.com`. Derived from live data (Template Content + Engagement Log + the Code.js constants), not guessed.
+- `hostAllowed()` matches an exact host or a TRUE subdomain via `host.slice(-(a.length + 1)) === '.' + a`. Never a substring test, which is the standard way an allowlist is defeated: `canva.com.evil.tld` and `notstudient.com` both have to fail.
+- Any other destination falls through to the existing server-verified flow, which returns `kind:'redirect'` only after checking the signature and `kind:'invalid'` otherwise. Copy on that path now reads "Loading" / "Taking you to your link" instead of the PDF wording.
+
+**The UX you asked for is intact.** Every legitimate link in a real email hits the allowlist and still redirects instantly. Verified: a Canva design link and a Drive infographic link both still take the instant path, while the forged attacker link no longer does.
+
+Tests 290 -> 306. The 16 new cases run against the SHIPPED `docs/r.html`, extracting the real `INSTANT_HOSTS` and `hostAllowed` out of the file and executing them, because a test that re-implemented the matcher would pass while the live page stayed vulnerable. They also assert the redirect is actually GATED on the matcher (a matcher defined but not called is the obvious regression), that exactly one client-payload redirect site exists, that the pinned `/exec` id survives, and that the dead Pages host stays gone.
+
+No `clasp push` in this release: `Code.js` is untouched. The shim is static and ships through the GitHub Pages rebuild on push.
+
 ## [Unreleased] - 2026-07-28 - Heads-up: the root PDF folder is moving into a Shared Drive
 
 No code change here. Recording a cross-repo dependency raised by the dashboard repo's v3.81.0 work:

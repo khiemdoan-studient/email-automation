@@ -67,18 +67,44 @@
 
   var p = decodeDest();
 
-  // NON-PDF: log the click in the background (keepalive survives navigation)
-  // and go straight to the destination. The teacher sees at most a flash.
-  if (p && p.linkType !== 'pdf' && /^https?:\/\//i.test(p.dest)) {
+  // v2.27.1 SECURITY: the payload above is UNVERIFIED - the signature sits after
+  // the '.' and only the server holds the secret. So the instant path is limited
+  // to the hosts our own emails actually link to (derived from Template Content +
+  // Engagement Log + the Code.js constants). Any other destination falls through
+  // to the server-verified path below, which refuses a bad signature outright.
+  // Without this, anyone could craft #e=<payload>.garbage and turn this page into
+  // an open redirect on a domain teachers are trained to trust (v2.23.0 traded the
+  // check away for the instant-redirect UX; this restores the v2.15.0 invariant
+  // without giving that UX back).
+  var INSTANT_HOSTS = [
+    'studient.com', 'canva.com', 'canva.link',
+    'drive.google.com', 'docs.google.com', 'alpha.timeback.com'
+  ];
+  function hostAllowed(u) {
+    var host;
+    try { host = new URL(u).hostname.toLowerCase(); } catch (err) { return false; }
+    for (var i = 0; i < INSTANT_HOSTS.length; i++) {
+      var a = INSTANT_HOSTS[i];
+      // Exact host or a TRUE subdomain. Never a substring test: that would let
+      // 'canva.com.evil.tld' and 'notstudient.com' through.
+      if (host === a || host.slice(-(a.length + 1)) === '.' + a) return true;
+    }
+    return false;
+  }
+
+  // NON-PDF to a known host: log the click in the background (keepalive survives
+  // navigation) and go straight there. The teacher sees at most a flash.
+  if (p && p.linkType !== 'pdf' && /^https?:\/\//i.test(p.dest) && hostAllowed(p.dest)) {
     try { fetch(EXEC + '?fmt=json&e=' + token, { credentials: 'omit', keepalive: true }).catch(function () {}); }
     catch (err) { /* logging is best-effort */ }
     window.location.replace(p.dest);
     return;
   }
 
-  // PDF (or undecodable token): visible download flow.
-  title.textContent = 'Loading your report';
-  msg.textContent = 'Preparing your weekly report…';
+  // PDF, unknown host, or undecodable token: visible, server-verified flow.
+  var isPdfFlow = !p || p.linkType === 'pdf';
+  title.textContent = isPdfFlow ? 'Loading your report' : 'Loading';
+  msg.textContent = isPdfFlow ? 'Preparing your weekly report…' : 'Taking you to your link…';
 
   function trackerDown() {
     if (p && p.linkType === 'pdf') {
