@@ -2,8 +2,15 @@
 // CONFIGURATION
 // ============================================
 var CONFIG = {
-  ROOT_FOLDER_NAME: "Bruna and Mark's Schools - Weekly Report",
-  ROOT_FOLDER_ID: "1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR",  // Bulletproof fallback: direct folder ID
+  // v2.27.0 (2026-07-29): repointed to the Studient Reports SHARED DRIVE copy.
+  // The folder was DUPLICATED into the shared drive, not moved, so the id changed.
+  // NAME AND ID MUST BE UPDATED TOGETHER: getRootFolder() falls back to
+  // findFolderByName(ROOT_FOLDER_NAME) whenever the id lookup throws, so a stale
+  // name would silently route the whole app back into the retired personal tree
+  // and still look like it is working. Old pair, for reference:
+  //   "Bruna and Mark's Schools - Weekly Report" / 1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR
+  ROOT_FOLDER_NAME: "Weekly Reports",
+  ROOT_FOLDER_ID: "1RcD0atv_P5fApG7Kd_pNu33gFrrlZMA5",  // Bulletproof fallback: direct folder ID
 
   // v2.15.0: click-tracking web app /exec URL. This is the DEFAULT; the Script
   // Property TRACKING_WEBAPP_URL (if set) overrides it. Keep this pointed at the
@@ -18,7 +25,11 @@ var CONFIG = {
   // point here with the token in the URL FRAGMENT (#e=...), which never reaches
   // GitHub's servers. Script Property TRACKING_SHIM_URL overrides. Empty string
   // = link straight to /exec (old behavior).
-  TRACKING_SHIM_URL: "https://khiemdoan-studient.github.io/email-automation/r.html",
+  // v2.27.0: repo moved from the personal account khiemdoan-studient into the
+  // studient-data org (2026-07-29). GitHub redirects git URLs across a transfer
+  // but NOT GitHub Pages, so the old host is a hard 404 and every link built
+  // with it is dead. See _repointDeadShimHost_ for the stale-property guard.
+  TRACKING_SHIM_URL: "https://studient-data.github.io/email-automation/r.html",
   CONFIG_SHEET_NAME: "Config",
   MAPPING_SHEET_NAME: "School-IM Mapping",
   ROSTER_SHEET_NAME: "Teacher Emails",
@@ -2126,10 +2137,30 @@ var _trackingShimCache = null;
 function _trackingShimUrl() {
   if (_trackingShimCache === null) {
     var prop = PropertiesService.getScriptProperties().getProperty('TRACKING_SHIM_URL');
-    _trackingShimCache = (prop !== null && prop !== undefined && prop !== '')
+    var url = (prop !== null && prop !== undefined && prop !== '')
       ? prop : (CONFIG.TRACKING_SHIM_URL || '');
+    // v2.27.0: the Script Property WINS over the constant, so a property still
+    // holding the pre-transfer Pages host would mask this fix and keep emitting
+    // 404 links. Script Properties cannot be read or written from outside the
+    // Apps Script editor, so repair the value here instead of relying on
+    // somebody remembering to edit it.
+    _trackingShimCache = _repointDeadShimHost_(url);
   }
   return _trackingShimCache;
+}
+
+// Pages hosts that no longer serve, mapped to the current one. GitHub does NOT
+// redirect Pages across an owner/org transfer (git URLs do), so a moved repo
+// silently 404s every tracked email link until this list is updated.
+var DEAD_SHIM_HOSTS = { 'khiemdoan-studient.github.io': 'studient-data.github.io' };
+
+/** PURE: rewrite a known-dead Pages host to its current one. Other URLs pass through. */
+function _repointDeadShimHost_(url) {
+  var out = String(url || '');
+  for (var dead in DEAD_SHIM_HOSTS) {
+    if (out.indexOf(dead) !== -1) out = out.split(dead).join(DEAD_SHIM_HOSTS[dead]);
+  }
+  return out;
 }
 
 /**
@@ -2918,6 +2949,38 @@ function buildPdfCandidateFilenames(teacher, dateRange, pdfPrefix) {
 }
 
 /**
+ * v2.27.0: walk a file's parent chain and report whether it reaches
+ * CONFIG.ROOT_FOLDER_ID.
+ *
+ * Returns true (under the configured root), false (definitely elsewhere), or
+ * null (could not determine - permission gap or iterator failure). Callers must
+ * treat null as "keep": v2.5.0 moved PDF lookup to the search API precisely
+ * because parent traversal breaks for shared-with-me users, so a failed walk
+ * must never be able to blank out every teacher's report.
+ */
+function _isUnderConfiguredRoot_(file) {
+  if (!CONFIG.ROOT_FOLDER_ID) return null;   // nothing to compare against
+  var cur = file;
+  for (var depth = 0; depth < 6; depth++) {  // file -> teacher -> school -> root (+slack)
+    var parent = null;
+    try {
+      var parents = cur.getParents();
+      if (!parents.hasNext()) return false;  // walked to a root that is not ours
+      parent = parents.next();
+    } catch (e) {
+      return null;                            // cannot tell; caller keeps the file
+    }
+    try {
+      if (parent.getId() === CONFIG.ROOT_FOLDER_ID) return true;
+    } catch (e) {
+      return null;
+    }
+    cur = parent;
+  }
+  return false;
+}
+
+/**
  * v2.5.1 PURE HELPER: do these two school folders match?
  *   - If `expectedId` is provided, exact ID equality wins (cheap + authoritative).
  *   - Else if `expectedName` is provided, normalized name equality (case/underscore-tolerant).
@@ -3049,6 +3112,29 @@ function findTeacherPdfBySearch(teacher, dateRange, schoolFolderCache, pdfPrefix
     }
 
     if (pdfMatches.length === 0) continue;
+
+    // v2.27.0 DUPLICATE-TREE GUARD. The weekly-report tree was COPIED into the
+    // Studient Reports shared drive (2026-07-29), so ~921 filenames now exist in
+    // BOTH the new root and the retired personal one. DriveApp.getFilesByName is
+    // corpus-scoped, not folder-scoped, so a lookup can match the retired copy and
+    // attach a stale PDF with no error. The v2.5.1 defense below does not catch it:
+    // it only runs on 2+ hits and disambiguates by SCHOOL folder, and both trees
+    // carry identical school folder names.
+    // Tri-state on purpose: only DEFINITE outsiders are dropped. If the ancestor
+    // walk cannot complete (permission gap - the exact fragility that made v2.5.0
+    // choose search over traversal), the file is KEPT rather than silently losing
+    // every PDF.
+    var inRoot = [];
+    for (var rc = 0; rc < pdfMatches.length; rc++) {
+      if (_isUnderConfiguredRoot_(pdfMatches[rc]) !== false) inRoot.push(pdfMatches[rc]);
+    }
+    if (inRoot.length === 0) {
+      logError('WARN', 'findTeacherPdfBySearch', teacher,
+        pdfMatches.length + ' name match(es) for "' + fname + '" but none live under '
+        + 'ROOT_FOLDER_ID ' + CONFIG.ROOT_FOLDER_ID + ' (retired-tree copy?); ignoring them', '');
+      continue; // next candidate; better no PDF than last month's PDF
+    }
+    pdfMatches = inRoot;
 
     // 1 match: no ambiguity, accept without verification (v2.5.0 behavior preserved).
     if (pdfMatches.length === 1) return pdfMatches[0];
@@ -3983,6 +4069,70 @@ function runUnitTests() {
   _testAssertEq(results, 'admin: range label helper', _rangeLabel_('2026-04-13_to_2026-04-19'), '4/13-4/19');
   _testAssertEq(results, 'admin: menu + executor functions exist',
     typeof generateAdminEmails === 'function' && typeof confirmAdminEmails === 'function', true);
+
+  // v2.27.0: shim repoint after the GitHub org move + root folder repoint
+  _testAssertEq(results, 'shim: constant points at the studient-data org host',
+    CONFIG.TRACKING_SHIM_URL, 'https://studient-data.github.io/email-automation/r.html');
+  _testAssertEq(results, 'shim: constant carries no dead host',
+    CONFIG.TRACKING_SHIM_URL.indexOf('khiemdoan-studient') === -1, true);
+  _testAssertEq(results, 'shim: repoint rewrites the dead Pages host',
+    _repointDeadShimHost_('https://khiemdoan-studient.github.io/email-automation/r.html'),
+    'https://studient-data.github.io/email-automation/r.html');
+  _testAssertEq(results, 'shim: repoint is idempotent on a good URL',
+    _repointDeadShimHost_(CONFIG.TRACKING_SHIM_URL), CONFIG.TRACKING_SHIM_URL);
+  _testAssertEq(results, 'shim: repoint leaves an unrelated custom host alone',
+    _repointDeadShimHost_('https://example.org/r.html'), 'https://example.org/r.html');
+  _testAssertEq(results, 'shim: repoint handles empty/absent value',
+    _repointDeadShimHost_(''), '');
+  // The load-bearing case: a Script Property still holding the DEAD host must not
+  // win, because the property is read first and cannot be edited from outside the
+  // Apps Script editor.
+  // (the node harness does not mock PropertiesService, so guard the read)
+  var _hadProps = (typeof PropertiesService !== 'undefined');
+  var _propsBackup = _hadProps ? PropertiesService : null;
+  PropertiesService = {
+    getScriptProperties: function () {
+      return { getProperty: function () { return 'https://khiemdoan-studient.github.io/email-automation/r.html'; } };
+    }
+  };
+  _trackingShimCache = null;
+  _testAssertEq(results, 'shim: STALE Script Property is repaired, not obeyed',
+    _trackingShimUrl(), 'https://studient-data.github.io/email-automation/r.html');
+  _trackingShimCache = null;
+  if (_hadProps) PropertiesService = _propsBackup;
+
+  _testAssertEq(results, 'root: ROOT_FOLDER_ID is the shared-drive copy',
+    CONFIG.ROOT_FOLDER_ID, '1RcD0atv_P5fApG7Kd_pNu33gFrrlZMA5');
+  // Name and id must move together: getRootFolder() falls back to the NAME, so a
+  // stale name silently routes the app back into the retired personal tree.
+  _testAssertEq(results, 'root: ROOT_FOLDER_NAME matches the new folder',
+    CONFIG.ROOT_FOLDER_NAME, 'Weekly Reports');
+  _testAssertEq(results, 'root: no reference to the retired folder id/name remains in CONFIG',
+    JSON.stringify(CONFIG).indexOf('1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR') === -1
+    && JSON.stringify(CONFIG).indexOf("Bruna and Mark's") === -1, true);
+
+  // Duplicate-tree guard: ancestor walk classification.
+  function _fakeFile(chainIds) {
+    var i = 0;
+    function node() {
+      return {
+        getId: function () { return chainIds[i]; },
+        getParents: function () {
+          return {
+            hasNext: function () { return i < chainIds.length; },
+            next: function () { var n = node(); i++; return n; }
+          };
+        }
+      };
+    }
+    return node();
+  }
+  _testAssertEq(results, 'dupe guard: file under the configured root -> true',
+    _isUnderConfiguredRoot_(_fakeFile(['teacherFolder', 'schoolFolder', CONFIG.ROOT_FOLDER_ID])), true);
+  _testAssertEq(results, 'dupe guard: file under the RETIRED root -> false',
+    _isUnderConfiguredRoot_(_fakeFile(['teacherFolder', 'schoolFolder', '1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR'])), false);
+  _testAssertEq(results, 'dupe guard: unwalkable chain -> null (kept, never blanks a report)',
+    _isUnderConfiguredRoot_({ getParents: function () { throw new Error('no permission'); } }), null);
 
   // v2.26.1: corrupted-metrics-tab detector (the exact field failure: a pipeline
   // write left 300 rows with no header and a blank Teacher column, so every

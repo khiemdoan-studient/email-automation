@@ -17,6 +17,22 @@ and unverified against Shared Drives. **After the move, run Email Tools > Debug:
 Debug: Validate All PDFs before the next cycle**; if discovery breaks, move those lookups to the Advanced
 Drive Service with `supportsAllDrives` / `includeItemsFromAllDrives`. See CLAUDE.md for the full note.
 
+## [v2.27.0] - 2026-07-29
+
+### Repoint the weekly-report root folder AND the tracking shim, plus a duplicate-tree guard
+
+Two infrastructure moves landed on this repo at once, so they ship in ONE `clasp push` and ONE deployment re-version rather than two.
+
+**1. Root Drive folder.** The weekly-report tree was supposed to MOVE into the *Studient Reports* shared drive, preserving its id. It was **duplicated** instead, so the id changed and the old tree survives. `ROOT_FOLDER_ID` -> `1RcD0atv_P5fApG7Kd_pNu33gFrrlZMA5` and `ROOT_FOLDER_NAME` -> `Weekly Reports`, changed together on purpose: `getRootFolder()` falls back to the NAME when the id lookup throws, so updating only the id would silently route the app back into the retired personal tree and still look healthy. A test now fails if a future edit moves one without the other.
+
+**2. Tracking shim.** The repo moved from `khiemdoan-studient` to the `studient-data` org. GitHub redirects git URLs across a transfer but **not** GitHub Pages, so the old host is a hard 404 and every newly generated email link was dead. Verified live: new host 200, old host 404, repo public with Pages on, `/exec` tracker unaffected. `CONFIG.TRACKING_SHIM_URL` repointed. Beyond that, `_trackingShimUrl()` reads the Script Property FIRST and a property cannot be read or written from outside the Apps Script editor, so a stale property would mask the constant fix and keep emitting 404s. New pure `_repointDeadShimHost_` rewrites known-dead Pages hosts at read time; a test drives `_trackingShimUrl()` with `PropertiesService` mocked to the dead URL and asserts the emitted link is the live host.
+
+**3. Duplicate-tree guard (the non-obvious one).** ~921 filenames now exist in both roots, and IMs can see both. `DriveApp.getFilesByName` is corpus-scoped, so `findTeacherPdfBySearch` could match the retired copy and attach a stale PDF with no error. The v2.5.1 defense does not cover it: it only runs on 2+ hits and disambiguates by SCHOOL folder, and both trees carry identical school folder names. Every search hit must now chain up to `CONFIG.ROOT_FOLDER_ID` (`_isUnderConfiguredRoot_`). Deliberately tri-state: only definite outsiders are dropped, and an unwalkable chain keeps the file, because v2.5.0 chose search over traversal precisely because parent traversal breaks for shared-with-me users.
+
+Confirmed before shipping: both trees really do hold `JHES - Hardeeville Elementary School / Toni Case` with 10 overlapping PDFs each, and the new shared drive grants `all@studient.com` plus every IM individually, so discovery does not break for anyone.
+
+Tests: 277 -> 290. Cross-repo: dashboard v3.82.0 repoints the fidelity uploader to the same folder (deployed to EC2 and proven with a real upload).
+
 ## [v2.26.2] - 2026-08-04
 
 ### Cross-pipeline reconciliation: culprit identified, fixed at source, and a probe so the consumer verifies

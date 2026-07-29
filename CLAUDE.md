@@ -68,19 +68,30 @@ Google Sheet (8 tabs)  -->  Apps Script  -->  Gmail Drafts + PDF attachments
 
 **Spreadsheet ID:** `1GKtoNumk363StPb2HZ1suiXNB3rHzA_wDLKgRiGj6f8`
 **Apps Script Project ID:** `1IbokxMbI7i3FrGGFEQfVtnYHB7ir8vRMcpX9Fs7xDTG3Vlrtuy65ubaP`
-**Root Drive Folder ID:** `1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR` (stored in `CONFIG.ROOT_FOLDER_ID`)
+**Root Drive Folder ID:** `1RcD0atv_P5fApG7Kd_pNu33gFrrlZMA5` = `Weekly Reports`, in the *Studient
+Reports* shared drive `0ACm8X7MRxxTaUk9PVA` (stored in `CONFIG.ROOT_FOLDER_ID` / `ROOT_FOLDER_NAME`)
 
-> **PENDING CHANGE - this folder is scheduled to move into a Shared Drive** (dashboard repo v3.81.0,
-> 2026-07-28). It is currently a My Drive folder owned by mark.katigbak@alpha.school, which is why the
-> dashboard pipeline's fidelity uploader cannot use its service account (service accounts have no storage
-> quota in My Drive). Moving it into the *Studient Reports* Shared Drive keeps the folder **ID and every
-> link identical**, so `getFolderById(CONFIG.ROOT_FOLDER_ID)` - the primary lookup in `getRootFolder()` -
-> keeps working. **The risk is the fallbacks:** `findFolderByName` / `DriveApp.getFilesByName` /
-> `DriveApp.searchFiles` (used by `findTeacherPdfBySearch` and `_adminPdfFilename_` lookup) are
-> corpus-scoped, and their Shared Drive behavior has NOT been verified here. After the move, run
-> **Email Tools > Debug: Drive Access** and **Debug: Validate All PDFs** before the next email cycle. If
-> discovery breaks, switch those lookups to the Advanced Drive Service with `supportsAllDrives: true` and
-> `includeItemsFromAllDrives: true`.
+> **RESOLVED 2026-07-29 (v2.27.0), but NOT the way the pending note below predicted.** The folder was
+> **duplicated** into the shared drive, not moved, so the id CHANGED (a move would have preserved it) and
+> the old tree still exists at `1cDnSQ2P8EmmvC1bb4CuRPIdG9XNfozgR` in Mark's personal My Drive.
+>
+> Two consequences that are now code:
+> 1. **`ROOT_FOLDER_ID` and `ROOT_FOLDER_NAME` must always change together.** `getRootFolder()` falls back
+>    to `findFolderByName(ROOT_FOLDER_NAME)` when the id lookup throws, so a stale name silently routes the
+>    whole app back into the retired personal tree and still looks like it is working. A unit test now
+>    fails if one is edited without the other.
+> 2. **~921 filenames exist in BOTH trees, and IMs can see both** (the old folder is shared with them; the
+>    new drive has `all@studient.com`). `DriveApp.getFilesByName` is corpus-scoped, not folder-scoped, so
+>    `findTeacherPdfBySearch` could attach last month's PDF from the retired tree with no error. It now
+>    drops any hit whose parent chain does not reach `CONFIG.ROOT_FOLDER_ID` (`_isUnderConfiguredRoot_`,
+>    tri-state so a permission gap keeps the file rather than blanking every report).
+>
+> Still worth running once after any Drive-side change: **Email Tools > Debug: Drive Access** and
+> **Debug: Validate All PDFs**. If discovery ever breaks, switch the lookups to the Advanced Drive Service
+> with `supportsAllDrives: true` and `includeItemsFromAllDrives: true`.
+>
+> The ~921 originals in Mark's personal Drive are undecided: retire or keep as archive. Leaving them
+> undocumented is how the next person finds two trees and picks the wrong one.
 
 ### Sheet Tabs
 
