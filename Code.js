@@ -4070,6 +4070,79 @@ function runUnitTests() {
   _testAssertEq(results, 'admin: menu + executor functions exist',
     typeof generateAdminEmails === 'function' && typeof confirmAdminEmails === 'function', true);
 
+  // v2.28.0: Jasper district roll-up option
+  var _liveSchools = [
+    'AASP - Allendale Aspire Academy',
+    'AFES - Allendale Fairfax Elementary School',
+    'AFMS - Allendale Fairfax Middle School',
+    'JHES - Hardeeville Elementary School',
+    'JHMS - Hardeeville Junior Senior High School',
+    'JRES - Ridgeland Elementary School',
+    'JRHS - Ridgeland Secondary Academy of Excellence',
+    'Metro Schools',
+    'Reading Community City School District'
+  ];
+  var _opts = _adminPickerOptions_(_liveSchools);
+  // The contract that protects muscle memory: districts append AFTER the
+  // schools, so every school keeps the number it had in v2.25.0.
+  _testAssertEq(results, 'district: schools keep their original numbers',
+    _opts.slice(0, 9).map(function (o) { return o.name; }).join('|'),
+    _liveSchools.join('|'));
+  _testAssertEq(results, 'district: Jasper is option 10',
+    _opts.length + '|' + _opts[9].kind + '|' + _opts[9].name, '10|district|Jasper');
+  _testAssertEq(results, 'district: label names the member campuses',
+    _opts[9].label, 'ALL Jasper (district roll-up: JHES, JRES, JHMS, JRHS)');
+  _testAssertEq(results, 'district: members are the 4 Jasper campuses',
+    _opts[9].members.length, 4);
+  // Allendale is intentionally NOT registered this cycle.
+  _testAssertEq(results, 'district: only Jasper is offered',
+    _opts.filter(function (o) { return o.kind === 'district'; }).length, 1);
+  // A district whose campuses are absent from the mapping must not be offered.
+  _testAssertEq(results, 'district: dropped when no member is in the mapping',
+    _adminPickerOptions_(['Metro Schools']).filter(function (o) { return o.kind === 'district'; }).length, 0);
+  _testAssertEq(results, 'district: PDF filename matches pipeline comparison_filename',
+    _districtPdfFilename_('Jasper', '2026-04-13_to_2026-04-19'), 'Jasper Comparison Report 4-13.pdf');
+  _testAssertEq(results, 'district: PDF filename strips leading zeros',
+    _districtPdfFilename_('Jasper', '2026-05-04_to_2026-05-10'), 'Jasper Comparison Report 5-4.pdf');
+  // Roll-up must be student-weighted across campuses, not a mean of means:
+  // 10 students at 4.0 days and 5 at 2.0 is 3.33, never 3.0.
+  var _distStats = _weightedCampusAverages_([
+    [{ numStudents: 10, activeDays: 4, avgMins: 100 }],
+    [{ numStudents: 5, activeDays: 2, avgMins: 40 }]
+  ]);
+  _testAssertEq(results, 'district: roll-up is student-weighted, not a mean of means',
+    _distStats.avgActiveDays.toFixed(2) + '|' + _distStats.students, '3.33|15');
+  var _distBody = _buildDistrictEmailBody_('Jasper', '2026-04-13_to_2026-04-19',
+    { teachersWithData: 5, students: 60, avgActiveDays: 3.4, avgMins: 74 },
+    [
+      { campus: 'JHES - Hardeeville Elementary School', abbrev: 'JHES', stats: { teachersWithData: 3, students: 40, avgActiveDays: 4.1, avgMins: 90 } },
+      { campus: 'JRES - Ridgeland Elementary School', abbrev: 'JRES', stats: { teachersWithData: 2, students: 20, avgActiveDays: 2.0, avgMins: 42 } }
+    ], 'https://x/tracked', 'Jasper Comparison Report 4-13.pdf', '', []);
+  _testAssertEq(results, 'district: body renders the roll-up header',
+    _distBody.indexOf('ALL Jasper') !== -1, true);
+  _testAssertEq(results, 'district: body shows the per-campus breakdown',
+    _distBody.indexOf('JHES') !== -1 && _distBody.indexOf('JRES') !== -1 && _distBody.indexOf('By campus') !== -1, true);
+  _testAssertEq(results, 'district: CTA names the Comparison Report',
+    _distBody.indexOf('Jasper Comparison Report (PDF)') !== -1, true);
+  // An excluded campus must be stated, never silently folded away.
+  var _partialBody = _buildDistrictEmailBody_('Jasper', '2026-04-13_to_2026-04-19',
+    { teachersWithData: 3, students: 40, avgActiveDays: 4.1, avgMins: 90 },
+    [{ campus: 'JHES - Hardeeville Elementary School', abbrev: 'JHES', stats: { teachersWithData: 3, students: 40, avgActiveDays: 4.1, avgMins: 90 } }],
+    'https://x/tracked', 'Jasper Comparison Report 4-13.pdf', '', ['JRHS']);
+  _testAssertEq(results, 'district: partial roll-up names the excluded campus',
+    _partialBody.indexOf('Left out of this roll-up') !== -1 && _partialBody.indexOf('JRHS') !== -1, true);
+  _testAssertEq(results, 'district: missing PDF falls soft with the filename',
+    _buildDistrictEmailBody_('Jasper', '2026-04-13_to_2026-04-19',
+      { teachersWithData: 1, students: 5, avgActiveDays: 3, avgMins: 60 },
+      [{ campus: 'JHES - X', abbrev: 'JHES', stats: { teachersWithData: 1, students: 5, avgActiveDays: 3, avgMins: 60 } }],
+      '', 'Jasper Comparison Report 4-13.pdf', '', []).indexOf('was not found') !== -1, true);
+  _testAssertEq(results, 'district: available-dates note reads Comparison filenames',
+    _adminAvailableDatesNote_(['Jasper Comparison Report 5-25.pdf', 'Jasper Comparison Report 4-13.pdf'], 'Jasper', 'Comparison Report'),
+    'Reports that DO exist for Jasper: 4-13, 5-25.');
+  _testAssertEq(results, 'district: available-dates default still reads Admin filenames',
+    _adminAvailableDatesNote_(['JHES Admin Report 4-6.pdf'], 'JHES'),
+    'Reports that DO exist for JHES: 4-6.');
+
   // v2.27.0: shim repoint after the GitHub org move + root folder repoint
   _testAssertEq(results, 'shim: constant points at the studient-data org host',
     CONFIG.TRACKING_SHIM_URL, 'https://studient-data.github.io/email-automation/r.html');
@@ -7609,6 +7682,70 @@ function _adminPdfFilename_(displayName, dateRange) {
 }
 
 /**
+ * v2.28.0: district roll-up targets for the admin picker. Members MUST be the
+ * exact School-IM Mapping display names (they are the same strings the parent
+ * pipeline uses in generate_pdf_reports.py DISTRICTS_FOR_PDF:113). Adding a
+ * district here is the ONLY change needed to offer it: the picker, the
+ * aggregation and the PDF lookup all read this map. Allendale is deliberately
+ * not registered yet (see CHANGELOG v2.28.0); its member list would be
+ * AFES/AFMS/AASP.
+ *
+ * CROSS-REPO DRIFT SURFACE: district names + membership live in the pipeline.
+ * If a school moves district or a district is renamed there, update this map.
+ */
+var ADMIN_DISTRICTS = {
+  'Jasper': [
+    'JHES - Hardeeville Elementary School',
+    'JRES - Ridgeland Elementary School',
+    'JHMS - Hardeeville Junior Senior High School',
+    'JRHS - Ridgeland Secondary Academy of Excellence'
+  ]
+};
+
+/**
+ * District comparison PDF as the parent pipeline writes it
+ * (generate_pdf_reports.py comparison_filename: "{District} Comparison Report
+ * {M-D}.pdf"). Same M-D rule as _adminPdfFilename_: month/day off the week's
+ * Monday, no leading zeros. These land FLAT in the Shared Drive, NOT under
+ * CONFIG.ROOT_FOLDER_ID, which is why the admin lookup uses getFilesByName and
+ * must NOT be routed through the v2.27.0 _isUnderConfiguredRoot_ guard.
+ */
+function _districtPdfFilename_(district, dateRange) {
+  var weekStart = String(dateRange || '').split('_to_')[0];
+  var p = weekStart.split('-');
+  var md = p.length === 3 ? Number(p[1]) + '-' + Number(p[2]) : weekStart;
+  return String(district || '') + ' Comparison Report ' + md + '.pdf';
+}
+
+/**
+ * Numbered entries for the admin picker: every school first, then each district
+ * roll-up. Districts MUST come last so adding one never renumbers a school - an
+ * IM typing "4,5" from muscle memory would otherwise silently target different
+ * campuses. Pure, so that numbering contract is unit-tested.
+ *
+ * A district whose members are all absent from School-IM Mapping is dropped
+ * rather than offered as an option that resolves to nothing.
+ */
+function _adminPickerOptions_(schools) {
+  var list = (schools || []).slice();
+  var opts = list.map(function (s) {
+    return { kind: 'school', name: s, label: s, members: [s] };
+  });
+  Object.keys(ADMIN_DISTRICTS).forEach(function (d) {
+    var members = ADMIN_DISTRICTS[d].filter(function (m) { return list.indexOf(m) !== -1; });
+    if (members.length === 0) return;
+    var abbrevs = members.map(function (m) { return String(m).split(' - ')[0].trim(); });
+    opts.push({
+      kind: 'district',
+      name: d,
+      members: members,
+      label: 'ALL ' + d + ' (district roll-up: ' + abbrevs.join(', ') + ')'
+    });
+  });
+  return opts;
+}
+
+/**
  * Student-weighted campus averages over per-teacher metric-row arrays (the
  * arrays getTeacherMetricsForWeek/lookupByName return; a teacher can have
  * multiple grade rows). Weight = numStudents per row (fallback 1).
@@ -7664,6 +7801,66 @@ function _buildAdminEmailBody_(school, abbrev, dateRange, stats, trackedPdfUrl, 
   return wrapEmailHtml(sections);
 }
 
+/**
+ * v2.28.0 district roll-up body: district-wide KPIs, then a per-campus
+ * breakdown so the reader can see WHICH campus moves the average, then the
+ * tracked district Comparison Report button.
+ *
+ * `perCampus` is [{ campus, abbrev, stats }]; `excluded` names campuses left out
+ * of the roll-up (zero teachers in the roster). An excluded campus is stated in
+ * the email, never silently dropped: a 3-of-4 district average that looks like a
+ * 4-of-4 one is the exact silently-wrong output v2.26.0 exists to prevent.
+ */
+function _buildDistrictEmailBody_(district, dateRange, stats, perCampus, trackedPdfUrl, pdfFilename, availNote, excluded) {
+  var colors = _metricCellColors_(stats.avgActiveDays, stats.avgMins);
+  var daysNote = _daysInWeek !== 5 ? ' (' + _daysInWeek + '-day week)' : '';
+  var rows = (perCampus || []).map(function (c) {
+    var cc = _metricCellColors_(c.stats.avgActiveDays, c.stats.avgMins);
+    return '<tr>'
+      + '<td style="padding:8px;text-align:left;">' + c.abbrev + '</td>'
+      + '<td style="padding:8px;background-color:' + cc.days + ';font-weight:bold;">' + c.stats.avgActiveDays.toFixed(1) + '</td>'
+      + '<td style="padding:8px;background-color:' + cc.mins + ';font-weight:bold;">' + c.stats.avgMins.toFixed(1) + '</td>'
+      + '<td style="padding:8px;">' + c.stats.teachersWithData + '</td>'
+      + '<td style="padding:8px;">' + c.stats.students + '</td>'
+      + '</tr>';
+  }).join('');
+
+  var sections = [
+    '<p>Hi,</p>',
+    '<p>District summary for <strong>ALL ' + district + '</strong>, ' + _rangeLabel_(dateRange) + daysNote
+      + ' (' + (perCampus || []).length + ' campuses):</p>',
+    '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;max-width:520px;">'
+    + '<tr style="background-color:#f3f3f3;"><th style="padding:8px;">Avg Active Days</th><th style="padding:8px;">Avg Minutes</th><th style="padding:8px;">Teachers w/ data</th><th style="padding:8px;">Students</th></tr>'
+    + '<tr>'
+    + '<td style="padding:8px;background-color:' + colors.days + ';font-weight:bold;">' + stats.avgActiveDays.toFixed(1) + '</td>'
+    + '<td style="padding:8px;background-color:' + colors.mins + ';font-weight:bold;">' + stats.avgMins.toFixed(1) + '</td>'
+    + '<td style="padding:8px;">' + stats.teachersWithData + '</td>'
+    + '<td style="padding:8px;">' + stats.students + '</td>'
+    + '</tr></table>',
+    '<p style="margin-top:18px;"><strong>By campus</strong></p>',
+    '<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;text-align:center;font-family:Arial,sans-serif;max-width:620px;">'
+    + '<tr style="background-color:#f3f3f3;"><th style="padding:8px;text-align:left;">Campus</th><th style="padding:8px;">Avg Active Days</th><th style="padding:8px;">Avg Minutes</th><th style="padding:8px;">Teachers w/ data</th><th style="padding:8px;">Students</th></tr>'
+    + rows + '</table>',
+    buildColorLegend()
+  ];
+
+  if (excluded && excluded.length) {
+    sections.push('<p style="background:#fff3cd;border:1px solid #ffe699;border-radius:6px;padding:8px 10px;font-size:13px;">'
+      + 'Left out of this roll-up: <strong>' + excluded.join(', ') + '</strong>. No teachers came back from the master roster for '
+      + (excluded.length === 1 ? 'that campus' : 'those campuses')
+      + ', so the district averages above cover the remaining campuses only.</p>');
+  }
+
+  if (trackedPdfUrl) {
+    sections.push(buildPdfCtaHtml_(trackedPdfUrl, 'View the ' + district + ' Comparison Report (PDF)'));
+  } else {
+    sections.push('<p style="background:#fff3cd;border:1px solid #ffe699;border-radius:6px;padding:8px 10px;font-size:13px;">'
+      + 'The report file "' + pdfFilename + '" was not found in the Studient Weekly Reports drive for this week. Stats above are live from the metrics tab.'
+      + (availNote ? '<br>' + availNote : '') + '</p>');
+  }
+  return wrapEmailHtml(sections);
+}
+
 /** Menu entry (v2.25.2): fully SYNCHRONOUS prompts - no HTML dialog, so no
  * google.script.run account-routing failures for multi-signed-in users. */
 function generateAdminEmails() {
@@ -7681,22 +7878,27 @@ function generateAdminEmails() {
   schools.sort();
   if (schools.length === 0) return ui.alert('Error', 'No schools found in School-IM Mapping.', ui.ButtonSet.OK);
 
-  var listing = schools.map(function (s, i) { return (i + 1) + '. ' + s; }).join('\n');
+  // v2.28.0: schools first, then district roll-ups, so school numbers are stable.
+  var options = _adminPickerOptions_(schools);
+  var listing = options.map(function (o, i) { return (i + 1) + '. ' + o.label; }).join('\n');
   var pick = ui.prompt('Generate Admin Emails (1 of 3)',
-    'Which schools? Enter numbers separated by commas (e.g. 1,3), or ALL:\n\n' + listing,
+    'Which reports? Enter numbers separated by commas (e.g. 1,3), or ALL for every school:\n\n' + listing,
     ui.ButtonSet.OK_CANCEL);
   if (pick.getSelectedButton() !== ui.Button.OK) return;
   var txt = pick.getResponseText().trim();
   var chosen = [];
   if (/^all$/i.test(txt)) {
-    chosen = schools.slice();
+    // ALL keeps its v2.25.0 meaning: every school, one draft each. District
+    // roll-ups are an explicit pick, so ALL cannot silently double-count a
+    // campus into both its own draft and a district one.
+    chosen = options.filter(function (o) { return o.kind === 'school'; });
   } else {
     txt.split(',').forEach(function (tok) {
       var n = Number(tok.trim());
-      if (n >= 1 && n <= schools.length && chosen.indexOf(schools[n - 1]) === -1) chosen.push(schools[n - 1]);
+      if (n >= 1 && n <= options.length && chosen.indexOf(options[n - 1]) === -1) chosen.push(options[n - 1]);
     });
   }
-  if (chosen.length === 0) return ui.alert('Error', 'No valid school numbers entered.', ui.ButtonSet.OK);
+  if (chosen.length === 0) return ui.alert('Error', 'No valid numbers entered.', ui.ButtonSet.OK);
 
   var cfgRange = getConfigValue('Date Range') || '';
   var rangeResp = ui.prompt('Generate Admin Emails (2 of 3)',
@@ -7738,23 +7940,45 @@ function confirmAdminEmails(payload) {
     var lines = [];
     var created = 0;
     for (var i = 0; i < schools.length; i++) {
-      var school = schools[i];
-      var abbrev = school.split(' - ')[0].trim() || school;
+      // v2.28.0: an entry is either a School-IM Mapping display name (the
+      // v2.25.0 shape, still accepted so any caller passing plain strings keeps
+      // working) or a picker option object, which may be a district roll-up.
+      var entry = schools[i];
+      var isDistrict = !!(entry && typeof entry === 'object' && entry.kind === 'district');
+      var school = (entry && typeof entry === 'object') ? entry.name : entry;
+      var members = (entry && typeof entry === 'object' && entry.members) ? entry.members : [school];
+      var abbrev = isDistrict ? school : (String(school).split(' - ')[0].trim() || school);
       try {
-        var teachers = getTeachersForSchools([school]);
-        // v2.26.0: a campus with zero teachers means a partial roster load -
-        // say so instead of mailing a 0.0/0.0/0/0 summary.
-        if (teachers.length === 0) {
-          lines.push(abbrev + ': SKIPPED - no teachers found in the master roster for this campus (roster load looks partial; nothing drafted).');
+        // Aggregate over every member campus. For a school this is the single
+        // campus, so the per-school path is byte-identical to v2.25.0.
+        var rowsArrays = [];
+        var perCampus = [];
+        var excluded = [];
+        for (var m = 0; m < members.length; m++) {
+          var campus = members[m];
+          var campusAbbrev = String(campus).split(' - ')[0].trim() || campus;
+          var teachers = getTeachersForSchools([campus]);
+          // v2.26.0: a campus with zero teachers means a partial roster load -
+          // say so instead of mailing a 0.0/0.0/0/0 summary.
+          if (teachers.length === 0) { excluded.push(campusAbbrev); continue; }
+          var campusRows = [];
+          for (var t = 0; t < teachers.length; t++) {
+            var rows = lookupByName(teacherMetrics, teachers[t].firstName, teachers[t].lastName, teachers[t].name);
+            if (rows) campusRows.push(rows);
+          }
+          perCampus.push({ campus: campus, abbrev: campusAbbrev, stats: _weightedCampusAverages_(campusRows) });
+          rowsArrays = rowsArrays.concat(campusRows);
+        }
+        if (perCampus.length === 0) {
+          lines.push(abbrev + ': SKIPPED - no teachers found in the master roster for '
+            + (isDistrict ? 'any campus in this district' : 'this campus')
+            + ' (roster load looks partial; nothing drafted).');
           continue;
         }
-        var rowsArrays = [];
-        for (var t = 0; t < teachers.length; t++) {
-          var rows = lookupByName(teacherMetrics, teachers[t].firstName, teachers[t].lastName, teachers[t].name);
-          if (rows) rowsArrays.push(rows);
-        }
         var stats = _weightedCampusAverages_(rowsArrays);
-        var fname = _adminPdfFilename_(school, dateRange);
+        var fname = isDistrict
+          ? _districtPdfFilename_(school, dateRange)
+          : _adminPdfFilename_(school, dateRange);
         var pdfUrl = '';
         try {
           var it = DriveApp.getFilesByName(fname);
@@ -7763,29 +7987,37 @@ function confirmAdminEmails(payload) {
           logError('WARN', 'confirmAdminEmails', null, 'Admin PDF search failed for "' + fname + '": ' + (e.message || e), '');
         }
         // v2.26.0: when the exact report is missing, name the dates that exist.
+        var reportLabel = isDistrict ? 'Comparison Report' : 'Admin Report';
         var availNote = '';
         if (!pdfUrl) {
           try {
             var found = [];
-            var searchIt = DriveApp.searchFiles('title contains "' + abbrev + ' Admin Report"');
+            var searchIt = DriveApp.searchFiles('title contains "' + abbrev + ' ' + reportLabel + '"');
             var guard = 0;
             while (searchIt.hasNext() && guard < 60) { found.push(searchIt.next().getName()); guard++; }
-            availNote = _adminAvailableDatesNote_(found, abbrev);
+            availNote = _adminAvailableDatesNote_(found, abbrev, reportLabel);
           } catch (e2) {
             availNote = '';
           }
         }
+        var trackLabel = 'Admin - ' + abbrev;
         var tracked = pdfUrl
-          ? buildTrackedUrl(pdfUrl, { week: dateRange, email: operator, campus: school, linkType: 'pdf', teacher: 'Admin - ' + abbrev })
+          ? buildTrackedUrl(pdfUrl, { week: dateRange, email: operator, campus: school, linkType: 'pdf', teacher: trackLabel })
           : '';
-        var subject = 'Studient Admin Report - ' + school + ' (' + _rangeLabel_(dateRange) + ')';
-        var body = _buildAdminEmailBody_(school, abbrev, dateRange, stats, tracked, fname, availNote);
-        body = rewriteBodyLinks_(body, { week: dateRange, email: operator, campus: school, teacher: 'Admin - ' + abbrev });
+        var subject = isDistrict
+          ? 'Studient District Report - ALL ' + school + ' (' + _rangeLabel_(dateRange) + ')'
+          : 'Studient Admin Report - ' + school + ' (' + _rangeLabel_(dateRange) + ')';
+        var body = isDistrict
+          ? _buildDistrictEmailBody_(school, dateRange, stats, perCampus, tracked, fname, availNote, excluded)
+          : _buildAdminEmailBody_(school, abbrev, dateRange, stats, tracked, fname, availNote);
+        body = rewriteBodyLinks_(body, { week: dateRange, email: operator, campus: school, teacher: trackLabel });
         GmailApp.createDraft(operator, subject, '', { htmlBody: body });
-        logSendEvent({ name: 'Admin - ' + abbrev, email: operator, campus: school }, dateRange, subject);
+        logSendEvent({ name: trackLabel, email: operator, campus: school }, dateRange, subject);
         created++;
         lines.push(abbrev + ': draft created'
+          + (isDistrict ? ' [' + perCampus.length + ' campuses rolled up]' : '')
           + (stats.teachersWithData === 0 ? ' [no metrics rows for this week]' : '')
+          + (excluded.length ? ' [excluded (no roster): ' + excluded.join(', ') + ']' : '')
           + (pdfUrl ? '' : ' [report PDF "' + fname + '" not found - stats only]'));
       } catch (e) {
         lines.push(abbrev + ': FAILED - ' + (e.message || e));
@@ -7854,20 +8086,25 @@ function _weeksWithDataForTeachers_(teachers) {
 }
 
 /**
- * PURE: format the admin-report dates that DO exist for a campus, from Drive
+ * PURE: format the report dates that DO exist for a campus, from Drive
  * filenames like "JHES Admin Report 4-13.pdf". Sorted by month/day.
+ *
+ * v2.28.0: `reportLabel` lets the district roll-up reuse this against
+ * "Jasper Comparison Report 4-13.pdf". Defaults to the v2.26.0 behavior.
  */
-function _adminAvailableDatesNote_(filenames, abbrev) {
+function _adminAvailableDatesNote_(filenames, abbrev, reportLabel) {
+  var label = String(reportLabel || 'Admin Report');
+  var re = new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' (\\d{1,2})-(\\d{1,2})\\.pdf$', 'i');
   var dates = [];
   for (var i = 0; i < filenames.length; i++) {
-    var m = /Admin Report (\d{1,2})-(\d{1,2})\.pdf$/i.exec(String(filenames[i] || ''));
+    var m = re.exec(String(filenames[i] || ''));
     if (m && dates.indexOf(m[1] + '-' + m[2]) === -1) dates.push(m[1] + '-' + m[2]);
   }
   dates.sort(function (a, b) {
     var pa = a.split('-'), pb = b.split('-');
     return (Number(pa[0]) - Number(pb[0])) || (Number(pa[1]) - Number(pb[1]));
   });
-  if (dates.length === 0) return 'No ' + abbrev + ' Admin Report files were found in the drive at all.';
+  if (dates.length === 0) return 'No ' + abbrev + ' ' + label + ' files were found in the drive at all.';
   return 'Reports that DO exist for ' + abbrev + ': ' + dates.slice(0, 8).join(', ')
     + (dates.length > 8 ? ' (+' + (dates.length - 8) + ' more)' : '') + '.';
 }

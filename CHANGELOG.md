@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.28.0] - 2026-07-29 - Jasper district roll-up in the admin picker
+
+Generate Admin Emails now offers a tenth option, `ALL Jasper (district roll-up: JHES, JRES, JHMS, JRHS)`. Picking it drafts ONE email covering the whole district and attaches the `Jasper Comparison Report`, instead of making the IM pick 4, 5, 6, 7 and read four separate emails.
+
+- `ADMIN_DISTRICTS` maps a district to its member campuses. Members are the exact School-IM Mapping display names, which are also the strings the pipeline uses in `generate_pdf_reports.py` `DISTRICTS_FOR_PDF`. Registering a district here is the only edit needed to offer it: picker, aggregation and PDF lookup all read this map.
+- `_districtPdfFilename_` mirrors the pipeline's `comparison_filename`: `{District} Comparison Report {M-D}.pdf`, month/day off the week's Monday, no leading zeros.
+- `_adminPickerOptions_` builds the numbered list. **Districts append AFTER the schools on purpose.** Inserting one anywhere else renumbers the schools, and an IM typing "4,5" from muscle memory would silently draft for different campuses. A unit test pins the first nine entries to their v2.25.0 order.
+- The roll-up is student-weighted across the whole district, not a mean of means: 10 students at 4.0 days and 5 at 2.0 gives 3.33, never 3.0. It reuses `_weightedCampusAverages_` over the concatenated campus rows, so the per-school path is unchanged.
+- The email carries a per-campus breakdown table under the district KPIs, so the reader can see which campus moves the average rather than just the district number.
+- A campus with zero teachers in the roster is EXCLUDED and named in both the email and the run summary. A 3-of-4 district average presented as a 4-of-4 one is exactly the silently-wrong output v2.26.0 exists to prevent.
+- `ALL` keeps its v2.25.0 meaning: every school, one draft each. District roll-ups stay an explicit pick, so `ALL` cannot double-count a campus into both its own draft and a district one.
+
+**Allendale is deliberately not registered**, per the scope decision on this cycle, even though `AFES`/`AFMS`/`AASP` and its Comparison PDFs both exist. Adding it is one entry in `ADMIN_DISTRICTS`; nothing else changes.
+
+Verified against live data rather than assumed. All 4 Jasper members resolve in School-IM Mapping, and all 5 filenames the SHIPPED code builds (4-13, 4-20, 4-27, 5-25, 7-27) exist in Drive. The probe extracts `ADMIN_DISTRICTS` and `_districtPdfFilename_` out of `Code.js` and executes them, because re-implementing the rules in the probe would prove nothing about the shipped code.
+
+One thing worth recording for future work: Comparison and Admin PDFs sit FLAT at the shared-drive root (`0ACm8X7MRxxTaUk9PVA`), NOT under `CONFIG.ROOT_FOLDER_ID`. The admin path uses `DriveApp.getFilesByName` and must NOT be routed through the v2.27.0 `_isUnderConfiguredRoot_` ancestor guard, which would reject every one of them. That guard is correctly scoped to teacher PDFs only.
+
+Tests 306 -> 322.
+
 ## [v2.27.1] - 2026-07-29 - Close the open redirect v2.23.0 opened in the tracking shim
 
 **v2.23.0 traded away a signature check to get the instant-redirect UX, and nobody noticed.** Found by an end-to-end audit of whether the email system works, not by a report from the field.

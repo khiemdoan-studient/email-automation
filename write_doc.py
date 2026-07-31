@@ -31,12 +31,30 @@ if end_index > 2:
 
 text = (
     "Email Automation\n"
-    "User Guide & Documentation (v2.22.0)\n"
+    "User Guide & Documentation (v2.28.0)\n"
     "\n"
     "What Is This?\n"
     "This system automatically creates email drafts in Gmail for every teacher you manage. "
     "Each email includes the teacher\u2019s performance data, a weekly coaching theme, and a PDF report attached. "
     "You don\u2019t write any emails manually \u2014 the system builds them for you.\n"
+    "\n"
+    "What's New in v2.28.0\n"
+    "Generate Admin Emails can now do all of Jasper in one pick.\n"
+    "\n"
+    "The list of schools has a new last option: ALL Jasper (district roll-up: JHES, JRES, JHMS, JRHS). "
+    "Choose that number and you get ONE email for the whole district instead of four separate school emails. "
+    "It carries the district's average active days and minutes, a table underneath showing each campus on its "
+    "own line so you can see which one is pulling the average up or down, and a button for the Jasper "
+    "Comparison Report PDF.\n"
+    "\n"
+    "The school numbers did not change. Jasper was added to the END of the list, so if you are used to typing "
+    "4,5 for particular schools, those still mean the same schools they always did.\n"
+    "\n"
+    "Typing ALL still means every school, one email each, exactly as before. The Jasper roll-up is only "
+    "included if you pick its number.\n"
+    "\n"
+    "If one of the four Jasper campuses has no teachers in the roster that week, it is left out of the "
+    "averages and the email says which one, so a partial district is never presented as the full one.\n"
     "\n"
     "What's New in v2.26.0\n"
     "Two fixes for the blank output people hit.\n"
@@ -580,10 +598,12 @@ fmt.append(
 
 sub_start = end + 1
 # v2.6.5: subtitle string MUST match the version-suffixed line in the body
-# at line 34 (currently "v2.6.0"). If they diverge, the styling range
+# at line 34 (currently "v2.28.0"). If they diverge, the styling range
 # computed by len(...) lands on the wrong characters. Re-sync this string
 # whenever the body line 34 version is bumped.
-sub_end = sub_start + len("User Guide & Documentation (v2.6.0)")
+# v2.28.0: was stale at "v2.6.0" while the body already read v2.22.0, so the
+# SUBTITLE range ran one character short. Re-synced with the body bump.
+sub_end = sub_start + len("User Guide & Documentation (v2.28.0)")
 fmt.append(
     {
         "updateParagraphStyle": {
